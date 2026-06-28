@@ -1,0 +1,4 @@
+ep-linux-full:
+  name: "Full Linux Inventory"
+  url_path: "/api/v1/inventory/linux-full"
+  source_ids: ["src-device42"]

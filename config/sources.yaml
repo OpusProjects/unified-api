@@ -1,0 +1,12 @@
+src-device42:
+  name: "Device42 Linux Inventory"
+  project_id: "prj-connectors-infra"
+  script_path: "device42/fetch_inventory.py"
+  credential_ids: ["cred-device42-api"]
+  schedule: "0 */1 * * *"
+  ttl_seconds: 3600
+  ttl_overrides:
+    groups:
+      production: 900
+    hosts:
+      critical-db01.dc06.pqe: 300

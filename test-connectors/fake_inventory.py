@@ -16,6 +16,11 @@ import sys
 config_raw = os.environ.get("SOURCE_CONFIG", "{}")
 config = json.loads(config_raw)
 
+# Log credential keys received (never values!)
+cred_keys = [k for k in os.environ if k.startswith("CREDENTIAL_")]
+if cred_keys:
+    print(f"[connector] Credentials received: {', '.join(sorted(cred_keys))}", file=sys.stderr)
+
 # Simulate different scenarios based on config
 scenario = config.get("scenario", "default")
 

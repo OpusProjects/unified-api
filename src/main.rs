@@ -10,12 +10,8 @@ async fn main() {
         cfg.endpoints.len(),
     );
 
-    // build_app_with_sources_and_state devuelve (Router, Arc<AppState>)
-    // Necesitamos el state para pasárselo al scheduler
-    let (app, state) = unified_api::build_app_with_sources_and_state(cfg.sources);
+    let (app, state) = unified_api::build_app_production(cfg.sources, cfg.credentials);
 
-    // Arranca los sync automáticos ANTES de servir HTTP
-    // Los tasks corren en background — no bloquean el servidor
     unified_api::scheduler::start_sync_tasks(state);
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

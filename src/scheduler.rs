@@ -1,33 +1,25 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
+use crate::api::sources::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
 use crate::AppState;
 
-// Lanza un tokio::spawn por cada source que tenga sync_interval_seconds > 0
-// tokio::spawn = lanza una tarea asíncrona en background (como un thread ligero)
-// Cada tarea ejecuta un loop infinito: espera el intervalo → ejecuta sync → repite
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
             Some(secs) if secs > 0 => secs,
-            _ => continue, // sin intervalo = no se programa
+            _ => continue,
         };
 
-        // Clonamos lo que el task necesita — cada spawn es independiente
-        // y necesita ser dueño de sus datos (ownership)
         let state = Arc::clone(&state);
         let source_id = source_id.clone();
         let script_path = source.script_path.clone();
         let config = source.config.clone();
         let ttl_seconds = source.ttl_seconds;
+        let credential_ids = source.credential_ids.clone();
 
-        // tokio::spawn lanza la tarea y devuelve inmediatamente
-        // El task vive mientras el runtime de tokio viva (= mientras el server corra)
         tokio::spawn(async move {
-            // interval() crea un ticker que dispara cada X duración
-            // El primer tick es inmediato
             let mut ticker = interval(Duration::from_secs(interval_secs));
 
             println!(
@@ -36,11 +28,27 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
             );
 
             loop {
-                ticker.tick().await; // espera hasta el siguiente tick
+                ticker.tick().await;
 
                 println!("[scheduler] Syncing '{}'...", source_id);
 
-                let credentials: HashMap<String, String> = HashMap::new();
+                // Resolver credenciales desde Vault/mock antes de ejecutar
+                // Construimos un Source temporal para reutilizar resolve_credentials
+                let temp_source = crate::domain::source::Source {
+                    name: String::new(),
+                    project_id: String::new(),
+                    script_path: script_path.clone(),
+                    credential_ids: credential_ids.clone(),
+                    schedule: None,
+                    sync_interval_seconds: None,
+                    ttl_seconds,
+                    ttl_overrides: Default::default(),
+                    config: config.clone(),
+                };
+
+                let credentials =
+                    resolve_credentials(&*state.secrets, &temp_source).await;
+
                 let result = state
                     .connector
                     .execute(&script_path, &config, &credentials)

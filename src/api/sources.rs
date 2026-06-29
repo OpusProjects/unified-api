@@ -8,6 +8,8 @@ use std::time::Instant;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::domain::cache_entry::CacheEntry;
+use crate::domain::source::Source;
+use crate::ports::secrets::SecretsPort;
 use crate::AppState;
 
 // ToSchema = utoipa genera la definición JSON Schema de este struct
@@ -241,7 +243,9 @@ pub async fn sync_source(
     }
 
     let start = Instant::now();
-    let credentials: HashMap<String, String> = HashMap::new();
+
+    // Resolver credenciales desde Vault (o mock en tests)
+    let credentials = resolve_credentials(&*state.secrets, source).await;
 
     let result = state
         .connector
@@ -295,4 +299,29 @@ pub async fn sync_source(
             error: Some(connector_error.message),
         })),
     }
+}
+
+// Resuelve todas las credential_ids de un source y las combina en un HashMap
+// Si alguna falla, la ignora con un log (el connector puede funcionar sin ella)
+pub async fn resolve_credentials(
+    secrets: &dyn SecretsPort,
+    source: &Source,
+) -> HashMap<String, String> {
+    let mut all_credentials = HashMap::new();
+
+    for credential_id in &source.credential_ids {
+        match secrets.resolve(credential_id).await {
+            Ok(creds) => {
+                all_credentials.extend(creds);
+            }
+            Err(e) => {
+                println!(
+                    "[secrets] Failed to resolve '{}': {}",
+                    credential_id, e.message
+                );
+            }
+        }
+    }
+
+    all_credentials
 }

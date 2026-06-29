@@ -47,6 +47,10 @@ impl ConnectorPort for ProcessConnector {
 
         // Inyectamos cada credencial como CREDENTIAL_<KEY>=<VALUE>
         // ej: CREDENTIAL_USERNAME=admin, CREDENTIAL_PASSWORD=secret
+        let cred_keys: Vec<String> = credentials.keys().cloned().collect();
+        if !cred_keys.is_empty() {
+            println!("[connector] Injecting credentials: {}", cred_keys.join(", "));
+        }
         for (key, value) in credentials {
             cmd.env(format!("CREDENTIAL_{}", key.to_uppercase()), value);
         }

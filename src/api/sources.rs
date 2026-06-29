@@ -5,11 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::domain::cache_entry::CacheEntry;
 use crate::AppState;
 
-#[derive(Serialize)]
+// ToSchema = utoipa genera la definición JSON Schema de este struct
+// Aparecerá en la sección "Schemas" del Swagger UI
+#[derive(Serialize, ToSchema)]
 pub struct CachedSourceInfo {
     pub source_id: String,
     pub is_fresh: bool,
@@ -17,6 +20,19 @@ pub struct CachedSourceInfo {
     pub total_hosts: usize,
 }
 
+// #[utoipa::path] describe el endpoint para la documentación:
+// - get = método HTTP
+// - path = la URL
+// - responses = qué devuelve y con qué status code
+// - tag = agrupación en el Swagger UI
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources",
+    tag = "Sources",
+    responses(
+        (status = 200, description = "List of cached sources with freshness info", body = Vec<CachedSourceInfo>)
+    )
+)]
 pub async fn list_cached_sources(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<CachedSourceInfo>> {
@@ -38,6 +54,18 @@ pub async fn list_cached_sources(
     Json(sources)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{id}/dataset",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier (e.g. src-section9)")
+    ),
+    responses(
+        (status = 200, description = "Full cached dataset with hostvars and groups"),
+        (status = 404, description = "Source not found in cache")
+    )
+)]
 pub async fn get_source_dataset(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -52,14 +80,17 @@ pub async fn get_source_dataset(
     }
 }
 
-// Reutilizamos los mismos query params para status y sync
-#[derive(Deserialize)]
+// IntoParams = utoipa genera la documentación de los query params
+// Cada campo Option<String> aparece como parámetro opcional en Swagger
+#[derive(Deserialize, IntoParams)]
 pub struct StatusParams {
+    /// Filter by hostname (e.g. motoko.section9.net)
     pub host: Option<String>,
+    /// Filter by group name (e.g. magi)
     pub group: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct HostStatus {
     pub hostname: String,
     pub age_seconds: u64,
@@ -67,7 +98,7 @@ pub struct HostStatus {
     pub ttl_seconds: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SourceStatus {
     pub source_id: String,
     pub dataset_age_seconds: u64,
@@ -77,35 +108,39 @@ pub struct SourceStatus {
     pub hosts: Vec<HostStatus>,
 }
 
-// GET /api/v1/sources/:id/status
-// GET /api/v1/sources/:id/status?host=motoko.section9.net
-// GET /api/v1/sources/:id/status?group=magi
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{id}/status",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        StatusParams
+    ),
+    responses(
+        (status = 200, description = "Cache status per host with TTL info", body = SourceStatus),
+        (status = 404, description = "Source not in cache, or host/group not found")
+    )
+)]
 pub async fn source_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(params): Query<StatusParams>,
 ) -> Result<Json<SourceStatus>, StatusCode> {
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-
-    // Buscamos TTL overrides del source config (si existe)
     let source = state.sources.get(&id);
 
-    // Determinamos qué hosts mostrar según el filtro
     let hostnames: Vec<String> = if let Some(ref host) = params.host {
-        // Solo un host
         if entry.dataset.hostvars.contains_key(host) {
             vec![host.clone()]
         } else {
             return Err(StatusCode::NOT_FOUND);
         }
     } else if let Some(ref group) = params.group {
-        // Hosts del grupo
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.clone(),
             None => return Err(StatusCode::NOT_FOUND),
         }
     } else {
-        // Todos
         entry.dataset.hostvars.keys().cloned().collect()
     };
 
@@ -114,12 +149,9 @@ pub async fn source_status(
         .filter_map(|hostname| {
             let age = entry.host_age_seconds(hostname)?;
 
-            // TTL efectivo: host override > group override > source default
             let effective_ttl = source
                 .and_then(|s| {
-                    // Primero busca override por host
                     s.ttl_overrides.hosts.get(hostname).copied()
-                        // Si no, busca por grupo (primer grupo que matchee)
                         .or_else(|| {
                             entry.dataset.groups.iter().find_map(|(group_name, group)| {
                                 if group.hosts.contains(hostname) {
@@ -141,7 +173,6 @@ pub async fn source_status(
         })
         .collect();
 
-    // Ordenar por hostname para output consistente
     hosts.sort_by(|a, b| a.hostname.cmp(&b.hostname));
 
     Ok(Json(SourceStatus {
@@ -154,29 +185,39 @@ pub async fn source_status(
     }))
 }
 
-// Query params para el sync — Axum los extrae automáticamente de la URL
-// ?host=motoko.section9.net o ?group=magi
-// Todos son Option porque son opcionales
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
 pub struct SyncParams {
+    /// Sync only this host (e.g. motoko.section9.net)
     pub host: Option<String>,
+    /// Sync only hosts in this group (e.g. magi)
     pub group: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct SyncResult {
     pub source_id: String,
     pub success: bool,
-    pub scope: String, // "full", "host:motoko.section9.net", "group:magi"
+    /// "full", "host:motoko.section9.net", or "group:magi"
+    pub scope: String,
     pub total_hosts: usize,
     pub total_groups: usize,
     pub sync_duration_ms: u128,
     pub error: Option<String>,
 }
 
-// POST /api/v1/sources/:id/sync
-// POST /api/v1/sources/:id/sync?host=motoko.section9.net
-// POST /api/v1/sources/:id/sync?group=magi
+#[utoipa::path(
+    post,
+    path = "/api/v1/sources/{id}/sync",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        SyncParams
+    ),
+    responses(
+        (status = 200, description = "Sync result with host/group counts", body = SyncResult),
+        (status = 404, description = "Source not configured")
+    )
+)]
 pub async fn sync_source(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -184,7 +225,6 @@ pub async fn sync_source(
 ) -> Result<Json<SyncResult>, StatusCode> {
     let source = state.sources.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    // Determinamos el scope y lo inyectamos en la config del connector
     let mut config = source.config.clone();
     let scope_label;
 
@@ -215,20 +255,16 @@ pub async fn sync_source(
             let total_hosts = dataset.hostvars.len();
             let total_groups = dataset.groups.len();
 
-            // Según el scope, actualizamos el cache de forma diferente
             if let Some(ref host) = params.host {
-                // Sync de un host: actualizamos solo ese host en el cache existente
                 if let Some(vars) = dataset.hostvars.get(host) {
                     if let Some(mut entry) = state.cache.get(&id) {
                         entry.update_host(host.clone(), vars.clone());
                         state.cache.set(&id, entry);
                     } else {
-                        // No hay cache previo → creamos uno nuevo con solo este host
                         state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
                     }
                 }
             } else if let Some(ref group) = params.group {
-                // Sync de un grupo: actualizamos los hosts del grupo
                 if let Some(mut entry) = state.cache.get(&id) {
                     entry.update_group(group, dataset);
                     state.cache.set(&id, entry);
@@ -236,7 +272,6 @@ pub async fn sync_source(
                     state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
                 }
             } else {
-                // Sync completo: reemplazamos todo el cache
                 state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
             }
 

@@ -7,6 +7,8 @@ pub mod ports;
 use axum::{routing::get, routing::post, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use adapters::memory_cache::MemoryCache;
 use adapters::process_connector::ProcessConnector;
@@ -14,17 +16,45 @@ use domain::cache_entry::CacheEntry;
 use domain::dataset::Dataset;
 use domain::source::Source;
 
-// AppState contiene todo lo que los handlers HTTP necesitan:
-// - cache: donde se guardan los datasets
-// - connector: cómo ejecutar scripts
-// - sources: la configuración de cada source (del YAML)
 pub struct AppState {
     pub cache: Arc<dyn ports::cache::CachePort>,
     pub connector: Arc<dyn ports::connector::ConnectorPort>,
     pub sources: HashMap<String, Source>,
 }
 
-// Helper para no repetir las rutas en cada build_app
+// #[derive(OpenApi)] genera la spec OpenAPI completa
+// - paths() = los handlers anotados con #[utoipa::path]
+// - components(schemas()) = los structs anotados con #[derive(ToSchema)]
+// - tags = agrupaciones que aparecen en el Swagger UI
+// - info = título, descripción, versión de la API
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        api::health::healthz,
+        api::health::readyz,
+        api::sources::list_cached_sources,
+        api::sources::get_source_dataset,
+        api::sources::source_status,
+        api::sources::sync_source,
+    ),
+    components(schemas(
+        api::sources::CachedSourceInfo,
+        api::sources::HostStatus,
+        api::sources::SourceStatus,
+        api::sources::SyncResult,
+    )),
+    tags(
+        (name = "Health", description = "Liveness and readiness probes"),
+        (name = "Sources", description = "Inventory source management, sync, and cache status")
+    ),
+    info(
+        title = "Unified API",
+        version = "0.1.0",
+        description = "Infrastructure inventory aggregation and caching middleware"
+    )
+)]
+struct ApiDoc;
+
 fn create_router(state: Arc<AppState>) -> Router<()> {
     Router::new()
         .route("/healthz", get(api::health::healthz))
@@ -33,6 +63,9 @@ fn create_router(state: Arc<AppState>) -> Router<()> {
         .route("/api/v1/sources/{id}/dataset", get(api::sources::get_source_dataset))
         .route("/api/v1/sources/{id}/sync", post(api::sources::sync_source))
         .route("/api/v1/sources/{id}/status", get(api::sources::source_status))
+        // SwaggerUi sirve la interfaz web en /swagger-ui/
+        // y la spec JSON en /api-docs/openapi.json
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }
 
@@ -45,7 +78,6 @@ pub fn build_app() -> Router<()> {
     create_router(state)
 }
 
-// Versión con sources configurados (para tests que necesitan sync)
 pub fn build_app_with_sources(sources: HashMap<String, Source>) -> Router<()> {
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),

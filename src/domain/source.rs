@@ -13,8 +13,13 @@ pub struct Source {
     #[serde(default)]
     pub credential_ids: Vec<String>,
 
-    // Option<String> = puede tener o no un schedule cron
+    // Option<String> = puede tener o no un schedule cron (reservado para futuro)
     pub schedule: Option<String>,
+
+    // Intervalo de sync automático en segundos (alternativa simple al cron)
+    // Si es None o 0, no se hace sync automático
+    #[serde(default)]
+    pub sync_interval_seconds: Option<u64>,
 
     // TTL en segundos para la caché de este source
     pub ttl_seconds: u64,

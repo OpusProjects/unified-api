@@ -4,6 +4,7 @@ src-section9:
   script_path: "test-connectors/fake_inventory.py"
   credential_ids: ["cred-section9-api"]
   schedule: "0 */1 * * *"
+  sync_interval_seconds: 60
   ttl_seconds: 3600
   ttl_overrides:
     groups:
@@ -17,6 +18,7 @@ src-section9-large:
   script_path: "test-connectors/fake_inventory.py"
   credential_ids: []
   schedule: "0 */2 * * *"
+  sync_interval_seconds: 120
   ttl_seconds: 7200
   config:
     scenario: "large"

@@ -3,6 +3,7 @@ pub mod api;
 pub mod config;
 pub mod domain;
 pub mod ports;
+pub mod scheduler;
 
 use axum::{routing::get, routing::post, Router};
 use std::collections::HashMap;
@@ -79,12 +80,22 @@ pub fn build_app() -> Router<()> {
 }
 
 pub fn build_app_with_sources(sources: HashMap<String, Source>) -> Router<()> {
+    let (router, _state) = build_app_with_sources_and_state(sources);
+    router
+}
+
+// Devuelve tanto el Router como el Arc<AppState>
+// main.rs necesita el state para pasárselo al scheduler
+pub fn build_app_with_sources_and_state(
+    sources: HashMap<String, Source>,
+) -> (Router<()>, Arc<AppState>) {
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
         sources,
     });
-    create_router(state)
+    let router = create_router(Arc::clone(&state));
+    (router, state)
 }
 
 pub fn build_app_with_demo_data() -> Router<()> {

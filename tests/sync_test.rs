@@ -34,6 +34,7 @@ fn test_source(scenario: &str) -> Source {
         script_path: "test-connectors/fake_inventory.py".to_string(),
         credential_ids: vec![],
         schedule: None,
+        sync_interval_seconds: None,
         ttl_seconds: 3600,
         ttl_overrides: TtlOverrides::default(),
         config,

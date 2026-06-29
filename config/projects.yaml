@@ -1,4 +1,4 @@
 prj-connectors-infra:
   name: "Infrastructure Connectors"
-  git_url: "https://github.com/opus-automata/connectors-infra.git"
+  git_url: "https://github.com/OpusProjects/connectors-infra.git"
   sync_interval: "0 */30 * * *"

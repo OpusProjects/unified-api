@@ -8,7 +8,7 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 
 ## Organization
 
-- **GitHub Org:** [opus-automata](https://github.com/opus-automata)
+- **GitHub Org:** [OpusProjects](https://github.com/OpusProjects)
 - **License:** Apache 2.0
 - **Owners:** Fernando Roca and Blai
 
@@ -34,12 +34,29 @@ cargo run -- --config config/config.yaml  # run with config (future)
 
 ```
 src/
-├── main.rs              # Entrypoint: load config, build app state, start Axum
+├── main.rs              # Entrypoint: load config, start Axum
+├── lib.rs               # App builder, shared types (AppState)
+├── config.rs            # YAML configuration loading from config/ directory
 ├── api/                 # HTTP handlers (axum routes)
 │   ├── mod.rs
-│   └── health.rs        # /healthz, /readyz
-├── config.rs            # YAML configuration loading (planned)
-└── domain/              # Core domain types (planned)
+│   ├── health.rs        # /healthz, /readyz
+│   └── sources.rs       # /api/v1/sources, /api/v1/sources/{id}/dataset
+├── domain/              # Core domain types (pure, no dependencies)
+│   ├── dataset.rs       # Dataset, Group, HostVars
+│   ├── source.rs        # Source, TtlOverrides
+│   ├── cache_entry.rs   # CacheEntry with TTL logic
+│   ├── credential.rs    # Credential, CredentialType, ResolvedCredential
+│   ├── project.rs       # GitProject
+│   └── endpoint.rs      # OutputEndpoint, InventoryScope
+├── ports/               # Trait definitions (interfaces)
+│   ├── cache.rs         # CachePort trait
+│   └── connector.rs     # ConnectorPort trait
+├── adapters/            # Concrete implementations
+│   ├── memory_cache.rs  # CachePort → DashMap
+│   └── process_connector.rs  # ConnectorPort → tokio::process
+config/                  # Split YAML config (server, credentials, sources, etc.)
+test-connectors/         # Fake connector scripts for testing
+tests/                   # Integration tests
 ```
 
 ## Architecture

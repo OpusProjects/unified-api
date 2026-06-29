@@ -76,3 +76,48 @@ fn load_optional_yaml<T: serde::de::DeserializeOwned>(
         Ok(HashMap::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // Los tests de config necesitan archivos reales en disco.
+    // Creamos un directorio temporal con YAML de prueba.
+
+    #[test]
+    fn load_config_from_directory() {
+        // tempdir: creamos un directorio temporal para el test
+        let dir = tempfile::tempdir().unwrap();
+
+        // Escribimos config.yaml mínimo
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ).unwrap();
+
+        // Escribimos credentials.yaml con formato mapa
+        fs::write(
+            dir.path().join("credentials.yaml"),
+            "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  vault_path: \"secret/test\"\n",
+        ).unwrap();
+
+        // dir.path().to_str() convierte el Path a &str
+        let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(cfg.server.host, "127.0.0.1");
+        assert_eq!(cfg.server.port, 9090);
+        assert_eq!(cfg.credentials.len(), 1);
+        assert!(cfg.credentials.contains_key("cred-test"));
+        // sources.yaml no existe → HashMap vacío, sin error
+        assert_eq!(cfg.sources.len(), 0);
+    }
+
+    #[test]
+    fn load_config_fails_without_server_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // No creamos config.yaml → debe fallar
+        let result = load_config(dir.path().to_str().unwrap());
+        assert!(result.is_err()); // is_err() = el Result es un Error
+    }
+}

@@ -1,12 +1,22 @@
-src-device42:
-  name: "Device42 Linux Inventory"
+src-section9:
+  name: "Section 9 Inventory"
   project_id: "prj-connectors-infra"
-  script_path: "device42/fetch_inventory.py"
-  credential_ids: ["cred-device42-api"]
+  script_path: "test-connectors/fake_inventory.py"
+  credential_ids: ["cred-section9-api"]
   schedule: "0 */1 * * *"
   ttl_seconds: 3600
   ttl_overrides:
     groups:
       production: 900
     hosts:
-      critical-db01.dc06.pqe: 300
+      motoko.section9.net: 300
+
+src-section9-large:
+  name: "Section 9 Large Inventory"
+  project_id: "prj-connectors-infra"
+  script_path: "test-connectors/fake_inventory.py"
+  credential_ids: []
+  schedule: "0 */2 * * *"
+  ttl_seconds: 7200
+  config:
+    scenario: "large"

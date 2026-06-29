@@ -46,3 +46,66 @@ impl CachePort for MemoryCache {
         self.store.iter().map(|entry| entry.key().clone()).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::dataset::Dataset;
+    use std::collections::HashMap;
+
+    fn empty_dataset() -> Dataset {
+        Dataset {
+            hostvars: HashMap::new(),
+            groups: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn set_and_get() {
+        let cache = MemoryCache::new();
+        let entry = CacheEntry::new(empty_dataset(), 3600);
+
+        cache.set("src-1", entry);
+
+        let result = cache.get("src-1");
+        assert!(result.is_some()); // is_some() = el Option tiene valor (no es None)
+    }
+
+    #[test]
+    fn get_missing_key_returns_none() {
+        let cache = MemoryCache::new();
+        let result = cache.get("no-existe");
+        assert!(result.is_none()); // is_none() = el Option es None
+    }
+
+    #[test]
+    fn remove_deletes_entry() {
+        let cache = MemoryCache::new();
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+
+        cache.remove("src-1");
+
+        assert!(cache.get("src-1").is_none());
+    }
+
+    #[test]
+    fn keys_lists_all_entries() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(empty_dataset(), 3600));
+        cache.set("src-b", CacheEntry::new(empty_dataset(), 3600));
+
+        let mut keys = cache.keys();
+        keys.sort(); // sort() ordena in-place (DashMap no garantiza orden)
+        assert_eq!(keys, vec!["src-a", "src-b"]); // vec![] crea un Vec literal
+    }
+
+    #[test]
+    fn set_overwrites_existing() {
+        let cache = MemoryCache::new();
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 100));
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 999));
+
+        let entry = cache.get("src-1").unwrap(); // unwrap aquí es seguro, sabemos que existe
+        assert_eq!(entry.ttl.as_secs(), 999);
+    }
+}

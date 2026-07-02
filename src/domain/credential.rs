@@ -29,4 +29,9 @@ pub struct Credential {
     // ej: {"username": "USERNAME", "password": "PASSWORD"}
     #[serde(default)]
     pub secret_keys: HashMap<String, String>,
+
+    // Paths a ficheros que el script consume directamente (SSH keys, certificados, etc.)
+    // ej: {"ssh_key": "/run/secrets/id_rsa"} → CREDENTIAL_SSH_KEY_PATH=/run/secrets/id_rsa
+    #[serde(default)]
+    pub file_keys: HashMap<String, String>,
 }

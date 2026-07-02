@@ -74,7 +74,42 @@ impl CacheEntry {
         self.host_timestamps.insert(hostname, Instant::now());
     }
 
-    // Actualiza todos los hosts de un grupo
+    // Merge: parchea los hosts que vienen, el resto no se toca.
+    // También procesa remove_hosts si vienen.
+    pub fn merge_dataset(&mut self, partial: Dataset) {
+        let now = Instant::now();
+
+        // Merge hostvars
+        for (hostname, vars) in partial.hostvars {
+            self.dataset.hostvars.insert(hostname.clone(), vars);
+            self.host_timestamps.insert(hostname, now);
+        }
+
+        // Merge groups
+        for (group_name, group) in partial.groups {
+            self.dataset.groups.insert(group_name, group);
+        }
+
+        // Remove hosts
+        for hostname in &partial.remove_hosts {
+            self.dataset.hostvars.remove(hostname);
+            self.host_timestamps.remove(hostname);
+            // Quitar el host de todos los grupos
+            for group in self.dataset.groups.values_mut() {
+                group.hosts.retain(|h| h != hostname);
+            }
+        }
+    }
+
+    // Elimina un host del cache
+    pub fn remove_host(&mut self, hostname: &str) {
+        self.dataset.hostvars.remove(hostname);
+        self.host_timestamps.remove(hostname);
+        for group in self.dataset.groups.values_mut() {
+            group.hosts.retain(|h| h != hostname);
+        }
+    }
+
     pub fn update_group(&mut self, group_name: &str, partial_dataset: Dataset) {
         // Solo actualizamos los hosts que pertenecen al grupo
         if let Some(group) = self.dataset.groups.get(group_name) {
@@ -105,6 +140,7 @@ mod tests {
         Dataset {
             hostvars: HashMap::new(),
             groups: HashMap::new(),
+            remove_hosts: vec![],
         }
     }
 
@@ -125,6 +161,7 @@ mod tests {
         Dataset {
             hostvars,
             groups: HashMap::new(),
+            remove_hosts: vec![],
         }
     }
 
@@ -202,5 +239,84 @@ mod tests {
     fn host_age_returns_none_for_unknown() {
         let entry = CacheEntry::new(dataset_with_hosts(), 3600);
         assert!(entry.host_age_seconds("togusa.section9.net").is_none());
+    }
+
+    #[test]
+    fn merge_dataset_adds_new_hosts() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        assert_eq!(entry.dataset.hostvars.len(), 2);
+
+        let partial = Dataset {
+            hostvars: [(
+                "togusa.section9.net".to_string(),
+                [("role".to_string(), serde_json::json!("detective"))].into_iter().collect(),
+            )].into_iter().collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        };
+
+        entry.merge_dataset(partial);
+        assert_eq!(entry.dataset.hostvars.len(), 3);
+        assert_eq!(entry.dataset.hostvars["togusa.section9.net"]["role"], "detective");
+    }
+
+    #[test]
+    fn merge_dataset_updates_existing_hosts() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+
+        let partial = Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("role".to_string(), serde_json::json!("major"))].into_iter().collect(),
+            )].into_iter().collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        };
+
+        entry.merge_dataset(partial);
+        assert_eq!(entry.dataset.hostvars.len(), 2);
+        assert_eq!(entry.dataset.hostvars["motoko.section9.net"]["role"], "major");
+    }
+
+    #[test]
+    fn merge_dataset_removes_hosts() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        assert_eq!(entry.dataset.hostvars.len(), 2);
+
+        let partial = Dataset {
+            hostvars: HashMap::new(),
+            groups: HashMap::new(),
+            remove_hosts: vec!["batou.section9.net".to_string()],
+        };
+
+        entry.merge_dataset(partial);
+        assert_eq!(entry.dataset.hostvars.len(), 1);
+        assert!(!entry.dataset.hostvars.contains_key("batou.section9.net"));
+        assert!(!entry.host_timestamps.contains_key("batou.section9.net"));
+    }
+
+    #[test]
+    fn remove_host_deletes_from_groups() {
+        use crate::domain::dataset::Group;
+
+        let mut entry = CacheEntry::new(Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("role".to_string(), serde_json::json!("commander"))].into_iter().collect(),
+            )].into_iter().collect(),
+            groups: [(
+                "section9".to_string(),
+                Group {
+                    hosts: vec!["motoko.section9.net".to_string()],
+                    children: vec![],
+                    vars: None,
+                },
+            )].into_iter().collect(),
+            remove_hosts: vec![],
+        }, 3600);
+
+        entry.remove_host("motoko.section9.net");
+        assert!(!entry.dataset.hostvars.contains_key("motoko.section9.net"));
+        assert!(entry.dataset.groups["section9"].hosts.is_empty());
     }
 }

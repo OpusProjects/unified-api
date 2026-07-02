@@ -57,6 +57,7 @@ mod tests {
         Dataset {
             hostvars: HashMap::new(),
             groups: HashMap::new(),
+            remove_hosts: vec![],
         }
     }
 

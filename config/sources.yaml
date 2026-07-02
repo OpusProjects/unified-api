@@ -12,6 +12,15 @@ src-section9:
     hosts:
       motoko.section9.net: 300
 
+src-infra:
+  name: "Infrastructure Data"
+  project_id: "prj-connectors-infra"
+  script_path: "test-connectors/fake_infra.py"
+  credential_ids: []
+  sync_interval_seconds: 300
+  ttl_seconds: 3600
+  sync_mode: "replace"
+
 src-section9-large:
   name: "Section 9 Large Inventory"
   project_id: "prj-connectors-infra"

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::process::Command;
+use tracing::debug;
 
 use crate::domain::dataset::Dataset;
 use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
@@ -49,7 +50,7 @@ impl ConnectorPort for ProcessConnector {
         // ej: CREDENTIAL_USERNAME=admin, CREDENTIAL_PASSWORD=secret
         let cred_keys: Vec<String> = credentials.keys().cloned().collect();
         if !cred_keys.is_empty() {
-            println!("[connector] Injecting credentials: {}", cred_keys.join(", "));
+            debug!(keys = ?cred_keys, "Injecting credentials");
         }
         for (key, value) in credentials {
             cmd.env(format!("CREDENTIAL_{}", key.to_uppercase()), value);

@@ -14,6 +14,11 @@ pub struct Dataset {
     // HashMap<String, Group> = los grupos del inventario (dc06, oraclelinux8, etc.)
     #[serde(default)]
     pub groups: HashMap<String, Group>,
+
+    // Hosts a eliminar — solo lo usa el enricher
+    // El connector normal no devuelve esto
+    #[serde(default)]
+    pub remove_hosts: Vec<String>,
 }
 
 // Las variables de un host: un diccionario libre de clave-valor

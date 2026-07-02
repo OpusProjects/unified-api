@@ -44,13 +44,40 @@ async fn healthz_returns_ok() {
 }
 
 #[tokio::test]
-async fn readyz_returns_ok() {
+async fn readyz_returns_ok_without_sources() {
     let app = unified_api::build_app();
 
     let (status, body) = get(app, "/readyz").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, "ok");
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["ready"], true);
+    assert_eq!(result["sources_total"], 0);
+}
+
+#[tokio::test]
+async fn readyz_returns_503_before_sync() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert("src-test".to_string(), unified_api::domain::source::Source {
+        name: "Test".to_string(),
+        project_id: "test".to_string(),
+        script_path: "test-connectors/fake_inventory.py".to_string(),
+        sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
+        credential_ids: vec![],
+        schedule: None,
+        sync_interval_seconds: None,
+        ttl_seconds: 3600,
+        ttl_overrides: Default::default(),
+        config: std::collections::HashMap::new(),
+    });
+    let app = unified_api::build_app_with_sources(sources);
+
+    let (status, body) = get(app, "/readyz").await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["ready"], false);
+    assert_eq!(result["sources_pending"][0], "src-test");
 }
 
 // =========================================================================

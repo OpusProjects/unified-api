@@ -5,10 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::warn;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::domain::cache_entry::CacheEntry;
+use crate::domain::dataset::HostVars;
 use crate::domain::source::Source;
+use crate::domain::sync_mode::SyncMode;
 use crate::ports::secrets::SecretsPort;
 use crate::AppState;
 
@@ -276,7 +279,19 @@ pub async fn sync_source(
                     state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
                 }
             } else {
-                state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
+                match source.sync_mode {
+                    SyncMode::Replace => {
+                        state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
+                    }
+                    SyncMode::Merge => {
+                        if let Some(mut entry) = state.cache.get(&id) {
+                            entry.merge_dataset(dataset);
+                            state.cache.set(&id, entry);
+                        } else {
+                            state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
+                        }
+                    }
+                }
             }
 
             Ok(Json(SyncResult {
@@ -301,8 +316,135 @@ pub async fn sync_source(
     }
 }
 
-// Resuelve todas las credential_ids de un source y las combina en un HashMap
-// Si alguna falla, la ignora con un log (el connector puede funcionar sin ella)
+// --- Enricher endpoint ---
+
+#[derive(Serialize, ToSchema)]
+pub struct EnrichResult {
+    pub source_id: String,
+    pub enricher_id: String,
+    pub success: bool,
+    pub hosts_updated: usize,
+    pub hosts_removed: usize,
+    pub duration_ms: u128,
+    pub error: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/enrichers/{id}/run",
+    tag = "Enrichers",
+    params(
+        ("id" = String, Path, description = "Enricher identifier (e.g. enrich-resolve-ssh)")
+    ),
+    responses(
+        (status = 200, description = "Enrichment result", body = EnrichResult),
+        (status = 404, description = "Enricher not configured or source not in cache")
+    )
+)]
+pub async fn run_enricher(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<EnrichResult>, StatusCode> {
+    let enricher_def = state.enrichers.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let source_id = enricher_def.source_id.clone();
+
+    let current_entry = state.cache.get(&source_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let start = Instant::now();
+
+    let result = state.enricher.execute(
+        &enricher_def.script_path,
+        &enricher_def.config,
+        &current_entry.dataset,
+    ).await;
+
+    let duration_ms = start.elapsed().as_millis();
+
+    match result {
+        Ok(partial_dataset) => {
+            let hosts_updated = partial_dataset.hostvars.len();
+            let hosts_removed = partial_dataset.remove_hosts.len();
+
+            if let Some(mut entry) = state.cache.get(&source_id) {
+                entry.merge_dataset(partial_dataset);
+                state.cache.set(&source_id, entry);
+            }
+
+            Ok(Json(EnrichResult {
+                source_id,
+                enricher_id: id,
+                success: true,
+                hosts_updated,
+                hosts_removed,
+                duration_ms,
+                error: None,
+            }))
+        }
+        Err(e) => Ok(Json(EnrichResult {
+            source_id,
+            enricher_id: id,
+            success: false,
+            hosts_updated: 0,
+            hosts_removed: 0,
+            duration_ms,
+            error: Some(e.message),
+        })),
+    }
+}
+
+// --- Alta y baja inmediata de hosts ---
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/sources/{id}/hosts/{hostname}",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        ("hostname" = String, Path, description = "Host to add or update")
+    ),
+    request_body(content = Object, description = "Host variables as JSON key-value pairs"),
+    responses(
+        (status = 200, description = "Host added/updated"),
+        (status = 404, description = "Source not in cache")
+    )
+)]
+pub async fn put_host(
+    State(state): State<Arc<AppState>>,
+    Path((id, hostname)): Path<(String, String)>,
+    Json(vars): Json<HostVars>,
+) -> Result<StatusCode, StatusCode> {
+    let mut entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    entry.update_host(hostname, vars);
+    state.cache.set(&id, entry);
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/sources/{id}/hosts/{hostname}",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        ("hostname" = String, Path, description = "Host to remove")
+    ),
+    responses(
+        (status = 200, description = "Host removed"),
+        (status = 404, description = "Source or host not in cache")
+    )
+)]
+pub async fn delete_host(
+    State(state): State<Arc<AppState>>,
+    Path((id, hostname)): Path<(String, String)>,
+) -> Result<StatusCode, StatusCode> {
+    let mut entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    if !entry.dataset.hostvars.contains_key(&hostname) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    entry.remove_host(&hostname);
+    state.cache.set(&id, entry);
+    Ok(StatusCode::OK)
+}
+
 pub async fn resolve_credentials(
     secrets: &dyn SecretsPort,
     source: &Source,
@@ -315,10 +457,7 @@ pub async fn resolve_credentials(
                 all_credentials.extend(creds);
             }
             Err(e) => {
-                println!(
-                    "[secrets] Failed to resolve '{}': {}",
-                    credential_id, e.message
-                );
+                warn!(credential = %credential_id, error = %e.message, "Failed to resolve credential");
             }
         }
     }

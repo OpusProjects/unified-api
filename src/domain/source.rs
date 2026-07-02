@@ -1,13 +1,16 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-// Un Source define cómo ingestar datos de una fuente externa
-// Es lo que se configura en config.yaml bajo "sources:"
+use super::sync_mode::SyncMode;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Source {
     pub name: String,
     pub project_id: String,
     pub script_path: String,
+
+    #[serde(default)]
+    pub sync_mode: SyncMode,
 
     // Vec<String> = lista de IDs de credenciales que necesita el connector
     #[serde(default)]

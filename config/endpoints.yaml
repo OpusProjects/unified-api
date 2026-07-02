@@ -1,4 +1,18 @@
-ep-linux-full:
-  name: "Full Linux Inventory"
-  url_path: "/api/v1/inventory/linux-full"
-  source_ids: ["src-device42"]
+ep-ansible-full:
+  name: "Full Ansible Inventory"
+  source_ids: ["src-section9", "src-infra"]
+  script_path: "test-connectors/output_ansible_inventory.py"
+
+ep-ansible-section9:
+  name: "Section 9 Only"
+  source_ids: ["src-section9", "src-infra"]
+  script_path: "test-connectors/output_ansible_inventory.py"
+  config:
+    filter_datacenter: "section9"
+
+ep-ansible-oraclelinux:
+  name: "OracleLinux Hosts"
+  source_ids: ["src-section9", "src-infra"]
+  script_path: "test-connectors/output_ansible_inventory.py"
+  config:
+    filter_os: "OracleLinux"

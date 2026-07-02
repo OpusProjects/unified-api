@@ -8,6 +8,7 @@ pub mod scheduler;
 use axum::{routing::{get, post, put}, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -85,6 +86,10 @@ fn create_router(state: Arc<AppState>) -> Router<()> {
         .route("/api/v1/endpoints", get(api::endpoints::list_endpoints))
         .route("/api/v1/endpoints/{id}", post(api::endpoints::run_endpoint))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any))
         .with_state(state)
 }
 

@@ -22,11 +22,14 @@ async fn main() {
         }
     };
 
+    let auth_enabled = std::env::var("UNIFIED_API_KEY").is_ok();
+
     info!(
         sources = cfg.sources.len(),
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),
         endpoints = cfg.endpoints.len(),
+        auth = auth_enabled,
         "Configuration loaded"
     );
 

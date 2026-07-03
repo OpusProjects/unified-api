@@ -1,0 +1,120 @@
+use axum::extract::Request;
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::Response;
+
+#[derive(Clone)]
+pub struct ApiKey(pub Option<String>);
+
+pub async fn require_api_key(
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let api_key = request
+        .extensions()
+        .get::<ApiKey>()
+        .expect("ApiKey extension missing");
+
+    let expected = match &api_key.0 {
+        Some(key) => key,
+        None => return Ok(next.run(request).await),
+    };
+
+    let header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok());
+
+    match header {
+        Some(value) if value.starts_with("Bearer ") => {
+            let token = &value[7..];
+            if token == expected {
+                Ok(next.run(request).await)
+            } else {
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+        _ => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use axum::middleware;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    async fn ok_handler() -> &'static str {
+        "ok"
+    }
+
+    fn test_app(api_key: Option<String>) -> Router {
+        let key = ApiKey(api_key);
+        Router::new()
+            .route("/protected", get(ok_handler))
+            .layer(middleware::from_fn(require_api_key))
+            .layer(axum::Extension(key))
+    }
+
+    #[tokio::test]
+    async fn no_key_configured_allows_all() {
+        let app = test_app(None);
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn valid_bearer_token_passes() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .header("authorization", "Bearer secret123")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wrong_token_returns_401() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .header("authorization", "Bearer wrongtoken")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn missing_header_returns_401() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn non_bearer_scheme_returns_401() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .header("authorization", "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+}

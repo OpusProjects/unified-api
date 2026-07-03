@@ -5,12 +5,14 @@ pub mod domain;
 pub mod ports;
 pub mod scheduler;
 
-use axum::{routing::{get, post, put}, Router};
+use axum::{middleware, routing::{get, post, put}, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
+use api::auth::ApiKey;
 
 use adapters::env_secrets::{EnvSecrets, MockSecrets};
 use adapters::memory_cache::MemoryCache;
@@ -73,10 +75,8 @@ pub struct AppState {
 )]
 struct ApiDoc;
 
-fn create_router(state: Arc<AppState>) -> Router<()> {
-    Router::new()
-        .route("/healthz", get(api::health::healthz))
-        .route("/readyz", get(api::health::readyz))
+fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()> {
+    let api_routes = Router::new()
         .route("/api/v1/sources", get(api::sources::list_cached_sources))
         .route("/api/v1/sources/{id}/dataset", get(api::sources::get_source_dataset))
         .route("/api/v1/sources/{id}/sync", post(api::sources::sync_source))
@@ -85,6 +85,13 @@ fn create_router(state: Arc<AppState>) -> Router<()> {
         .route("/api/v1/enrichers/{id}/run", post(api::sources::run_enricher))
         .route("/api/v1/endpoints", get(api::endpoints::list_endpoints))
         .route("/api/v1/endpoints/{id}", post(api::endpoints::run_endpoint))
+        .layer(middleware::from_fn(api::auth::require_api_key))
+        .layer(axum::Extension(ApiKey(api_key)));
+
+    Router::new()
+        .route("/healthz", get(api::health::healthz))
+        .route("/readyz", get(api::health::readyz))
+        .merge(api_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(CorsLayer::new()
             .allow_origin(Any)
@@ -104,7 +111,7 @@ pub fn build_app() -> Router<()> {
         enrichers: HashMap::new(),
         endpoints: HashMap::new(),
     });
-    create_router(state)
+    create_router(state, None)
 }
 
 // Para tests con sources (mock secrets)
@@ -134,7 +141,7 @@ pub fn build_app_full(
         enrichers,
         endpoints,
     });
-    let router = create_router(Arc::clone(&state));
+    let router = create_router(Arc::clone(&state), None);
     (router, state)
 }
 
@@ -144,6 +151,7 @@ pub fn build_app_production(
     enrichers: HashMap<String, Enricher>,
     endpoints: HashMap<String, OutputEndpoint>,
 ) -> (Router<()>, Arc<AppState>) {
+    let api_key = std::env::var("UNIFIED_API_KEY").ok();
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
@@ -154,7 +162,7 @@ pub fn build_app_production(
         enrichers,
         endpoints,
     });
-    let router = create_router(Arc::clone(&state));
+    let router = create_router(Arc::clone(&state), api_key);
     (router, state)
 }
 
@@ -199,5 +207,5 @@ pub fn build_app_with_demo_data() -> Router<()> {
 
     state.cache.set("src-demo", CacheEntry::new(demo_dataset, 3600));
 
-    create_router(state)
+    create_router(state, None)
 }

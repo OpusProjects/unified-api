@@ -1,5 +1,5 @@
-use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
 
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::Dataset;
@@ -11,6 +11,12 @@ use crate::ports::cache::CachePort;
 pub struct MemoryCache {
     // DashMap<String, CacheEntry> = HashMap<String, CacheEntry> pero thread-safe
     store: DashMap<String, CacheEntry>,
+}
+
+impl Default for MemoryCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MemoryCache {
@@ -182,7 +188,9 @@ mod tests {
         cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
 
         let mut partial = empty_dataset();
-        partial.hostvars.insert("host-b".to_string(), HashMap::new());
+        partial
+            .hostvars
+            .insert("host-b".to_string(), HashMap::new());
 
         cache.merge_or_insert("src-1", partial, 3600, &mut |entry, new| {
             entry.merge_dataset(new);

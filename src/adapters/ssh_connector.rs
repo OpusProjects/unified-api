@@ -17,6 +17,12 @@ use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
 
 pub struct SshConnector;
 
+impl Default for SshConnector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SshConnector {
     pub fn new() -> Self {
         Self
@@ -181,10 +187,7 @@ impl ConnectorPort for SshConnector {
                 },
             );
 
-            info!(
-                gathered = reachable.len(),
-                "SSH connector finished"
-            );
+            info!(gathered = reachable.len(), "SSH connector finished");
 
             Ok(Dataset {
                 hostvars,
@@ -243,10 +246,9 @@ async fn execute_on_host(
         ..Default::default()
     };
 
-    let mut session =
-        client::connect(Arc::new(ssh_config), (host, port), SshClientHandler)
-            .await
-            .map_err(|e| format!("Connection to {} failed: {}", host, e))?;
+    let mut session = client::connect(Arc::new(ssh_config), (host, port), SshClientHandler)
+        .await
+        .map_err(|e| format!("Connection to {} failed: {}", host, e))?;
 
     let auth_ok = session
         .authenticate_publickey(username, Arc::clone(key))
@@ -276,13 +278,11 @@ async fn execute_on_host(
                 output.extend_from_slice(&data);
             }
             Some(russh::ChannelMsg::Eof) => break,
-            Some(russh::ChannelMsg::ExitStatus { exit_status }) => {
-                if exit_status != 0 {
-                    return Err(format!(
-                        "Command on {} exited with status {}",
-                        host, exit_status
-                    ));
-                }
+            Some(russh::ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
+                return Err(format!(
+                    "Command on {} exited with status {}",
+                    host, exit_status
+                ));
             }
             None => break,
             _ => {}

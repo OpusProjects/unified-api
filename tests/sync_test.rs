@@ -7,11 +7,7 @@ use unified_api::domain::enricher::Enricher;
 use unified_api::domain::source::{ConnectorType, Source, TtlOverrides};
 use unified_api::domain::sync_mode::SyncMode;
 
-async fn request(
-    app: axum::Router,
-    method: &str,
-    path: &str,
-) -> (StatusCode, String) {
+async fn request(app: axum::Router, method: &str, path: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .method(method)
         .uri(path)
@@ -35,7 +31,9 @@ async fn request_with_json(
         .method(method)
         .uri(path)
         .header("content-type", "application/json")
-        .body(axum::body::Body::from(serde_json::to_string(&json_body).unwrap()))
+        .body(axum::body::Body::from(
+            serde_json::to_string(&json_body).unwrap(),
+        ))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -182,7 +180,8 @@ async fn sync_single_host() {
         app.clone(),
         "POST",
         "/api/v1/sources/src-test/sync?host=motoko.section9.net",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], true);
@@ -214,7 +213,8 @@ async fn sync_group() {
         app.clone(),
         "POST",
         "/api/v1/sources/src-test/sync?group=magi",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], true);
@@ -241,7 +241,8 @@ async fn sync_nonexistent_host() {
         app,
         "POST",
         "/api/v1/sources/src-test/sync?host=togusa.section9.net",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], false); // el connector dice "host not found"
@@ -290,7 +291,10 @@ async fn status_shows_per_host_info() {
     // Cada host tiene su info
     let hosts = result["hosts"].as_array().unwrap();
     assert_eq!(hosts.len(), 6);
-    let motoko = hosts.iter().find(|h| h["hostname"] == "motoko.section9.net").unwrap();
+    let motoko = hosts
+        .iter()
+        .find(|h| h["hostname"] == "motoko.section9.net")
+        .unwrap();
     assert_eq!(motoko["is_fresh"], true);
     assert!(motoko["age_seconds"].as_u64().unwrap() < 5);
 }
@@ -310,7 +314,8 @@ async fn status_filter_by_host() {
         app.clone(),
         "GET",
         "/api/v1/sources/src-test/status?host=motoko.section9.net",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["total_hosts"], 1);
@@ -332,7 +337,8 @@ async fn status_filter_by_group() {
         app.clone(),
         "GET",
         "/api/v1/sources/src-test/status?group=magi",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["total_hosts"], 3);
@@ -353,7 +359,8 @@ async fn status_unknown_host_returns_404() {
         app,
         "GET",
         "/api/v1/sources/src-test/status?host=togusa.section9.net",
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -375,13 +382,17 @@ async fn put_host_adds_to_cache() {
         "PUT",
         "/api/v1/sources/src-test/hosts/togusa.section9.net",
         serde_json::json!({"role": "detective", "ansible_host": "10.9.1.99"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Verificar que el host aparece en el dataset
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(dataset["hostvars"]["togusa.section9.net"]["role"], "detective");
+    assert_eq!(
+        dataset["hostvars"]["togusa.section9.net"]["role"],
+        "detective"
+    );
     assert_eq!(dataset["hostvars"].as_object().unwrap().len(), 7); // 6 + 1
 }
 
@@ -397,13 +408,23 @@ async fn delete_host_removes_from_cache() {
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
     // Baja inmediata
-    let (status, _) = request(app.clone(), "DELETE", "/api/v1/sources/src-test/hosts/motoko.section9.net").await;
+    let (status, _) = request(
+        app.clone(),
+        "DELETE",
+        "/api/v1/sources/src-test/hosts/motoko.section9.net",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Verificar que ya no está
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(!dataset["hostvars"].as_object().unwrap().contains_key("motoko.section9.net"));
+    assert!(
+        !dataset["hostvars"]
+            .as_object()
+            .unwrap()
+            .contains_key("motoko.section9.net")
+    );
     assert_eq!(dataset["hostvars"].as_object().unwrap().len(), 5); // 6 - 1
 }
 
@@ -431,15 +452,21 @@ async fn enricher_updates_hosts_in_cache() {
     sources.insert("src-test".to_string(), test_source("default"));
 
     let mut enrichers = HashMap::new();
-    enrichers.insert("enrich-test".to_string(), Enricher {
-        name: "Test Enricher".to_string(),
-        source_id: "src-test".to_string(),
-        script_path: "test-connectors/fake_enricher.py".to_string(),
-        sync_interval_seconds: None,
-        config: HashMap::new(),
-    });
+    enrichers.insert(
+        "enrich-test".to_string(),
+        Enricher {
+            name: "Test Enricher".to_string(),
+            source_id: "src-test".to_string(),
+            script_path: "test-connectors/fake_enricher.py".to_string(),
+            sync_interval_seconds: None,
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _state) = unified_api::AppBuilder::new().sources(sources).enrichers(enrichers).build_with_state();
+    let (app, _state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .enrichers(enrichers)
+        .build_with_state();
 
     // Sync primero para tener datos
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -471,15 +498,21 @@ async fn enricher_removes_hosts() {
     enricher_config.insert("remove_hosts".to_string(), "batou.section9.net".to_string());
 
     let mut enrichers = HashMap::new();
-    enrichers.insert("enrich-cleanup".to_string(), Enricher {
-        name: "Cleanup Enricher".to_string(),
-        source_id: "src-test".to_string(),
-        script_path: "test-connectors/fake_enricher.py".to_string(),
-        sync_interval_seconds: None,
-        config: enricher_config,
-    });
+    enrichers.insert(
+        "enrich-cleanup".to_string(),
+        Enricher {
+            name: "Cleanup Enricher".to_string(),
+            source_id: "src-test".to_string(),
+            script_path: "test-connectors/fake_enricher.py".to_string(),
+            sync_interval_seconds: None,
+            config: enricher_config,
+        },
+    );
 
-    let (app, _state) = unified_api::AppBuilder::new().sources(sources).enrichers(enrichers).build_with_state();
+    let (app, _state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .enrichers(enrichers)
+        .build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -492,7 +525,12 @@ async fn enricher_removes_hosts() {
     // Verificar que batou fue eliminado
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(!dataset["hostvars"].as_object().unwrap().contains_key("batou.section9.net"));
+    assert!(
+        !dataset["hostvars"]
+            .as_object()
+            .unwrap()
+            .contains_key("batou.section9.net")
+    );
 }
 
 // =========================================================================
@@ -504,19 +542,22 @@ async fn sync_infra_source() {
     config.insert("scenario".to_string(), "default".to_string());
 
     let mut sources = HashMap::new();
-    sources.insert("src-infra".to_string(), Source {
-        name: "Infrastructure Data".to_string(),
-        project_id: "test".to_string(),
-        script_path: "test-connectors/fake_infra.py".to_string(),
-        connector_type: ConnectorType::Script,
-        sync_mode: SyncMode::Replace,
-        credential_ids: vec![],
-        schedule: None,
-        sync_interval_seconds: None,
-        ttl_seconds: 3600,
-        ttl_overrides: TtlOverrides::default(),
-        config,
-    });
+    sources.insert(
+        "src-infra".to_string(),
+        Source {
+            name: "Infrastructure Data".to_string(),
+            project_id: "test".to_string(),
+            script_path: "test-connectors/fake_infra.py".to_string(),
+            connector_type: ConnectorType::Script,
+            sync_mode: SyncMode::Replace,
+            credential_ids: vec![],
+            schedule: None,
+            sync_interval_seconds: None,
+            ttl_seconds: 3600,
+            ttl_overrides: TtlOverrides::default(),
+            config,
+        },
+    );
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // Sync
@@ -555,15 +596,20 @@ async fn sync_infra_source() {
 #[tokio::test]
 async fn enricher_without_cached_source_returns_404() {
     let mut enrichers = HashMap::new();
-    enrichers.insert("enrich-orphan".to_string(), Enricher {
-        name: "Orphan Enricher".to_string(),
-        source_id: "src-nonexistent".to_string(),
-        script_path: "test-connectors/fake_enricher.py".to_string(),
-        sync_interval_seconds: None,
-        config: HashMap::new(),
-    });
+    enrichers.insert(
+        "enrich-orphan".to_string(),
+        Enricher {
+            name: "Orphan Enricher".to_string(),
+            source_id: "src-nonexistent".to_string(),
+            script_path: "test-connectors/fake_enricher.py".to_string(),
+            sync_interval_seconds: None,
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _state) = unified_api::AppBuilder::new().enrichers(enrichers).build_with_state();
+    let (app, _state) = unified_api::AppBuilder::new()
+        .enrichers(enrichers)
+        .build_with_state();
 
     let (status, _) = request(app, "POST", "/api/v1/enrichers/enrich-orphan/run").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -579,29 +625,38 @@ async fn endpoint_combines_sources() {
 
     let mut infra_config = HashMap::new();
     infra_config.insert("scenario".to_string(), "default".to_string());
-    sources.insert("src-infra".to_string(), Source {
-        name: "Infra Data".to_string(),
-        project_id: "test".to_string(),
-        script_path: "test-connectors/fake_infra.py".to_string(),
-        connector_type: ConnectorType::Script,
-        sync_mode: SyncMode::Replace,
-        credential_ids: vec![],
-        schedule: None,
-        sync_interval_seconds: None,
-        ttl_seconds: 3600,
-        ttl_overrides: TtlOverrides::default(),
-        config: infra_config,
-    });
+    sources.insert(
+        "src-infra".to_string(),
+        Source {
+            name: "Infra Data".to_string(),
+            project_id: "test".to_string(),
+            script_path: "test-connectors/fake_infra.py".to_string(),
+            connector_type: ConnectorType::Script,
+            sync_mode: SyncMode::Replace,
+            credential_ids: vec![],
+            schedule: None,
+            sync_interval_seconds: None,
+            ttl_seconds: 3600,
+            ttl_overrides: TtlOverrides::default(),
+            config: infra_config,
+        },
+    );
 
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-full".to_string(), OutputEndpoint {
-        name: "Full Inventory".to_string(),
-        source_ids: vec!["src-inventory".to_string(), "src-infra".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: HashMap::new(),
-    });
+    endpoints.insert(
+        "ep-full".to_string(),
+        OutputEndpoint {
+            name: "Full Inventory".to_string(),
+            source_ids: vec!["src-inventory".to_string(), "src-infra".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
 
     // Sync both sources
     let (s1, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
@@ -634,14 +689,20 @@ async fn endpoint_filters_by_datacenter() {
     ep_config.insert("filter_datacenter".to_string(), "section9".to_string());
 
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-section9".to_string(), OutputEndpoint {
-        name: "Section 9 Only".to_string(),
-        source_ids: vec!["src-inventory".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: ep_config,
-    });
+    endpoints.insert(
+        "ep-section9".to_string(),
+        OutputEndpoint {
+            name: "Section 9 Only".to_string(),
+            source_ids: vec!["src-inventory".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: ep_config,
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
 
@@ -662,14 +723,19 @@ async fn endpoint_filters_by_datacenter() {
 #[tokio::test]
 async fn endpoint_without_synced_sources_returns_503() {
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-missing".to_string(), OutputEndpoint {
-        name: "Missing Sources".to_string(),
-        source_ids: vec!["src-nonexistent".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: HashMap::new(),
-    });
+    endpoints.insert(
+        "ep-missing".to_string(),
+        OutputEndpoint {
+            name: "Missing Sources".to_string(),
+            source_ids: vec!["src-nonexistent".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .endpoints(endpoints)
+        .build_with_state();
 
     let (status, body) = request(app, "POST", "/api/v1/endpoints/ep-missing").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -697,14 +763,20 @@ async fn list_endpoints_shows_readiness() {
     sources.insert("src-test".to_string(), test_source("default"));
 
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-test".to_string(), OutputEndpoint {
-        name: "Test Endpoint".to_string(),
-        source_ids: vec!["src-test".to_string(), "src-missing".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: HashMap::new(),
-    });
+    endpoints.insert(
+        "ep-test".to_string(),
+        OutputEndpoint {
+            name: "Test Endpoint".to_string(),
+            source_ids: vec!["src-test".to_string(), "src-missing".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
 
     // Before sync — both sources missing from cache
     let (status, body) = request(app.clone(), "GET", "/api/v1/endpoints").await;
@@ -734,14 +806,20 @@ async fn endpoint_with_dynamic_params() {
 
     // Endpoint sin filtros estáticos — el consumidor los pasa en el body
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-dynamic".to_string(), OutputEndpoint {
-        name: "Dynamic Endpoint".to_string(),
-        source_ids: vec!["src-test".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: HashMap::new(),
-    });
+    endpoints.insert(
+        "ep-dynamic".to_string(),
+        OutputEndpoint {
+            name: "Dynamic Endpoint".to_string(),
+            source_ids: vec!["src-test".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: HashMap::new(),
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -757,12 +835,18 @@ async fn endpoint_with_dynamic_params() {
         "POST",
         "/api/v1/endpoints/ep-dynamic",
         serde_json::json!({"filter_datacenter": "section9"}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let filtered: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(filtered["_meta"]["hostvars"].as_object().unwrap().len(), 3);
     assert!(filtered["_meta"]["hostvars"]["motoko.section9.net"].is_object());
-    assert!(!filtered["_meta"]["hostvars"].as_object().unwrap().contains_key("melchior.seele.net"));
+    assert!(
+        !filtered["_meta"]["hostvars"]
+            .as_object()
+            .unwrap()
+            .contains_key("melchior.seele.net")
+    );
 }
 
 // =========================================================================
@@ -778,14 +862,20 @@ async fn endpoint_params_override_config() {
     ep_config.insert("filter_datacenter".to_string(), "section9".to_string());
 
     let mut endpoints = HashMap::new();
-    endpoints.insert("ep-override".to_string(), OutputEndpoint {
-        name: "Override Test".to_string(),
-        source_ids: vec!["src-test".to_string()],
-        script_path: "test-connectors/output_ansible_inventory.py".to_string(),
-        config: ep_config,
-    });
+    endpoints.insert(
+        "ep-override".to_string(),
+        OutputEndpoint {
+            name: "Override Test".to_string(),
+            source_ids: vec!["src-test".to_string()],
+            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            config: ep_config,
+        },
+    );
 
-    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -800,7 +890,8 @@ async fn endpoint_params_override_config() {
         "POST",
         "/api/v1/endpoints/ep-override",
         serde_json::json!({"filter_datacenter": "seele"}),
-    ).await;
+    )
+    .await;
     let seele: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(seele["_meta"]["hostvars"].as_object().unwrap().len(), 3);
     assert!(seele["_meta"]["hostvars"]["melchior.seele.net"].is_object());

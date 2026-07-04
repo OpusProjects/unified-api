@@ -9,6 +9,12 @@ use crate::ports::output::{OutputError, OutputPort, OutputResult};
 
 pub struct ProcessOutput;
 
+impl Default for ProcessOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessOutput {
     pub fn new() -> Self {
         Self
@@ -49,9 +55,12 @@ impl OutputPort for ProcessOutput {
             })?;
 
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(datasets_json.as_bytes()).await.map_err(|e| OutputError {
-                    message: format!("Failed to write to output script stdin: {}", e),
-                })?;
+                stdin
+                    .write_all(datasets_json.as_bytes())
+                    .await
+                    .map_err(|e| OutputError {
+                        message: format!("Failed to write to output script stdin: {}", e),
+                    })?;
             }
 
             let output = child.wait_with_output().await.map_err(|e| OutputError {

@@ -9,6 +9,12 @@ use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
 
 pub struct ProcessConnector;
 
+impl Default for ProcessConnector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessConnector {
     pub fn new() -> Self {
         Self
@@ -32,63 +38,63 @@ impl ConnectorPort for ProcessConnector {
         let credentials = credentials.clone();
 
         Box::pin(async move {
-        // Serializamos la config a JSON para pasarla como env var
-        let config_json = serde_json::to_string(&config).map_err(|e| ConnectorError {
-            message: format!("Failed to serialize config: {}", e),
-            stderr: String::new(),
-            exit_code: None,
-        })?;
+            // Serializamos la config a JSON para pasarla como env var
+            let config_json = serde_json::to_string(&config).map_err(|e| ConnectorError {
+                message: format!("Failed to serialize config: {}", e),
+                stderr: String::new(),
+                exit_code: None,
+            })?;
 
-        // Construimos el comando:
-        // - El script como ejecutable
-        // - SOURCE_CONFIG con la configuración en JSON
-        // - CREDENTIAL_* con cada campo de credencial
-        let mut cmd = Command::new(&script_path);
-        cmd.env("SOURCE_CONFIG", &config_json);
+            // Construimos el comando:
+            // - El script como ejecutable
+            // - SOURCE_CONFIG con la configuración en JSON
+            // - CREDENTIAL_* con cada campo de credencial
+            let mut cmd = Command::new(&script_path);
+            cmd.env("SOURCE_CONFIG", &config_json);
 
-        // Inyectamos cada credencial como CREDENTIAL_<KEY>=<VALUE>
-        // ej: CREDENTIAL_USERNAME=admin, CREDENTIAL_PASSWORD=secret
-        let cred_keys: Vec<String> = credentials.keys().cloned().collect();
-        if !cred_keys.is_empty() {
-            debug!(keys = ?cred_keys, "Injecting credentials");
-        }
-        for (key, value) in credentials {
-            cmd.env(format!("CREDENTIAL_{}", key.to_uppercase()), value);
-        }
+            // Inyectamos cada credencial como CREDENTIAL_<KEY>=<VALUE>
+            // ej: CREDENTIAL_USERNAME=admin, CREDENTIAL_PASSWORD=secret
+            let cred_keys: Vec<String> = credentials.keys().cloned().collect();
+            if !cred_keys.is_empty() {
+                debug!(keys = ?cred_keys, "Injecting credentials");
+            }
+            for (key, value) in credentials {
+                cmd.env(format!("CREDENTIAL_{}", key.to_uppercase()), value);
+            }
 
-        // Ejecutamos y capturamos stdout + stderr
-        // .output() espera a que el proceso termine y captura todo
-        let output = cmd.output().await.map_err(|e| ConnectorError {
-            message: format!("Failed to execute script '{}': {}", script_path, e),
-            stderr: String::new(),
-            exit_code: None,
-        })?;
+            // Ejecutamos y capturamos stdout + stderr
+            // .output() espera a que el proceso termine y captura todo
+            let output = cmd.output().await.map_err(|e| ConnectorError {
+                message: format!("Failed to execute script '{}': {}", script_path, e),
+                stderr: String::new(),
+                exit_code: None,
+            })?;
 
-        // Capturamos stderr (para logging/errores)
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            // Capturamos stderr (para logging/errores)
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        // Verificamos el exit code
-        if !output.status.success() {
-            return Err(ConnectorError {
-                message: format!(
-                    "Script '{}' failed with exit code {:?}",
-                    script_path,
-                    output.status.code()
-                ),
+            // Verificamos el exit code
+            if !output.status.success() {
+                return Err(ConnectorError {
+                    message: format!(
+                        "Script '{}' failed with exit code {:?}",
+                        script_path,
+                        output.status.code()
+                    ),
+                    stderr,
+                    exit_code: output.status.code(),
+                });
+            }
+
+            // Parseamos stdout como JSON → Dataset
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let dataset: Dataset = serde_json::from_str(&stdout).map_err(|e| ConnectorError {
+                message: format!("Failed to parse script output as inventory JSON: {}", e),
                 stderr,
-                exit_code: output.status.code(),
-            });
-        }
+                exit_code: Some(0),
+            })?;
 
-        // Parseamos stdout como JSON → Dataset
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let dataset: Dataset = serde_json::from_str(&stdout).map_err(|e| ConnectorError {
-            message: format!("Failed to parse script output as inventory JSON: {}", e),
-            stderr,
-            exit_code: Some(0),
-        })?;
-
-        Ok(dataset)
+            Ok(dataset)
         }) // cierra async move
     } // cierra fn execute
 } // cierra impl ConnectorPort

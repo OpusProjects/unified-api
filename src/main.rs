@@ -1,4 +1,4 @@
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use unified_api::adapters::env_secrets::EnvSecrets;
 
@@ -10,8 +10,7 @@ async fn main() {
     // Sin RUST_LOG → default info
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

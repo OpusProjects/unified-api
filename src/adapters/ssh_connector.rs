@@ -311,3 +311,71 @@ fn parse_host_output(output: &str, host: &str) -> HostVars {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn parse_hosts_splits_trims_and_drops_empties() {
+        let cfg = config(&[("hosts", " a.example , b.example ,, c.example ")]);
+        let hosts = parse_hosts(&cfg).unwrap();
+        assert_eq!(hosts, vec!["a.example", "b.example", "c.example"]);
+    }
+
+    #[test]
+    fn parse_hosts_errors_when_missing() {
+        let err = parse_hosts(&config(&[])).unwrap_err();
+        assert!(err.message.contains("requires 'hosts'"));
+    }
+
+    #[test]
+    fn parse_hosts_errors_when_only_separators() {
+        let err = parse_hosts(&config(&[("hosts", " , , ")])).unwrap_err();
+        assert!(err.message.contains("No hosts"));
+    }
+
+    #[test]
+    fn build_command_script_mode_uses_script_path() {
+        assert_eq!(
+            build_command("script", "/facts", "/opt/gather.sh"),
+            "/opt/gather.sh"
+        );
+    }
+
+    #[test]
+    fn build_command_unknown_mode_falls_back_to_script() {
+        assert_eq!(
+            build_command("bogus", "/facts", "/opt/gather.sh"),
+            "/opt/gather.sh"
+        );
+    }
+
+    #[test]
+    fn build_command_facts_mode_references_fact_path() {
+        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused");
+        assert!(cmd.contains("/etc/ansible/facts.d"));
+        assert!(cmd.contains("basename"));
+    }
+
+    #[test]
+    fn parse_host_output_parses_valid_json() {
+        let vars = parse_host_output(r#"{"os": "linux", "cpus": 4}"#, "h1");
+        assert_eq!(vars.get("os").unwrap(), "linux");
+        assert_eq!(vars.get("cpus").unwrap(), 4);
+    }
+
+    #[test]
+    fn parse_host_output_falls_back_to_raw_on_invalid_json() {
+        let vars = parse_host_output("not json", "h1");
+        assert_eq!(vars.get("raw_output").unwrap(), "not json");
+        assert!(vars.contains_key("parse_error"));
+    }
+}

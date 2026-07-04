@@ -50,14 +50,16 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 
 | Document | What it covers |
 |---|---|
-| [Architecture](docs/architecture.md) | Layers, dependency rules, request flows, concurrency model |
-| [Configuration](docs/configuration.md) | Every YAML file and field, env vars, startup validation |
-| [REST API](docs/api.md) | Endpoints, authentication, request/response examples |
-| [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and outputs |
-| [Caching & TTLs](docs/caching.md) | Freshness model, sync modes, TTL overrides, atomicity |
-| [Deployment](docs/deployment.md) | Docker image, CI/CD pipeline, Kubernetes notes, secrets |
+| [Architecture](docs/architecture.md) | The four layers, the dependency rule, request flows and the concurrency model |
+| [Configuration](docs/configuration.md) | Every YAML file field by field, environment variables and startup validation |
+| [REST API](docs/api.md) | All routes with authentication, status code semantics and curl examples |
+| [Connectors](docs/connectors.md) | The script contracts for source connectors, enrichers and output transformers |
+| [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides and atomicity rules |
+| [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
 
-Contributions welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+## Contributing
+
+Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the PR workflow, commit style, CI gates and architecture rules.
 
 ## Project status
 

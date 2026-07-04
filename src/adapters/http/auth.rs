@@ -2,6 +2,7 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
+use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
 pub struct ApiKey(pub Option<String>);
@@ -32,8 +33,13 @@ pub async fn require_api_key(
                 .and_then(|v| v.strip_prefix("Bearer "))
         });
 
+    // Comparación en tiempo constante: un == normal corta en el primer byte
+    // distinto, y ese delta de tiempo permite adivinar la key byte a byte.
+    // ct_eq compara siempre todos los bytes (si las longitudes coinciden).
     match token {
-        Some(t) if t == expected => Ok(next.run(request).await),
+        Some(t) if bool::from(t.as_bytes().ct_eq(expected.as_bytes())) => {
+            Ok(next.run(request).await)
+        }
         _ => Err(StatusCode::UNAUTHORIZED),
     }
 }

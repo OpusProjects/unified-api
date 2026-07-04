@@ -133,7 +133,13 @@ impl ConnectorPort for SshConnector {
                     let cmd = command.clone();
 
                     tokio::spawn(async move {
-                        let _permit = sem.acquire().await.unwrap();
+                        // acquire() only errors if the semaphore is closed, which
+                        // never happens here (it lives for the whole fan-out); skip
+                        // the host rather than panic the task if that ever changes.
+                        let Ok(_permit) = sem.acquire().await else {
+                            warn!(host = %host, "semaphore closed, skipping host");
+                            return None;
+                        };
                         let result = timeout(
                             Duration::from_secs(timeout_secs),
                             execute_on_host(&host, port, &user, &key, &cmd),

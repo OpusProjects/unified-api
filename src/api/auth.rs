@@ -20,20 +20,20 @@ pub async fn require_api_key(
         None => return Ok(next.run(request).await),
     };
 
-    let header = request
+    let token = request
         .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok());
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        });
 
-    match header {
-        Some(value) if value.starts_with("Bearer ") => {
-            let token = &value[7..];
-            if token == expected {
-                Ok(next.run(request).await)
-            } else {
-                Err(StatusCode::UNAUTHORIZED)
-            }
-        }
+    match token {
+        Some(t) if t == expected => Ok(next.run(request).await),
         _ => Err(StatusCode::UNAUTHORIZED),
     }
 }
@@ -112,6 +112,30 @@ mod tests {
         let req = HttpRequest::builder()
             .uri("/protected")
             .header("authorization", "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn valid_x_api_key_header_passes() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .header("x-api-key", "secret123")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wrong_x_api_key_returns_401() {
+        let app = test_app(Some("secret123".to_string()));
+        let req = HttpRequest::builder()
+            .uri("/protected")
+            .header("x-api-key", "wrongkey")
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();

@@ -97,8 +97,8 @@ Configuration from YAML files, secrets from HashiCorp Vault.
 - Private by default, `pub` only what needs to be exposed
 - Comments only when the WHY is non-obvious
 - **Teaching comments are intentional — do not strip them.** Many files carry
-  explanatory comments in Spanish (e.g. "Un trait es como una interfaz en Java...")
-  that explain Rust concepts to the maintainers. They are a deliberate exception to
-  the comment rule above. When refactoring or moving code, keep them with the code
-  they explain; when adding new non-obvious Rust constructs, comments in the same
-  style are welcome.
+  explanatory comments (e.g. "A trait is like an interface in Java...") that teach
+  Rust concepts to the maintainers. They are a deliberate exception to the comment
+  rule above. When refactoring or moving code, keep them with the code they
+  explain; when adding new non-obvious Rust constructs, comments in the same style
+  are welcome. They are written in English.

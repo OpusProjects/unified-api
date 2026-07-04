@@ -1,6 +1,6 @@
-// Los adapters: TODO lo que toca el mundo exterior, en ambas direcciones.
-// - Driving (entran peticiones): http/ (axum) y scheduler (timers)
-// - Driven (salimos nosotros): cache, connectors, secrets, output
+// The adapters: TODO everything that touches the outside world, in both directions.
+// - Driving (incoming requests): http/ (axum) and scheduler (timers)
+// - Driven (we go out): cache, connectors, secrets, output
 pub mod env_secrets;
 pub mod http;
 pub mod memory_cache;

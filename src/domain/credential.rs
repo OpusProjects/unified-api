@@ -9,9 +9,9 @@ pub enum CredentialType {
     SshKey,
 }
 
-// Referencia a una credencial — viene del YAML de configuración.
-// No almacena secretos, solo sabe DÓNDE leerlos del entorno.
-// La infraestructura (ESO, docker secrets, .env) se encarga de inyectarlos.
+// Reference to a credential — comes from configuration YAML.
+// Does not store secrets, only knows WHERE to read them from the environment.
+// The infrastructure (ESO, docker secrets, .env) is responsible for injecting them.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Credential {
     pub name: String,
@@ -19,19 +19,19 @@ pub struct Credential {
     #[serde(rename = "type")]
     pub credential_type: CredentialType,
 
-    // Prefijo de env vars — ej: "SECTION9" → lee SECTION9_USERNAME, SECTION9_PASSWORD
+    // Env vars prefix — ex: "SECTION9" → reads SECTION9_USERNAME, SECTION9_PASSWORD
     pub env_prefix: Option<String>,
 
-    // Ruta a un fichero JSON con los secrets — ej: "/run/secrets/section9-api.json"
+    // Path to a JSON file with secrets — ex: "/run/secrets/section9-api.json"
     pub secret_file: Option<String>,
 
-    // Mapeo: nuestro nombre → nombre del campo en env var o JSON
-    // ej: {"username": "USERNAME", "password": "PASSWORD"}
+    // Mapping: our name → field name in env var or JSON
+    // ex: {"username": "USERNAME", "password": "PASSWORD"}
     #[serde(default)]
     pub secret_keys: HashMap<String, String>,
 
-    // Paths a ficheros que el script consume directamente (SSH keys, certificados, etc.)
-    // ej: {"ssh_key": "/run/secrets/id_rsa"} → CREDENTIAL_SSH_KEY_PATH=/run/secrets/id_rsa
+    // Paths to files that the script consumes directly (SSH keys, certificates, etc.)
+    // ex: {"ssh_key": "/run/secrets/id_rsa"} → CREDENTIAL_SSH_KEY_PATH=/run/secrets/id_rsa
     #[serde(default)]
     pub file_keys: HashMap<String, String>,
 }

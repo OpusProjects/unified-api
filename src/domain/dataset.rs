@@ -1,43 +1,43 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// Un Dataset es un inventario Ansible completo, tal como lo produce un connector.
-// Serialize + Deserialize: puede convertirse a/desde JSON/YAML en ambas direcciones.
-// Clone: permite hacer copias del struct (Rust por defecto mueve, no copia).
+// A Dataset is a complete Ansible inventory, as produced by a connector.
+// Serialize + Deserialize: can be converted to/from JSON/YAML in both directions.
+// Clone: allows making copies of the struct (Rust defaults to moving, not copying).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Dataset {
-    // HashMap<String, HostVars> = dict[str, HostVars] en Python
-    // Mapea nombre de host → sus variables
+    // HashMap<String, HostVars> = dict[str, HostVars] in Python
+    // Maps hostname → its variables
     #[serde(default)]
     pub hostvars: HashMap<String, HostVars>,
 
-    // HashMap<String, Group> = los grupos del inventario (dc06, oraclelinux8, etc.)
+    // HashMap<String, Group> = the inventory groups (dc06, oraclelinux8, etc.)
     #[serde(default)]
     pub groups: HashMap<String, Group>,
 
-    // Hosts a eliminar — solo lo usa el enricher
-    // El connector normal no devuelve esto
+    // Hosts to delete — only the enricher uses this
+    // Normal connectors do not return this
     #[serde(default)]
     pub remove_hosts: Vec<String>,
 }
 
-// Las variables de un host: un diccionario libre de clave-valor
-// serde_json::Value es como "any" — puede ser string, número, bool, lista, etc.
+// A host's variables: a free key-value dictionary
+// serde_json::Value is like "any" — can be string, number, bool, list, etc.
 pub type HostVars = HashMap<String, serde_json::Value>;
 
-// Un grupo del inventario Ansible
+// An Ansible inventory group
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Group {
-    // Vec<String> = list[str] en Python
-    // #[serde(default)] = si no viene en el YAML/JSON, usa un Vec vacío
+    // Vec<String> = list[str] in Python
+    // #[serde(default)] = if it doesn't appear in YAML/JSON, uses an empty Vec
     #[serde(default)]
     pub hosts: Vec<String>,
 
     #[serde(default)]
     pub children: Vec<String>,
 
-    // Option<HostVars> = puede existir o no (como Optional en Python)
-    // None = no tiene variables de grupo, Some({...}) = sí tiene
+    // Option<HostVars> = can exist or not (like Optional in Python)
+    // None = has no group variables, Some({...}) = has them
     #[serde(default)]
     pub vars: Option<HostVars>,
 }

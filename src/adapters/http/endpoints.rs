@@ -78,7 +78,7 @@ pub async fn run_endpoint(
     let endpoint = state.endpoints.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
 
-    // Recoger los datasets de los sources configurados
+    // Collect datasets from configured sources
     let mut datasets: HashMap<String, Dataset> = HashMap::new();
     let mut missing: Vec<String> = Vec::new();
 
@@ -112,8 +112,8 @@ pub async fn run_endpoint(
 
     match result {
         Ok(output) => {
-            // El script decide el formato — devolvemos el string tal cual.
-            // Intentamos detectar si es JSON para poner el content-type correcto.
+            // The script decides the format — we return the string as-is.
+            // We try to detect if it's JSON to set the correct content-type.
             if output.trim_start().starts_with('{') || output.trim_start().starts_with('[') {
                 Ok((
                     StatusCode::OK,

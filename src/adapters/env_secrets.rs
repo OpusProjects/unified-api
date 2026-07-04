@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::domain::credential::Credential;
 use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 
-// Lee secrets de env vars o ficheros JSON — sin dependencias externas.
-// La infraestructura (ESO → k8s Secret → envFrom, docker secrets, .env) inyecta los valores.
+// Reads secrets from env vars or JSON files — no external dependencies.
+// The infrastructure (ESO → k8s Secret → envFrom, docker secrets, .env) injects the values.
 pub struct EnvSecrets {
     credentials: HashMap<String, Credential>,
 }
@@ -26,7 +26,7 @@ impl SecretsPort for EnvSecrets {
 
             let mut secrets = HashMap::new();
 
-            // Resuelve secret_keys desde env vars o fichero JSON
+            // Resolves secret_keys from env vars or JSON file
             if !credential.secret_keys.is_empty() {
                 let resolved = if let Some(ref prefix) = credential.env_prefix {
                     resolve_from_env(prefix, &credential.secret_keys)
@@ -43,7 +43,7 @@ impl SecretsPort for EnvSecrets {
                 secrets.extend(resolved);
             }
 
-            // Añade file_keys como {key}_path → path del fichero
+            // Adds file_keys as {key}_path → path of the file
             for (key, path) in &credential.file_keys {
                 let path_key = format!("{}_path", key);
                 secrets.insert(path_key, path.clone());
@@ -63,9 +63,9 @@ impl SecretsPort for EnvSecrets {
     }
 }
 
-// Lee PREFIJO_CAMPO de env vars
-// ej: prefix="SECTION9", secret_keys={"username": "USERNAME"}
-//   → lee env var SECTION9_USERNAME
+// Reads PREFIX_FIELD from env vars
+// e.g. prefix="SECTION9", secret_keys={"username": "USERNAME"}
+//   → reads env var SECTION9_USERNAME
 fn resolve_from_env(
     prefix: &str,
     secret_keys: &HashMap<String, String>,
@@ -83,7 +83,7 @@ fn resolve_from_env(
     Ok(secrets)
 }
 
-// Lee un fichero JSON y extrae los campos según secret_keys
+// Reads a JSON file and extracts fields according to secret_keys
 fn resolve_from_file(
     path: &str,
     secret_keys: &HashMap<String, String>,

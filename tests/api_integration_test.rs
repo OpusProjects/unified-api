@@ -1,5 +1,5 @@
-// Los archivos en tests/ son integration tests — se compilan como binarios separados
-// y ven el proyecto como una librería externa (por eso usamos `unified_api::` en vez de `crate::`)
+// Files in tests/ are integration tests — they compile as separate binaries
+// and see the project as an external library (that's why we use `unified_api::` instead of `crate::`)
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -8,29 +8,29 @@ use tower::ServiceExt;
 // Helpers
 // =========================================================================
 
-// Hace una petición GET a la app y devuelve (status_code, body_string)
-// Es como hacer curl desde dentro del test, pero sin TCP — todo en memoria.
+// Makes a GET request to the app and returns (status_code, body_string)
+// It's like running curl from within the test, but without TCP — everything in memory.
 async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .uri(path)
         .body(axum::body::Body::empty())
         .unwrap();
 
-    // .oneshot() envía una petición al router y devuelve la respuesta
-    // como si fuera un servidor HTTP pero sin red — pura lógica
+    // .oneshot() sends a request to the router and returns the response
+    // as if it were an HTTP server but without network — pure logic
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();
-    // Extraemos el body completo y lo convertimos a String
+    // Extract the full body and convert it to String
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body_str = String::from_utf8(body.to_vec()).unwrap();
 
     (status, body_str)
 }
 
-// App con un inventario demo precargado en el cache. Antes vivía en lib.rs
-// (build_app_with_demo_data), pero los datos de prueba no pintan nada en la
-// librería — son un fixture de estos tests.
+// App with a demo inventory preloaded in the cache. It used to live in lib.rs
+// (build_app_with_demo_data), but test data has no place in the library —
+// it's a fixture of these tests.
 fn app_with_demo_data() -> axum::Router {
     let (app, state) = unified_api::AppBuilder::new().build_with_state();
 
@@ -76,7 +76,7 @@ fn app_with_demo_data() -> axum::Router {
 // Tests: health checks
 // =========================================================================
 
-// #[tokio::test] es como #[test] pero para funciones async
+// #[tokio::test] is like #[test] but for async functions
 #[tokio::test]
 async fn healthz_returns_ok() {
     let app = unified_api::AppBuilder::new().build();
@@ -129,7 +129,7 @@ async fn readyz_returns_503_before_sync() {
 }
 
 // =========================================================================
-// Tests: sources API sin datos — cache vacío
+// Tests: sources API without data — empty cache
 // =========================================================================
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn list_sources_empty_cache() {
     let (status, body) = get(app, "/api/v1/sources").await;
 
     assert_eq!(status, StatusCode::OK);
-    // Cache vacío = array JSON vacío
+    // Empty cache = empty JSON array
     let sources: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
     assert_eq!(sources.len(), 0);
 }
@@ -154,7 +154,7 @@ async fn get_dataset_not_found() {
 }
 
 // =========================================================================
-// Tests: sources API con datos demo — flujo completo
+// Tests: sources API with demo data — full flow
 // =========================================================================
 
 #[tokio::test]
@@ -181,7 +181,7 @@ async fn get_dataset_returns_inventory() {
 
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
 
-    // Verificamos hosts de Section 9 y SEELE
+    // Verify hosts from Section 9 and SEELE
     let hostvars = &dataset["hostvars"];
     assert!(hostvars["motoko.section9.net"].is_object());
     assert_eq!(hostvars["motoko.section9.net"]["ansible_host"], "10.9.1.1");
@@ -190,12 +190,12 @@ async fn get_dataset_returns_inventory() {
     assert!(hostvars["melchior.seele.net"].is_object());
     assert_eq!(hostvars["melchior.seele.net"]["role"], "magi-system");
 
-    // Verificamos los grupos
+    // Verify the groups
     let groups = &dataset["groups"];
     assert!(groups["section9"].is_object());
     assert!(groups["seele"].is_object());
 
-    // Section 9 tiene a Motoko
+    // Section 9 contains Motoko
     let s9_hosts = groups["section9"]["hosts"].as_array().unwrap();
     assert!(s9_hosts.contains(&serde_json::json!("motoko.section9.net")));
 }

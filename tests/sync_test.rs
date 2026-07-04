@@ -43,7 +43,7 @@ async fn request_with_json(
     (status, body_str)
 }
 
-// Crea un source que apunta a nuestro fake_inventory.py
+// Creates a source pointing to our fake_inventory.py
 fn test_source(scenario: &str) -> Source {
     let mut config = HashMap::new();
     config.insert("scenario".to_string(), scenario.to_string());
@@ -64,7 +64,7 @@ fn test_source(scenario: &str) -> Source {
 }
 
 // =========================================================================
-// Test: sync completo — ejecuta script, mete en cache, consulta resultado
+// Test: full sync — executes script, puts in cache, queries result
 // =========================================================================
 #[tokio::test]
 async fn sync_then_query_full_flow() {
@@ -72,13 +72,13 @@ async fn sync_then_query_full_flow() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // 1. Antes del sync, el cache está vacío
+    // 1. Before sync, the cache is empty
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources").await;
     assert_eq!(status, StatusCode::OK);
     let sources_list: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
     assert_eq!(sources_list.len(), 0);
 
-    // 2. Hacemos sync — ejecuta fake_inventory.py con scenario=default
+    // 2. We do sync — executes fake_inventory.py with scenario=default
     let (status, body) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
     let sync_result: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -87,7 +87,7 @@ async fn sync_then_query_full_flow() {
     assert_eq!(sync_result["total_groups"], 7);
     assert!(sync_result["error"].is_null());
 
-    // 3. Ahora el cache tiene datos — consultamos
+    // 3. Now the cache has data — we query it
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources").await;
     assert_eq!(status, StatusCode::OK);
     let sources_list: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
@@ -95,7 +95,7 @@ async fn sync_then_query_full_flow() {
     assert_eq!(sources_list[0]["source_id"], "src-test");
     assert_eq!(sources_list[0]["total_hosts"], 6);
 
-    // 4. Consultamos el dataset completo
+    // 4. We query the full dataset
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     assert_eq!(status, StatusCode::OK);
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -104,7 +104,7 @@ async fn sync_then_query_full_flow() {
 }
 
 // =========================================================================
-// Test: sync con inventario vacío
+// Test: sync with empty inventory
 // =========================================================================
 #[tokio::test]
 async fn sync_empty_inventory() {
@@ -120,7 +120,7 @@ async fn sync_empty_inventory() {
 }
 
 // =========================================================================
-// Test: sync con error del connector
+// Test: sync with connector error
 // =========================================================================
 #[tokio::test]
 async fn sync_connector_error() {
@@ -129,14 +129,14 @@ async fn sync_connector_error() {
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(app, "POST", "/api/v1/sources/src-broken/sync").await;
-    assert_eq!(status, StatusCode::OK); // el endpoint funcionó, el connector falló
+    assert_eq!(status, StatusCode::OK); // the endpoint worked, the connector failed
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], false);
     assert!(result["error"].as_str().unwrap().contains("failed"));
 }
 
 // =========================================================================
-// Test: sync de source que no existe en config
+// Test: sync of source that does not exist in config
 // =========================================================================
 #[tokio::test]
 async fn sync_unknown_source_returns_404() {
@@ -163,7 +163,7 @@ async fn sync_large_inventory() {
 }
 
 // =========================================================================
-// Test: sync de un solo host — solo refresca ese host en cache
+// Test: sync of a single host — only refreshes that host in cache
 // =========================================================================
 #[tokio::test]
 async fn sync_single_host() {
@@ -171,11 +171,11 @@ async fn sync_single_host() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // 1. Sync completo primero (6 hosts)
+    // 1. Full sync first (6 hosts)
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
 
-    // 2. Sync solo de motoko
+    // 2. Sync only motoko
     let (status, body) = request(
         app.clone(),
         "POST",
@@ -186,9 +186,9 @@ async fn sync_single_host() {
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], true);
     assert_eq!(result["scope"], "host:motoko.section9.net");
-    assert_eq!(result["total_hosts"], 1); // solo motoko
+    assert_eq!(result["total_hosts"], 1); // only motoko
 
-    // 3. El cache sigue teniendo los 6 hosts (no se borraron los demás)
+    // 3. The cache still has 6 hosts (the others were not deleted)
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     assert_eq!(status, StatusCode::OK);
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -196,7 +196,7 @@ async fn sync_single_host() {
 }
 
 // =========================================================================
-// Test: sync de un grupo — solo refresca los hosts del grupo
+// Test: sync of a group — only refreshes hosts in the group
 // =========================================================================
 #[tokio::test]
 async fn sync_group() {
@@ -204,11 +204,11 @@ async fn sync_group() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // 1. Sync completo
+    // 1. Full sync
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
 
-    // 2. Sync del grupo magi (3 hosts: melchior, balthasar, casper)
+    // 2. Sync of magi group (3 hosts: melchior, balthasar, casper)
     let (status, body) = request(
         app.clone(),
         "POST",
@@ -221,7 +221,7 @@ async fn sync_group() {
     assert_eq!(result["scope"], "group:magi");
     assert_eq!(result["total_hosts"], 3);
 
-    // 3. El cache sigue teniendo los 6 hosts
+    // 3. The cache still has 6 hosts
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     assert_eq!(status, StatusCode::OK);
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -229,7 +229,7 @@ async fn sync_group() {
 }
 
 // =========================================================================
-// Test: sync de host que no existe — el connector reporta error
+// Test: sync of host that does not exist — connector reports error
 // =========================================================================
 #[tokio::test]
 async fn sync_nonexistent_host() {
@@ -245,11 +245,11 @@ async fn sync_nonexistent_host() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(result["success"], false); // el connector dice "host not found"
+    assert_eq!(result["success"], false); // the connector says "host not found"
 }
 
 // =========================================================================
-// Test: sync full reporta scope "full"
+// Test: full sync reports scope "full"
 // =========================================================================
 #[tokio::test]
 async fn sync_full_reports_scope() {
@@ -264,7 +264,7 @@ async fn sync_full_reports_scope() {
 }
 
 // =========================================================================
-// Test: status muestra age_seconds y is_fresh por host
+// Test: status shows age_seconds and is_fresh per host
 // =========================================================================
 #[tokio::test]
 async fn status_shows_per_host_info() {
@@ -272,15 +272,15 @@ async fn status_shows_per_host_info() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // Sin sync, status devuelve 404 (no hay cache)
+    // Without sync, status returns 404 (no cache)
     let (status, _) = request(app.clone(), "GET", "/api/v1/sources/src-test/status").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // Sync completo
+    // Full sync
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
 
-    // Ahora status devuelve info
+    // Now status returns info
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/status").await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -288,7 +288,7 @@ async fn status_shows_per_host_info() {
     assert_eq!(result["total_hosts"], 6);
     assert_eq!(result["dataset_is_fresh"], true);
 
-    // Cada host tiene su info
+    // Each host has its info
     let hosts = result["hosts"].as_array().unwrap();
     assert_eq!(hosts.len(), 6);
     let motoko = hosts
@@ -300,7 +300,7 @@ async fn status_shows_per_host_info() {
 }
 
 // =========================================================================
-// Test: status filtrado por host
+// Test: status filtered by host
 // =========================================================================
 #[tokio::test]
 async fn status_filter_by_host() {
@@ -323,7 +323,7 @@ async fn status_filter_by_host() {
 }
 
 // =========================================================================
-// Test: status filtrado por grupo
+// Test: status filtered by group
 // =========================================================================
 #[tokio::test]
 async fn status_filter_by_group() {
@@ -345,7 +345,7 @@ async fn status_filter_by_group() {
 }
 
 // =========================================================================
-// Test: status de host que no existe → 404
+// Test: status of host that does not exist → 404
 // =========================================================================
 #[tokio::test]
 async fn status_unknown_host_returns_404() {
@@ -365,7 +365,7 @@ async fn status_unknown_host_returns_404() {
 }
 
 // =========================================================================
-// Test: PUT host — alta inmediata
+// Test: PUT host — immediate addition
 // =========================================================================
 #[tokio::test]
 async fn put_host_adds_to_cache() {
@@ -373,10 +373,10 @@ async fn put_host_adds_to_cache() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // Sync para tener datos
+    // Sync to have data
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
-    // Alta inmediata de un host nuevo
+    // Immediate registration of a new host
     let (status, _) = request_with_json(
         app.clone(),
         "PUT",
@@ -386,7 +386,7 @@ async fn put_host_adds_to_cache() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // Verificar que el host aparece en el dataset
+    // Verify the host appears in the dataset
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -397,7 +397,7 @@ async fn put_host_adds_to_cache() {
 }
 
 // =========================================================================
-// Test: DELETE host — baja inmediata
+// Test: DELETE host — immediate removal
 // =========================================================================
 #[tokio::test]
 async fn delete_host_removes_from_cache() {
@@ -407,7 +407,7 @@ async fn delete_host_removes_from_cache() {
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
-    // Baja inmediata
+    // Immediate removal
     let (status, _) = request(
         app.clone(),
         "DELETE",
@@ -416,7 +416,7 @@ async fn delete_host_removes_from_cache() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // Verificar que ya no está
+    // Verify it is no longer there
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(
@@ -429,7 +429,7 @@ async fn delete_host_removes_from_cache() {
 }
 
 // =========================================================================
-// Test: DELETE host que no existe → 404
+// Test: DELETE host that does not exist → 404
 // =========================================================================
 #[tokio::test]
 async fn delete_nonexistent_host_returns_404() {
@@ -444,7 +444,7 @@ async fn delete_nonexistent_host_returns_404() {
 }
 
 // =========================================================================
-// Test: enricher — enriquece hosts en cache
+// Test: enricher — enriches hosts in cache
 // =========================================================================
 #[tokio::test]
 async fn enricher_updates_hosts_in_cache() {
@@ -468,11 +468,11 @@ async fn enricher_updates_hosts_in_cache() {
         .enrichers(enrichers)
         .build_with_state();
 
-    // Sync primero para tener datos
+    // Sync first to have data
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
 
-    // Ejecutar enricher
+    // Run enricher
     let (status, body) = request(app.clone(), "POST", "/api/v1/enrichers/enrich-test/run").await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -480,14 +480,14 @@ async fn enricher_updates_hosts_in_cache() {
     assert_eq!(result["hosts_updated"], 6);
     assert_eq!(result["hosts_removed"], 0);
 
-    // Verificar que los hosts fueron enriquecidos
+    // Verify the hosts were enriched
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(dataset["hostvars"]["motoko.section9.net"]["enriched"], true);
 }
 
 // =========================================================================
-// Test: enricher con remove_hosts
+// Test: enricher with remove_hosts
 // =========================================================================
 #[tokio::test]
 async fn enricher_removes_hosts() {
@@ -522,7 +522,7 @@ async fn enricher_removes_hosts() {
     assert_eq!(result["success"], true);
     assert_eq!(result["hosts_removed"], 1);
 
-    // Verificar que batou fue eliminado
+    // Verify batou was deleted
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(
@@ -567,7 +567,7 @@ async fn sync_infra_source() {
     assert_eq!(result["success"], true);
     assert_eq!(result["total_hosts"], 6);
 
-    // Verificar datos de infra
+    // Verify infra data
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-infra/dataset").await;
     let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
 
@@ -578,20 +578,20 @@ async fn sync_infra_source() {
     assert_eq!(motoko["sysctl"]["vm.swappiness"], "10");
     assert_eq!(motoko["users"].as_array().unwrap().len(), 4);
 
-    // Melchior — Oracle DB con muchos sysctl tunnings
+    // Melchior — Oracle DB with many sysctl tunings
     let melchior = &dataset["hostvars"]["melchior.seele.net"];
     assert_eq!(melchior["cpu"]["cores"], 16);
     assert_eq!(melchior["memory"]["total_mb"], 65536);
     assert!(melchior["sysctl"]["kernel.shmmax"].as_str().is_some());
     assert_eq!(melchior["filesystems"].as_array().unwrap().len(), 3);
 
-    // Grupos
+    // Groups
     assert!(dataset["groups"]["oracle_db"].is_object());
     assert!(dataset["groups"]["high_memory"].is_object());
 }
 
 // =========================================================================
-// Test: enricher de source sin cache → 404
+// Test: enricher for source without cache → 404
 // =========================================================================
 #[tokio::test]
 async fn enricher_without_cached_source_returns_404() {
@@ -616,7 +616,7 @@ async fn enricher_without_cached_source_returns_404() {
 }
 
 // =========================================================================
-// Test: endpoint combina dos sources en formato Ansible
+// Test: endpoint combines two sources in Ansible format
 // =========================================================================
 #[tokio::test]
 async fn endpoint_combines_sources() {
@@ -711,14 +711,14 @@ async fn endpoint_filters_by_datacenter() {
     let inventory: serde_json::Value = serde_json::from_str(&body).unwrap();
 
     let hostvars = inventory["_meta"]["hostvars"].as_object().unwrap();
-    // Solo section9 — 3 hosts
+    // Only section9 — 3 hosts
     assert_eq!(hostvars.len(), 3);
     assert!(hostvars.contains_key("motoko.section9.net"));
     assert!(!hostvars.contains_key("melchior.seele.net"));
 }
 
 // =========================================================================
-// Test: endpoint sin sources sincronizados → 503
+// Test: endpoint without synced sources → 503
 // =========================================================================
 #[tokio::test]
 async fn endpoint_without_synced_sources_returns_503() {
@@ -744,7 +744,7 @@ async fn endpoint_without_synced_sources_returns_503() {
 }
 
 // =========================================================================
-// Test: endpoint desconocido → 404
+// Test: unknown endpoint → 404
 // =========================================================================
 #[tokio::test]
 async fn endpoint_not_configured_returns_404() {
@@ -797,14 +797,14 @@ async fn list_endpoints_shows_readiness() {
 }
 
 // =========================================================================
-// Test: endpoint con params dinámicos (POST body)
+// Test: endpoint with dynamic params (POST body)
 // =========================================================================
 #[tokio::test]
 async fn endpoint_with_dynamic_params() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
 
-    // Endpoint sin filtros estáticos — el consumidor los pasa en el body
+    // Endpoint without static filters — the consumer passes them in the body
     let mut endpoints = HashMap::new();
     endpoints.insert(
         "ep-dynamic".to_string(),
@@ -823,13 +823,13 @@ async fn endpoint_with_dynamic_params() {
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
-    // Sin params — devuelve todos los hosts
+    // Without params — returns all hosts
     let (status, body) = request(app.clone(), "POST", "/api/v1/endpoints/ep-dynamic").await;
     assert_eq!(status, StatusCode::OK);
     let full: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(full["_meta"]["hostvars"].as_object().unwrap().len(), 6);
 
-    // Con params — filtra solo section9
+    // With params — filters only section9
     let (status, body) = request_with_json(
         app.clone(),
         "POST",
@@ -850,14 +850,14 @@ async fn endpoint_with_dynamic_params() {
 }
 
 // =========================================================================
-// Test: params dinámicos sobreescriben config estática
+// Test: dynamic params override static config
 // =========================================================================
 #[tokio::test]
 async fn endpoint_params_override_config() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
 
-    // Config estática: filtra section9
+    // Static config: filters section9
     let mut ep_config = HashMap::new();
     ep_config.insert("filter_datacenter".to_string(), "section9".to_string());
 
@@ -879,12 +879,12 @@ async fn endpoint_params_override_config() {
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
-    // Sin params — usa config estática (section9 = 3 hosts)
+    // Without params — uses static config (section9 = 3 hosts)
     let (_, body) = request(app.clone(), "POST", "/api/v1/endpoints/ep-override").await;
     let section9: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(section9["_meta"]["hostvars"].as_object().unwrap().len(), 3);
 
-    // Con params — sobreescribe a seele
+    // With params — overrides to seele
     let (_, body) = request_with_json(
         app.clone(),
         "POST",

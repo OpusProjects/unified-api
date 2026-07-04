@@ -14,8 +14,8 @@ use crate::adapters::http;
 use crate::adapters::http::auth::ApiKey;
 use crate::adapters::http::openapi::ApiDoc;
 
-// Monta el router completo: rutas de la API (protegidas por API key si
-// hay una configurada), health probes públicos y el Swagger UI.
+// Build the complete router: API routes (protected by API key if
+// configured), public health probes, and Swagger UI.
 pub fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()> {
     let api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))

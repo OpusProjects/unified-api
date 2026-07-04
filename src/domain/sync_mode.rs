@@ -1,12 +1,12 @@
 use serde::Deserialize;
 
-// Cómo se aplican los datos al cache cuando llegan
+// How data is applied to cache when it arrives
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncMode {
-    // Borra todo y pone lo nuevo — el script trae el inventario completo
+    // Clears everything and puts new data — the script brings the complete inventory
     #[default]
     Replace,
-    // Parchea solo lo que viene — el resto no se toca
+    // Patches only what comes — the rest is left alone
     Merge,
 }

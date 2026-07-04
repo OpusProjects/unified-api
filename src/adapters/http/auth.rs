@@ -30,9 +30,9 @@ pub async fn require_api_key(request: Request, next: Next) -> Result<Response, S
                 .and_then(|v| v.strip_prefix("Bearer "))
         });
 
-    // Comparación en tiempo constante: un == normal corta en el primer byte
-    // distinto, y ese delta de tiempo permite adivinar la key byte a byte.
-    // ct_eq compara siempre todos los bytes (si las longitudes coinciden).
+    // Constant-time comparison: a normal == would short-circuit on the first
+    // different byte, and that time delta leaks info to guess the key byte-by-byte.
+    // ct_eq always compares all bytes (if lengths match).
     match token {
         Some(t) if bool::from(t.as_bytes().ct_eq(expected.as_bytes())) => {
             Ok(next.run(request).await)

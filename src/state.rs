@@ -6,12 +6,12 @@ use crate::domain::enricher::Enricher;
 use crate::domain::source::{ConnectorType, Source};
 use crate::ports;
 
-// El estado compartido de la aplicación: los ports (como Arc<dyn Trait>,
-// así los handlers dependen de la interfaz y no de la implementación)
-// más la configuración estática cargada al arrancar.
+// The shared application state: the ports (as Arc<dyn Trait>, so handlers
+// depend on the interface, not the implementation) plus the static
+// configuration loaded at startup.
 //
-// Arc = Atomic Reference Counted — un puntero compartido entre threads;
-// cada handler de axum recibe un clon barato del mismo AppState.
+// Arc = Atomic Reference Counted — a reference-counted pointer shared across
+// threads; each axum handler receives a cheap clone of the same AppState.
 pub struct AppState {
     pub cache: Arc<dyn ports::cache::CachePort>,
     pub connector: Arc<dyn ports::connector::ConnectorPort>,
@@ -25,7 +25,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    // Elige el connector adecuado según el tipo declarado en el source
+    // Chooses the appropriate connector based on the type declared in the source
     pub fn connector_for(
         &self,
         connector_type: &ConnectorType,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::domain::dataset::HostVars;
 
-// Alta y baja inmediata de hosts en el cache de un source
+// Immediate host add/remove in a source's cache
 
 #[utoipa::path(
     put,
@@ -56,8 +56,8 @@ pub async fn delete_host(
     State(state): State<Arc<AppState>>,
     Path((id, hostname)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
-    // La comprobación "¿existe el host?" y el borrado van dentro del mismo
-    // update() — comprobar fuera con get() sería otra ventana de carrera.
+    // The "does host exist?" check and deletion happen in the same
+    // update() — checking outside with get() would be another race window.
     let mut removed = false;
     let found = state.cache.update(&id, &mut |entry| {
         if entry.dataset.hostvars.contains_key(&hostname) {

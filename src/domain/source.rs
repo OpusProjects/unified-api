@@ -23,39 +23,39 @@ pub struct Source {
     #[serde(default)]
     pub sync_mode: SyncMode,
 
-    // Vec<String> = lista de IDs de credenciales que necesita el connector
+    // Vec<String> = list of credential IDs that the connector needs
     #[serde(default)]
     pub credential_ids: Vec<String>,
 
-    // Option<String> = puede tener o no un schedule cron (reservado para futuro)
+    // Option<String> = may or may not have a cron schedule (reserved for future)
     pub schedule: Option<String>,
 
-    // Intervalo de sync automático en segundos (alternativa simple al cron)
-    // Si es None o 0, no se hace sync automático
+    // Automatic sync interval in seconds (simple alternative to cron)
+    // If None or 0, no automatic sync is performed
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
 
-    // TTL en segundos para la caché de este source
+    // TTL in seconds for this source's cache
     pub ttl_seconds: u64,
 
-    // Overrides de TTL por grupo o por host
+    // TTL overrides by group or by host
     #[serde(default)]
     pub ttl_overrides: TtlOverrides,
 
-    // Configuración libre para el connector (api_url, filters, etc.)
+    // Free config for the connector (api_url, filters, etc.)
     #[serde(default)]
     pub config: HashMap<String, String>,
 }
 
-// Overrides de TTL: puedes dar TTLs distintos a grupos o hosts específicos
+// TTL Overrides: you can give different TTLs to specific groups or hosts
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct TtlOverrides {
-    // HashMap<String, u64> = dict[str, int] en Python
-    // ej: {"production": 900} → el grupo "production" refresca cada 15 min
+    // HashMap<String, u64> = dict[str, int] in Python
+    // ex: {"production": 900} → the "production" group refreshes every 15 min
     #[serde(default)]
     pub groups: HashMap<String, u64>,
 
-    // ej: {"critical-db01": 300} → este host refresca cada 5 min
+    // ex: {"critical-db01": 300} → this host refreshes every 5 min
     #[serde(default)]
     pub hosts: HashMap<String, u64>,
 }

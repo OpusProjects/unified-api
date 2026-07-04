@@ -3,7 +3,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::adapters::http;
 
-// Añade el esquema de seguridad (header X-API-Key) a la spec generada
+// Add the security scheme (X-API-Key header) to the generated spec
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -16,10 +16,10 @@ impl Modify for SecurityAddon {
     }
 }
 
-// La spec OpenAPI completa: utoipa la genera en compile-time a partir de
-// los atributos #[utoipa::path] de cada handler listado aquí.
-// Un handler nuevo no aparece en Swagger hasta que se registra en paths()
-// (y sus structs de respuesta en components/schemas).
+// The complete OpenAPI spec: utoipa generates it at compile-time from
+// #[utoipa::path] attributes of each handler listed here.
+// A new handler doesn't appear in Swagger until registered in paths()
+// (and its response structs in components/schemas).
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),

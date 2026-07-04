@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
-// Renombramos el caso de uso al importarlo porque el handler HTTP
-// que lo envuelve se llama igual (sync_source)
+// Rename the use case on import because the HTTP handler wrapping
+// it has the same name (sync_source)
 use crate::AppState;
 use crate::application::sync::{SyncScope, sync_source as application_sync_source};
 
-// IntoParams = utoipa genera la documentación de los query params
-// Cada campo Option<String> aparece como parámetro opcional en Swagger
+// IntoParams = utoipa generates documentation for query params
+// Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]
 pub struct SyncParams {
     /// Sync only this host (e.g. motoko.section9.net)
@@ -60,8 +60,8 @@ pub async fn sync_source(
         SyncScope::Full
     };
 
-    // El handler solo traduce HTTP ↔ caso de uso; la lógica del sync
-    // vive en application::sync (compartida con el scheduler)
+    // The handler only translates HTTP ↔ use case; the sync logic
+    // lives in application::sync (shared with the scheduler)
     let connector = state.connector_for(&source.connector_type);
     let outcome = application_sync_source(
         &*state.cache,

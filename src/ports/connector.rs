@@ -12,12 +12,12 @@ pub struct ConnectorError {
     pub exit_code: Option<i32>,
 }
 
-// Para que un trait sea compatible con `dyn` (dispatch dinámico),
-// los métodos async necesitan devolver un tipo concreto, no `impl Future`.
-// `Pin<Box<dyn Future>>` es la forma estándar de hacer esto:
-// - Box: el Future se guarda en el heap (porque no sabemos su tamaño)
-// - Pin: el Future no se puede mover en memoria (requisito de async en Rust)
-// Es un poco feo, pero es el patrón estándar para async traits con dyn.
+// For a trait to be compatible with `dyn` (dynamic dispatch),
+// async methods need to return a concrete type, not `impl Future`.
+// `Pin<Box<dyn Future>>` is the standard way to do this:
+// - Box: the Future is stored on the heap (because we don't know its size)
+// - Pin: the Future cannot move in memory (a requirement for async in Rust)
+// It's a bit ugly, but it's the standard pattern for async traits with dyn.
 pub trait ConnectorPort: Send + Sync {
     fn execute(
         &self,

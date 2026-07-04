@@ -8,7 +8,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-- Bump `russh` 0.48 → 0.60.3, fixing two high-severity advisories:
+- Bump `russh` 0.48 → 0.62.1 (via 0.60.3), fixing two high-severity advisories:
   unbounded 32-bit allocation (RUSTSEC-2026-0154) and unchecked
   `CryptoVec` growth (RUSTSEC-2026-0153)
 
@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Prometheus metrics at `GET /metrics`: counters and duration histograms for
   syncs, enricher runs and output endpoint runs
 - `server.cors_allowed_origins` config to opt in to CORS for browser consumers
+- HTTP request logging: method, path, status and latency at INFO per request
+- Docker `HEALTHCHECK` querying `/healthz`
+- Startup `WARN` when `UNIFIED_API_KEY` is unset (API running without auth)
 - CI: `cargo audit` (RUSTSEC advisory scan) and Dockerfile build on PRs
 - CI: version tags create a GitHub Release with the changelog section as notes
 - Dependabot for Cargo dependencies (grouped weekly), alongside workflow actions
@@ -26,6 +29,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **Breaking (browser consumers only):** CORS is now disabled by default;
   the API previously sent allow-anything CORS headers. Server-to-server
   consumers (AWX, AnsibleForms backends) are unaffected
+- **Breaking (SSH sources only):** the SSH connector's per-host timeout config
+  key is renamed `timeout_seconds` → `ssh_connect_timeout_seconds` (it collided
+  with the source-level `timeout_seconds`); an SSH source that set the old key
+  falls back to the 30s default until renamed
+
+### Fixed
+
+- Connector/enricher/output serialization failures now fail the run with a clear
+  error instead of silently sending the script empty stdin
+- Invalid `cors_allowed_origins` entries are logged and skipped instead of
+  silently dropped
 
 ## [0.1.0] - 2026-07-04
 

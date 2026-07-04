@@ -336,3 +336,29 @@ async fn cors_wildcard_allows_any_origin() {
         Some("*")
     );
 }
+
+#[tokio::test]
+async fn cors_skips_invalid_origin_keeps_valid() {
+    // A bad origin is warned-and-dropped, not fatal; the valid one still works
+    let app = unified_api::AppBuilder::new()
+        .cors_allowed_origins(vec![
+            "not a valid origin".to_string(),
+            "https://ok.example".to_string(),
+        ])
+        .build();
+
+    let request = Request::builder()
+        .uri("/healthz")
+        .header("origin", "https://ok.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://ok.example")
+    );
+}

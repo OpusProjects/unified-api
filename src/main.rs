@@ -33,6 +33,7 @@ async fn main() {
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),
         endpoints = cfg.endpoints.len(),
+        projects = cfg.projects.len(),
         auth = api_key.is_some(),
         "Configuration loaded"
     );

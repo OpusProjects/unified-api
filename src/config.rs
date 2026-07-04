@@ -72,6 +72,31 @@ impl AppConfig {
             }
         }
 
+        // Sources must reference existing projects. La feature de clonar
+        // los repos git aún no existe, pero projects.yaml ya se carga y
+        // los sources ya declaran project_id — mejor que un id con typo
+        // explote al arrancar y no cuando la feature llegue.
+        for (id, source) in &self.sources {
+            if !self.projects.contains_key(&source.project_id) {
+                errors.push(format!(
+                    "Source '{}' references unknown project '{}'",
+                    id, source.project_id
+                ));
+            }
+        }
+
+        // Private projects must reference existing credentials
+        for (id, project) in &self.projects {
+            if let Some(ref cred_id) = project.credential_id {
+                if !self.credentials.contains_key(cred_id) {
+                    errors.push(format!(
+                        "Project '{}' references unknown credential '{}'",
+                        id, cred_id
+                    ));
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -204,6 +229,63 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("src-ghost"));
+    }
+
+    #[test]
+    fn validate_catches_source_with_unknown_project() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ).unwrap();
+        // sources.yaml declara un project_id que no existe en projects.yaml
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-ghost\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+        ).unwrap();
+
+        let result = load_config(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.err().expect("expected validation error").to_string();
+        assert!(err.contains("prj-ghost"));
+    }
+
+    #[test]
+    fn validate_catches_project_with_unknown_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ).unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n  credential_id: \"cred-ghost\"\n",
+        ).unwrap();
+
+        let result = load_config(dir.path().to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.err().expect("expected validation error").to_string();
+        assert!(err.contains("cred-ghost"));
+    }
+
+    #[test]
+    fn validate_accepts_source_with_existing_project() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ).unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        ).unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+        ).unwrap();
+
+        let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(cfg.projects.len(), 1);
     }
 
     #[test]

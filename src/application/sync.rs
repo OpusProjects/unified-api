@@ -1,0 +1,163 @@
+use std::time::Instant;
+
+use crate::application::credentials::resolve_credentials;
+use crate::domain::cache_entry::CacheEntry;
+use crate::domain::dataset::Dataset;
+use crate::domain::source::Source;
+use crate::domain::sync_mode::SyncMode;
+use crate::ports::cache::CachePort;
+use crate::ports::connector::ConnectorPort;
+use crate::ports::secrets::SecretsPort;
+
+// Alcance de un sync: el inventario completo, un solo host o un grupo
+pub enum SyncScope {
+    Full,
+    Host(String),
+    Group(String),
+}
+
+impl SyncScope {
+    // Etiqueta legible para logs y respuestas: "full", "host:x", "group:y"
+    pub fn label(&self) -> String {
+        match self {
+            SyncScope::Full => "full".to_string(),
+            SyncScope::Host(host) => format!("host:{}", host),
+            SyncScope::Group(group) => format!("group:{}", group),
+        }
+    }
+}
+
+// Resultado de un sync — datos puros, sin tipos HTTP.
+// El handler lo convierte a JSON; el scheduler lo convierte a logs.
+pub struct SyncOutcome {
+    pub scope: String,
+    pub total_hosts: usize,
+    pub total_groups: usize,
+    pub duration_ms: u128,
+    pub error: Option<String>,
+}
+
+impl SyncOutcome {
+    pub fn success(&self) -> bool {
+        self.error.is_none()
+    }
+
+    fn failed(scope: String, duration_ms: u128, error: String) -> Self {
+        Self {
+            scope,
+            total_hosts: 0,
+            total_groups: 0,
+            duration_ms,
+            error: Some(error),
+        }
+    }
+}
+
+// El caso de uso "sincronizar un source": resolver credenciales, ejecutar
+// el connector y aplicar el resultado al cache según scope y sync_mode.
+//
+// El caller elige el connector (ProcessConnector o SshConnector, según
+// source.connector_type) y lo pasa ya resuelto — así esta función solo
+// depende de ports, no del AppState.
+pub async fn sync_source(
+    cache: &dyn CachePort,
+    connector: &dyn ConnectorPort,
+    secrets: &dyn SecretsPort,
+    source_id: &str,
+    source: &Source,
+    scope: SyncScope,
+) -> SyncOutcome {
+    let scope_label = scope.label();
+
+    // El scope viaja al script del connector a través de su config
+    let mut config = source.config.clone();
+    match &scope {
+        SyncScope::Host(host) => {
+            config.insert("scope".to_string(), "host".to_string());
+            config.insert("target".to_string(), host.clone());
+        }
+        SyncScope::Group(group) => {
+            config.insert("scope".to_string(), "group".to_string());
+            config.insert("target".to_string(), group.clone());
+        }
+        SyncScope::Full => {}
+    }
+
+    let start = Instant::now();
+
+    let credentials = match resolve_credentials(secrets, &source.credential_ids).await {
+        Ok(creds) => creds,
+        Err(e) => return SyncOutcome::failed(scope_label, start.elapsed().as_millis(), e.message),
+    };
+
+    let result = connector
+        .execute(&source.script_path, &config, &credentials)
+        .await;
+
+    let duration_ms = start.elapsed().as_millis();
+
+    match result {
+        Ok(dataset) => {
+            let total_hosts = dataset.hostvars.len();
+            let total_groups = dataset.groups.len();
+
+            apply_to_cache(cache, source_id, source, &scope, dataset);
+
+            SyncOutcome {
+                scope: scope_label,
+                total_hosts,
+                total_groups,
+                duration_ms,
+                error: None,
+            }
+        }
+        Err(e) => SyncOutcome::failed(scope_label, duration_ms, e.message),
+    }
+}
+
+// Aplica el dataset devuelto por el connector al cache. Todas las fusiones
+// van por merge_or_insert / update: la decisión "¿existe la entrada?" y la
+// modificación ocurren bajo el mismo lock (ver CachePort).
+fn apply_to_cache(
+    cache: &dyn CachePort,
+    source_id: &str,
+    source: &Source,
+    scope: &SyncScope,
+    dataset: Dataset,
+) {
+    match scope {
+        SyncScope::Host(host) => {
+            // Solo cacheamos si el connector devolvió el host pedido
+            if let Some(vars) = dataset.hostvars.get(host).cloned() {
+                let hostname = host.clone();
+                cache.merge_or_insert(
+                    source_id,
+                    dataset,
+                    source.ttl_seconds,
+                    &mut |entry, _new| entry.update_host(hostname.clone(), vars.clone()),
+                );
+            }
+        }
+        SyncScope::Group(group) => {
+            cache.merge_or_insert(
+                source_id,
+                dataset,
+                source.ttl_seconds,
+                &mut |entry, new| entry.update_group(group, new),
+            );
+        }
+        SyncScope::Full => match source.sync_mode {
+            SyncMode::Replace => {
+                cache.set(source_id, CacheEntry::new(dataset, source.ttl_seconds));
+            }
+            SyncMode::Merge => {
+                cache.merge_or_insert(
+                    source_id,
+                    dataset,
+                    source.ttl_seconds,
+                    &mut |entry, new| entry.merge_dataset(new),
+                );
+            }
+        },
+    }
+}

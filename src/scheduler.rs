@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
-use crate::api::sources::resolve_credentials;
-use crate::domain::cache_entry::CacheEntry;
-use crate::domain::source::ConnectorType;
-use crate::domain::sync_mode::SyncMode;
+use crate::application::enrich::run_enricher;
+use crate::application::sync::{sync_source, SyncScope};
 use crate::AppState;
 
+// El scheduler es un "driving adapter" más, igual que los handlers HTTP:
+// dispara los mismos casos de uso de application/, solo que por tiempo en
+// vez de por request. Aquí no hay lógica de negocio — solo timers y logs.
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
@@ -17,12 +18,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
 
         let state = Arc::clone(&state);
         let source_id = source_id.clone();
-        let script_path = source.script_path.clone();
-        let config = source.config.clone();
-        let ttl_seconds = source.ttl_seconds;
-        let credential_ids = source.credential_ids.clone();
-        let sync_mode = source.sync_mode.clone();
-        let connector_type = source.connector_type.clone();
+        let source = source.clone();
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(interval_secs));
@@ -33,53 +29,28 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                 ticker.tick().await;
                 info!(source = %source_id, "Syncing");
 
-                let temp_source = crate::domain::source::Source {
-                    name: String::new(),
-                    project_id: String::new(),
-                    script_path: script_path.clone(),
-                    connector_type: ConnectorType::Script,
-                    sync_mode: SyncMode::Replace,
-                    credential_ids: credential_ids.clone(),
-                    schedule: None,
-                    sync_interval_seconds: None,
-                    ttl_seconds,
-                    ttl_overrides: Default::default(),
-                    config: config.clone(),
-                };
+                let connector = state.connector_for(&source.connector_type);
+                let outcome = sync_source(
+                    &*state.cache,
+                    &**connector,
+                    &*state.secrets,
+                    &source_id,
+                    &source,
+                    SyncScope::Full,
+                )
+                .await;
 
-                let credentials =
-                    resolve_credentials(&*state.secrets, &temp_source).await;
-
-                let connector = state.connector_for(&connector_type);
-                let result = connector
-                    .execute(&script_path, &config, &credentials)
-                    .await;
-
-                match result {
-                    Ok(dataset) => {
-                        let host_count = dataset.hostvars.len();
-                        let group_count = dataset.groups.len();
-
-                        match sync_mode {
-                            SyncMode::Replace => {
-                                state.cache.set(&source_id, CacheEntry::new(dataset, ttl_seconds));
-                            }
-                            SyncMode::Merge => {
-                                // merge_or_insert es atómico: no pisa escrituras
-                                // concurrentes de la API o de un enricher
-                                state.cache.merge_or_insert(
-                                    &source_id,
-                                    dataset,
-                                    ttl_seconds,
-                                    &mut |entry, new| entry.merge_dataset(new),
-                                );
-                            }
-                        }
-
-                        info!(source = %source_id, hosts = host_count, groups = group_count, "Synced");
+                match outcome.error {
+                    None => {
+                        info!(
+                            source = %source_id,
+                            hosts = outcome.total_hosts,
+                            groups = outcome.total_groups,
+                            "Synced"
+                        );
                     }
-                    Err(e) => {
-                        error!(source = %source_id, error = %e.message, "Sync failed");
+                    Some(e) => {
+                        error!(source = %source_id, error = %e, "Sync failed");
                     }
                 }
             }
@@ -94,50 +65,43 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
 
         let state = Arc::clone(&state);
         let enricher_id = enricher_id.clone();
-        let source_id = enricher.source_id.clone();
-        let script_path = enricher.script_path.clone();
-        let config = enricher.config.clone();
+        let enricher = enricher.clone();
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(interval_secs));
 
-            info!(enricher = %enricher_id, source = %source_id, interval_secs, "Enricher scheduled");
+            info!(
+                enricher = %enricher_id,
+                source = %enricher.source_id,
+                interval_secs,
+                "Enricher scheduled"
+            );
 
             loop {
                 ticker.tick().await;
                 info!(enricher = %enricher_id, "Running");
 
-                let current_entry = match state.cache.get(&source_id) {
-                    Some(entry) => entry,
+                match run_enricher(&*state.cache, &*state.enricher, &enricher).await {
                     None => {
-                        warn!(enricher = %enricher_id, source = %source_id, "Source not in cache, skipping");
-                        continue;
+                        warn!(
+                            enricher = %enricher_id,
+                            source = %enricher.source_id,
+                            "Source not in cache, skipping"
+                        );
                     }
-                };
-
-                let result = state.enricher.execute(
-                    &script_path,
-                    &config,
-                    &current_entry.dataset,
-                ).await;
-
-                match result {
-                    Ok(partial_dataset) => {
-                        let updated = partial_dataset.hostvars.len();
-                        let removed = partial_dataset.remove_hosts.len();
-
-                        let mut partial = Some(partial_dataset);
-                        state.cache.update(&source_id, &mut |entry| {
-                            if let Some(p) = partial.take() {
-                                entry.merge_dataset(p);
-                            }
-                        });
-
-                        info!(enricher = %enricher_id, hosts_updated = updated, hosts_removed = removed, "Enriched");
-                    }
-                    Err(e) => {
-                        error!(enricher = %enricher_id, error = %e.message, "Enrichment failed");
-                    }
+                    Some(outcome) => match outcome.error {
+                        None => {
+                            info!(
+                                enricher = %enricher_id,
+                                hosts_updated = outcome.hosts_updated,
+                                hosts_removed = outcome.hosts_removed,
+                                "Enriched"
+                            );
+                        }
+                        Some(e) => {
+                            error!(enricher = %enricher_id, error = %e, "Enrichment failed");
+                        }
+                    },
                 }
             }
         });

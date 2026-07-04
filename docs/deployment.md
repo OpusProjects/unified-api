@@ -23,8 +23,9 @@ docker run -p 8182:8182 \
 
 1. **test** — on every push and PR: `cargo fmt --check`, `cargo clippy --all-targets
    -- -D warnings`, `cargo test` (with `Swatinem/rust-cache`)
-2. **build-image** — on pushes to `main` and on `v*` tags, after tests pass: builds
-   and pushes the image to GHCR (`sha` + `latest` from `main`, semver from tags)
+2. **build-image** — after tests pass: on PRs the image is **built but not
+   pushed** (catches Dockerfile breakage before merge); pushes to `main` and
+   `v*` tags also publish to GHCR (`sha` + `latest` from `main`, semver from tags)
 
 The CI badge in the README tracks this workflow.
 

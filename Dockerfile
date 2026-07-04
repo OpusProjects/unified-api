@@ -27,4 +27,11 @@ USER unified
 
 EXPOSE 8182
 
+# Report container health from the liveness probe. Uses python3 (already in the
+# runtime image for connectors) so no extra package is needed. Orchestrators
+# outside k8s (docker run, Compose) rely on this; k8s uses the /healthz and
+# /readyz HTTP probes directly instead.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8182/healthz').read()==b'ok' else 1)"
+
 CMD ["unified-api"]

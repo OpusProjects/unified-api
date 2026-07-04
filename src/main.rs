@@ -1,5 +1,6 @@
 use tracing::{info, error};
 use tracing_subscriber::EnvFilter;
+use unified_api::adapters::env_secrets::EnvSecrets;
 
 #[tokio::main]
 async fn main() {
@@ -23,23 +24,26 @@ async fn main() {
         }
     };
 
-    let auth_enabled = std::env::var("UNIFIED_API_KEY").is_ok();
+    // La API key se lee aquí, en el borde: el resto de la app la recibe
+    // como parámetro y no toca variables de entorno
+    let api_key = std::env::var("UNIFIED_API_KEY").ok();
 
     info!(
         sources = cfg.sources.len(),
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),
         endpoints = cfg.endpoints.len(),
-        auth = auth_enabled,
+        auth = api_key.is_some(),
         "Configuration loaded"
     );
 
-    let (app, state) = unified_api::build_app_production(
-        cfg.sources,
-        cfg.credentials,
-        cfg.enrichers,
-        cfg.endpoints,
-    );
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(cfg.sources)
+        .enrichers(cfg.enrichers)
+        .endpoints(cfg.endpoints)
+        .secrets(std::sync::Arc::new(EnvSecrets::new(cfg.credentials)))
+        .api_key(api_key)
+        .build_with_state();
 
     unified_api::scheduler::start_sync_tasks(state);
 

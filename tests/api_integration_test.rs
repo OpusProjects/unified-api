@@ -28,6 +28,47 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
     (status, body_str)
 }
 
+// App con un inventario demo precargado en el cache. Antes vivía en lib.rs
+// (build_app_with_demo_data), pero los datos de prueba no pintan nada en la
+// librería — son un fixture de estos tests.
+fn app_with_demo_data() -> axum::Router {
+    let (app, state) = unified_api::AppBuilder::new().build_with_state();
+
+    let demo_dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(r#"{
+        "hostvars": {
+            "motoko.section9.net": {
+                "ansible_host": "10.9.1.1",
+                "os": "OracleLinux",
+                "datacenter": "section9",
+                "role": "commander"
+            },
+            "melchior.seele.net": {
+                "ansible_host": "10.6.1.1",
+                "os": "OracleLinux",
+                "datacenter": "seele",
+                "role": "magi-system"
+            }
+        },
+        "groups": {
+            "section9": {
+                "hosts": ["motoko.section9.net"],
+                "vars": {"ntp_server": "ntp.section9.net"}
+            },
+            "seele": {
+                "hosts": ["melchior.seele.net"],
+                "vars": {"ntp_server": "ntp.seele.net"}
+            }
+        }
+    }"#).expect("Failed to parse demo dataset");
+
+    state.cache.set(
+        "src-demo",
+        unified_api::domain::cache_entry::CacheEntry::new(demo_dataset, 3600),
+    );
+
+    app
+}
+
 // =========================================================================
 // Tests: health checks
 // =========================================================================
@@ -35,7 +76,7 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
 // #[tokio::test] es como #[test] pero para funciones async
 #[tokio::test]
 async fn healthz_returns_ok() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, body) = get(app, "/healthz").await;
 
@@ -45,7 +86,7 @@ async fn healthz_returns_ok() {
 
 #[tokio::test]
 async fn readyz_returns_ok_without_sources() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, body) = get(app, "/readyz").await;
 
@@ -71,7 +112,7 @@ async fn readyz_returns_503_before_sync() {
         ttl_overrides: Default::default(),
         config: std::collections::HashMap::new(),
     });
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = get(app, "/readyz").await;
 
@@ -87,7 +128,7 @@ async fn readyz_returns_503_before_sync() {
 
 #[tokio::test]
 async fn list_sources_empty_cache() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, body) = get(app, "/api/v1/sources").await;
 
@@ -99,7 +140,7 @@ async fn list_sources_empty_cache() {
 
 #[tokio::test]
 async fn get_dataset_not_found() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, _body) = get(app, "/api/v1/sources/no-existe/dataset").await;
 
@@ -112,7 +153,7 @@ async fn get_dataset_not_found() {
 
 #[tokio::test]
 async fn list_sources_with_demo_data() {
-    let app = unified_api::build_app_with_demo_data();
+    let app = app_with_demo_data();
 
     let (status, body) = get(app, "/api/v1/sources").await;
 
@@ -126,7 +167,7 @@ async fn list_sources_with_demo_data() {
 
 #[tokio::test]
 async fn get_dataset_returns_inventory() {
-    let app = unified_api::build_app_with_demo_data();
+    let app = app_with_demo_data();
 
     let (status, body) = get(app, "/api/v1/sources/src-demo/dataset").await;
 
@@ -155,7 +196,7 @@ async fn get_dataset_returns_inventory() {
 
 #[tokio::test]
 async fn nonexistent_route_returns_404() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, _body) = get(app, "/api/v1/ruta-inventada").await;
 

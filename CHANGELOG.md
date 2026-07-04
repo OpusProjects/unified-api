@@ -17,6 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Prometheus metrics at `GET /metrics`: counters and duration histograms for
   syncs, enricher runs and output endpoint runs
 - `server.cors_allowed_origins` config to opt in to CORS for browser consumers
+- CI: `cargo audit` (RUSTSEC advisory scan) and Dockerfile build on PRs
+- Dependabot for Cargo dependencies (grouped weekly), alongside workflow actions
 
 ### Changed
 

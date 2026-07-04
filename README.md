@@ -62,12 +62,6 @@ Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the PR work
 
 Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
 
-## 🧭 Project status
-
-- Actively developed
-- The `/api/v1` surface is functional but not yet frozen
-- On the roadmap: HashiCorp Vault secrets and git-cloned connector projects
-
 ## 👥 Authors
 
 - [Fernando Roca](https://github.com/fernandorocagonzalez)

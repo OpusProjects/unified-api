@@ -58,6 +58,7 @@ fn test_source(scenario: &str) -> Source {
         schedule: None,
         sync_interval_seconds: None,
         ttl_seconds: 3600,
+        timeout_seconds: 300,
         ttl_overrides: TtlOverrides::default(),
         config,
     }
@@ -460,6 +461,7 @@ async fn enricher_updates_hosts_in_cache() {
             script_path: "test-connectors/fake_enricher.py".to_string(),
             sync_interval_seconds: None,
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -506,6 +508,7 @@ async fn enricher_removes_hosts() {
             script_path: "test-connectors/fake_enricher.py".to_string(),
             sync_interval_seconds: None,
             config: enricher_config,
+            timeout_seconds: 300,
         },
     );
 
@@ -554,6 +557,7 @@ async fn sync_infra_source() {
             schedule: None,
             sync_interval_seconds: None,
             ttl_seconds: 3600,
+            timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
             config,
         },
@@ -604,6 +608,7 @@ async fn enricher_without_cached_source_returns_404() {
             script_path: "test-connectors/fake_enricher.py".to_string(),
             sync_interval_seconds: None,
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -637,6 +642,7 @@ async fn endpoint_combines_sources() {
             schedule: None,
             sync_interval_seconds: None,
             ttl_seconds: 3600,
+            timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
             config: infra_config,
         },
@@ -650,6 +656,7 @@ async fn endpoint_combines_sources() {
             source_ids: vec!["src-inventory".to_string(), "src-infra".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -696,6 +703,7 @@ async fn endpoint_filters_by_datacenter() {
             source_ids: vec!["src-inventory".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: ep_config,
+            timeout_seconds: 300,
         },
     );
 
@@ -730,6 +738,7 @@ async fn endpoint_without_synced_sources_returns_503() {
             source_ids: vec!["src-nonexistent".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -770,6 +779,7 @@ async fn list_endpoints_shows_readiness() {
             source_ids: vec!["src-test".to_string(), "src-missing".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -813,6 +823,7 @@ async fn endpoint_with_dynamic_params() {
             source_ids: vec!["src-test".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: HashMap::new(),
+            timeout_seconds: 300,
         },
     );
 
@@ -869,6 +880,7 @@ async fn endpoint_params_override_config() {
             source_ids: vec!["src-test".to_string()],
             script_path: "test-connectors/output_ansible_inventory.py".to_string(),
             config: ep_config,
+            timeout_seconds: 300,
         },
     );
 
@@ -895,4 +907,32 @@ async fn endpoint_params_override_config() {
     let seele: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(seele["_meta"]["hostvars"].as_object().unwrap().len(), 3);
     assert!(seele["_meta"]["hostvars"]["melchior.seele.net"].is_object());
+}
+
+// =========================================================================
+// Test: execution timeout — a hung connector must not hang the sync
+// =========================================================================
+#[tokio::test]
+async fn sync_times_out_on_slow_connector() {
+    let mut source = test_source("default");
+    source.script_path = "test-connectors/fake_slow.py".to_string();
+    source.timeout_seconds = 1; // the script sleeps 10s
+
+    let mut sources = HashMap::new();
+    sources.insert("src-slow".to_string(), source);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, body) = request(app, "POST", "/api/v1/sources/src-slow/sync").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["success"], false);
+    let error = result["error"].as_str().unwrap();
+    assert!(
+        error.contains("timed out after 1s"),
+        "unexpected error: {}",
+        error
+    );
+    // Nothing gets cached on a timed-out sync
+    assert_eq!(result["total_hosts"], 0);
 }

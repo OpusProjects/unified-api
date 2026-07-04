@@ -48,7 +48,9 @@ The CI badge in the README tracks this workflow.
 Background sync tasks start at boot for every source with
 `sync_interval_seconds > 0` (tokio `interval`, first tick immediately). Enrichers
 with an interval likewise. A failed run logs the error and waits for the next tick —
-there is no retry/backoff beyond the interval itself. Shutdown is graceful for
+there is no retry/backoff beyond the interval itself. Every script execution is
+bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
+cannot wedge its scheduler task. Shutdown is graceful for
 in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
 
 ## Observability

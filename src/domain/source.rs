@@ -20,6 +20,11 @@ pub struct Source {
     #[serde(default)]
     pub connector_type: ConnectorType,
 
+    // Maximum seconds a sync may run before it is aborted — protects the
+    // scheduler and API from a hung connector script (default 300)
+    #[serde(default = "crate::domain::default_timeout_seconds")]
+    pub timeout_seconds: u64,
+
     #[serde(default)]
     pub sync_mode: SyncMode,
 

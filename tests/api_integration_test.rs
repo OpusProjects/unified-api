@@ -114,6 +114,7 @@ async fn readyz_returns_503_before_sync() {
             schedule: None,
             sync_interval_seconds: None,
             ttl_seconds: 3600,
+            timeout_seconds: 300,
             ttl_overrides: Default::default(),
             config: std::collections::HashMap::new(),
         },

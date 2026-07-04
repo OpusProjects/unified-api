@@ -29,6 +29,7 @@ src-section9:
   credential_ids: ["cred-section9-api"] # must exist in credentials.yaml
   sync_interval_seconds: 60            # background sync; 0/absent = manual only
   ttl_seconds: 3600                    # dataset-level TTL
+  timeout_seconds: 300                 # abort a sync that runs longer (default 300)
   ttl_overrides:                       # optional per-group / per-host TTLs
     groups:
       production: 900
@@ -44,6 +45,7 @@ src-section9:
 | `connector_type` | `script` runs a local process; `ssh` fans out over hosts (see [connectors](connectors.md)) |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
 | `ttl_*` | See [caching](caching.md) for the freshness model |
+| `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON |
 
 ## credentials.yaml
@@ -85,6 +87,7 @@ enrich-resolve-ssh:
   source_id: "src-section9"        # whose cached dataset to enrich
   script_path: "enrichers/resolve.py"
   sync_interval_seconds: 300       # scheduled run; 0/absent = manual only
+  timeout_seconds: 300             # abort a run that takes longer (default 300)
   config: {}
 ```
 
@@ -97,6 +100,7 @@ ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
   script_path: "test-connectors/output_ansible_inventory.py"
+  timeout_seconds: 300              # abort a transform that takes longer (default 300)
   config:
     filter_datacenter: "section9"   # free-form, script-specific
 ```

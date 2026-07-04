@@ -21,4 +21,8 @@ pub struct Enricher {
     // Free config for the script
     #[serde(default)]
     pub config: HashMap<String, String>,
+
+    // Maximum seconds a run may take before it is aborted (default 300)
+    #[serde(default = "crate::domain::default_timeout_seconds")]
+    pub timeout_seconds: u64,
 }

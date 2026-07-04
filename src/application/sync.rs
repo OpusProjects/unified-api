@@ -1,4 +1,6 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use tokio::time::timeout;
 
 use crate::application::credentials::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
@@ -90,9 +92,23 @@ pub async fn sync_source(
         Err(e) => return SyncOutcome::failed(scope_label, start.elapsed().as_millis(), e.message),
     };
 
-    let result = connector
-        .execute(&source.script_path, &config, &credentials)
-        .await;
+    // The timeout protects the scheduler and the API from a hung connector
+    // script: without it, a stuck process blocks its sync task forever.
+    let result = match timeout(
+        Duration::from_secs(source.timeout_seconds),
+        connector.execute(&source.script_path, &config, &credentials),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            return SyncOutcome::failed(
+                scope_label,
+                start.elapsed().as_millis(),
+                format!("sync timed out after {}s", source.timeout_seconds),
+            );
+        }
+    };
 
     let duration_ms = start.elapsed().as_millis();
 

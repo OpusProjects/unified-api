@@ -65,7 +65,7 @@ impl ConnectorPort for SshConnector {
                 .and_then(|c| c.parse().ok())
                 .unwrap_or(50);
             let timeout_secs: u64 = config
-                .get("timeout_seconds")
+                .get("ssh_connect_timeout_seconds")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(30);
             let gather_mode = config

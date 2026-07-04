@@ -44,6 +44,6 @@ src-ssh-example:
     hosts: "host1.example.com,host2.example.com"
     port: "22"
     concurrency: "50"
-    timeout_seconds: "30"
+    ssh_connect_timeout_seconds: "30"
     gather_mode: "facts"
     fact_path: "/etc/ansible/facts.d"

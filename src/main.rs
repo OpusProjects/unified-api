@@ -43,6 +43,7 @@ async fn main() {
         .endpoints(cfg.endpoints)
         .secrets(std::sync::Arc::new(EnvSecrets::new(cfg.credentials)))
         .api_key(api_key)
+        .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .build_with_state();
 
     unified_api::adapters::scheduler::start_sync_tasks(state);

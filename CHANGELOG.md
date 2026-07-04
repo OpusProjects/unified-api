@@ -10,6 +10,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Prometheus metrics at `GET /metrics`: counters and duration histograms for
   syncs, enricher runs and output endpoint runs
+- `server.cors_allowed_origins` config to opt in to CORS for browser consumers
+
+### Changed
+
+- **Breaking (browser consumers only):** CORS is now disabled by default;
+  the API previously sent allow-anything CORS headers. Server-to-server
+  consumers (AWX, AnsibleForms backends) are unaffected
 
 ## [0.1.0] - 2026-07-04
 

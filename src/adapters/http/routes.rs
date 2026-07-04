@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::http::HeaderValue;
 use axum::{
     Router, middleware,
     response::Redirect,
@@ -16,7 +17,11 @@ use crate::adapters::http::openapi::ApiDoc;
 
 // Build the complete router: API routes (protected by API key if
 // configured), public health probes, and Swagger UI.
-pub fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()> {
+pub fn create_router(
+    state: Arc<AppState>,
+    api_key: Option<String>,
+    cors_allowed_origins: Vec<String>,
+) -> Router<()> {
     let api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
         .route(
@@ -44,18 +49,35 @@ pub fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()
         .layer(middleware::from_fn(http::auth::require_api_key))
         .layer(axum::Extension(ApiKey(api_key)));
 
-    Router::new()
+    let router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz))
         .route("/metrics", get(http::metrics::metrics))
         .merge(api_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
-        .with_state(state)
+        .with_state(state);
+
+    // No configured origins = no CORS layer: the browser same-origin policy
+    // applies and server-to-server consumers are unaffected. This replaces
+    // the old always-on allow-anything layer.
+    match cors_layer(&cors_allowed_origins) {
+        Some(cors) => router.layer(cors),
+        None => router,
+    }
+}
+
+fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
+    if origins.is_empty() {
+        return None;
+    }
+
+    let layer = if origins.iter().any(|o| o == "*") {
+        CorsLayer::new().allow_origin(Any)
+    } else {
+        let list: Vec<HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
+        CorsLayer::new().allow_origin(list)
+    };
+
+    Some(layer.allow_methods(Any).allow_headers(Any))
 }

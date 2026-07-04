@@ -269,3 +269,70 @@ async fn metrics_exposes_sync_counters() {
     assert!(body.contains("unified_api_sync_duration_seconds"));
     assert!(body.contains("src-metrics"));
 }
+
+// =========================================================================
+// Tests: CORS is off by default, opt-in via allowed origins
+// =========================================================================
+#[tokio::test]
+async fn cors_disabled_by_default() {
+    let app = unified_api::AppBuilder::new().build();
+
+    let request = Request::builder()
+        .uri("/healthz")
+        .header("origin", "https://evil.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn cors_allows_configured_origin() {
+    let app = unified_api::AppBuilder::new()
+        .cors_allowed_origins(vec!["https://forms.example".to_string()])
+        .build();
+
+    let request = Request::builder()
+        .uri("/healthz")
+        .header("origin", "https://forms.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://forms.example")
+    );
+}
+
+#[tokio::test]
+async fn cors_wildcard_allows_any_origin() {
+    let app = unified_api::AppBuilder::new()
+        .cors_allowed_origins(vec!["*".to_string()])
+        .build();
+
+    let request = Request::builder()
+        .uri("/healthz")
+        .header("origin", "https://anywhere.example")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("*")
+    );
+}

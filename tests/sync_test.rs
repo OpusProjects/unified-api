@@ -72,7 +72,7 @@ fn test_source(scenario: &str) -> Source {
 async fn sync_then_query_full_flow() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // 1. Antes del sync, el cache está vacío
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources").await;
@@ -112,7 +112,7 @@ async fn sync_then_query_full_flow() {
 async fn sync_empty_inventory() {
     let mut sources = HashMap::new();
     sources.insert("src-empty".to_string(), test_source("empty"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(app, "POST", "/api/v1/sources/src-empty/sync").await;
     assert_eq!(status, StatusCode::OK);
@@ -128,7 +128,7 @@ async fn sync_empty_inventory() {
 async fn sync_connector_error() {
     let mut sources = HashMap::new();
     sources.insert("src-broken".to_string(), test_source("error"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(app, "POST", "/api/v1/sources/src-broken/sync").await;
     assert_eq!(status, StatusCode::OK); // el endpoint funcionó, el connector falló
@@ -142,7 +142,7 @@ async fn sync_connector_error() {
 // =========================================================================
 #[tokio::test]
 async fn sync_unknown_source_returns_404() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, _) = request(app, "POST", "/api/v1/sources/inventado/sync").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -155,7 +155,7 @@ async fn sync_unknown_source_returns_404() {
 async fn sync_large_inventory() {
     let mut sources = HashMap::new();
     sources.insert("src-large".to_string(), test_source("large"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(app, "POST", "/api/v1/sources/src-large/sync").await;
     assert_eq!(status, StatusCode::OK);
@@ -171,7 +171,7 @@ async fn sync_large_inventory() {
 async fn sync_single_host() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // 1. Sync completo primero (6 hosts)
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -203,7 +203,7 @@ async fn sync_single_host() {
 async fn sync_group() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // 1. Sync completo
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -235,7 +235,7 @@ async fn sync_group() {
 async fn sync_nonexistent_host() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(
         app,
@@ -254,7 +254,7 @@ async fn sync_nonexistent_host() {
 async fn sync_full_reports_scope() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = request(app, "POST", "/api/v1/sources/src-test/sync").await;
     assert_eq!(status, StatusCode::OK);
@@ -269,7 +269,7 @@ async fn sync_full_reports_scope() {
 async fn status_shows_per_host_info() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // Sin sync, status devuelve 404 (no hay cache)
     let (status, _) = request(app.clone(), "GET", "/api/v1/sources/src-test/status").await;
@@ -302,7 +302,7 @@ async fn status_shows_per_host_info() {
 async fn status_filter_by_host() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -324,7 +324,7 @@ async fn status_filter_by_host() {
 async fn status_filter_by_group() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -345,7 +345,7 @@ async fn status_filter_by_group() {
 async fn status_unknown_host_returns_404() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -364,7 +364,7 @@ async fn status_unknown_host_returns_404() {
 async fn put_host_adds_to_cache() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // Sync para tener datos
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -392,7 +392,7 @@ async fn put_host_adds_to_cache() {
 async fn delete_host_removes_from_cache() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -414,7 +414,7 @@ async fn delete_host_removes_from_cache() {
 async fn delete_nonexistent_host_returns_404() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -439,7 +439,7 @@ async fn enricher_updates_hosts_in_cache() {
         config: HashMap::new(),
     });
 
-    let (app, _state) = unified_api::build_app_full(sources, enrichers, HashMap::new());
+    let (app, _state) = unified_api::AppBuilder::new().sources(sources).enrichers(enrichers).build_with_state();
 
     // Sync primero para tener datos
     let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -479,7 +479,7 @@ async fn enricher_removes_hosts() {
         config: enricher_config,
     });
 
-    let (app, _state) = unified_api::build_app_full(sources, enrichers, HashMap::new());
+    let (app, _state) = unified_api::AppBuilder::new().sources(sources).enrichers(enrichers).build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -517,7 +517,7 @@ async fn sync_infra_source() {
         ttl_overrides: TtlOverrides::default(),
         config,
     });
-    let app = unified_api::build_app_with_sources(sources);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
 
     // Sync
     let (status, body) = request(app.clone(), "POST", "/api/v1/sources/src-infra/sync").await;
@@ -563,7 +563,7 @@ async fn enricher_without_cached_source_returns_404() {
         config: HashMap::new(),
     });
 
-    let (app, _state) = unified_api::build_app_full(HashMap::new(), enrichers, HashMap::new());
+    let (app, _state) = unified_api::AppBuilder::new().enrichers(enrichers).build_with_state();
 
     let (status, _) = request(app, "POST", "/api/v1/enrichers/enrich-orphan/run").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -601,7 +601,7 @@ async fn endpoint_combines_sources() {
         config: HashMap::new(),
     });
 
-    let (app, _) = unified_api::build_app_full(sources, HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
 
     // Sync both sources
     let (s1, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
@@ -641,7 +641,7 @@ async fn endpoint_filters_by_datacenter() {
         config: ep_config,
     });
 
-    let (app, _) = unified_api::build_app_full(sources, HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
 
@@ -669,7 +669,7 @@ async fn endpoint_without_synced_sources_returns_503() {
         config: HashMap::new(),
     });
 
-    let (app, _) = unified_api::build_app_full(HashMap::new(), HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().endpoints(endpoints).build_with_state();
 
     let (status, body) = request(app, "POST", "/api/v1/endpoints/ep-missing").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -682,7 +682,7 @@ async fn endpoint_without_synced_sources_returns_503() {
 // =========================================================================
 #[tokio::test]
 async fn endpoint_not_configured_returns_404() {
-    let app = unified_api::build_app();
+    let app = unified_api::AppBuilder::new().build();
 
     let (status, _) = request(app, "POST", "/api/v1/endpoints/inventado").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -704,7 +704,7 @@ async fn list_endpoints_shows_readiness() {
         config: HashMap::new(),
     });
 
-    let (app, _) = unified_api::build_app_full(sources, HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
 
     // Before sync — both sources missing from cache
     let (status, body) = request(app.clone(), "GET", "/api/v1/endpoints").await;
@@ -741,7 +741,7 @@ async fn endpoint_with_dynamic_params() {
         config: HashMap::new(),
     });
 
-    let (app, _) = unified_api::build_app_full(sources, HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
@@ -785,7 +785,7 @@ async fn endpoint_params_override_config() {
         config: ep_config,
     });
 
-    let (app, _) = unified_api::build_app_full(sources, HashMap::new(), endpoints);
+    let (app, _) = unified_api::AppBuilder::new().sources(sources).endpoints(endpoints).build_with_state();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 

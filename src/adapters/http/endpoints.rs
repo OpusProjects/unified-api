@@ -121,7 +121,20 @@ pub async fn run_endpoint(
         }
     };
 
-    let _duration_ms = start.elapsed().as_millis();
+    let duration_ms = start.elapsed().as_millis();
+
+    let result_label = if result.is_ok() { "success" } else { "error" };
+    metrics::counter!(
+        "unified_api_endpoint_total",
+        "endpoint" => id.clone(),
+        "result" => result_label,
+    )
+    .increment(1);
+    metrics::histogram!(
+        "unified_api_endpoint_duration_seconds",
+        "endpoint" => id.clone(),
+    )
+    .record(duration_ms as f64 / 1000.0);
 
     match result {
         Ok(output) => {

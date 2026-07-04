@@ -8,6 +8,8 @@ async-trait = "0.1"
 axum = "0.8"
 dashmap = "6"
 futures = "0.3"
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 russh = "0.48"
 russh-keys = "0.48"
 serde = { version = "1", features = ["derive"] }

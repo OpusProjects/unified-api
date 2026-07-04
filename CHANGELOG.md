@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Prometheus metrics at `GET /metrics`: counters and duration histograms for
+  syncs, enricher runs and output endpoint runs
+
 ## [0.1.0] - 2026-07-04
 
 First tagged release.

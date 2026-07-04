@@ -82,6 +82,9 @@ impl AppBuilder {
     // Also returns the AppState: needed by main (to start the scheduler on the
     // same state) and tests that prepare the cache
     pub fn build_with_state(self) -> (Router<()>, Arc<AppState>) {
+        // Install the metrics recorder before anything can record
+        adapters::http::metrics::init();
+
         let state = Arc::new(AppState {
             cache: Arc::new(MemoryCache::new()),
             connector: Arc::new(ProcessConnector::new()),

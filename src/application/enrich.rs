@@ -29,6 +29,33 @@ pub async fn run_enricher(
     enricher_port: &dyn EnricherPort,
     enricher: &Enricher,
 ) -> Option<EnrichOutcome> {
+    let outcome = execute_enricher(cache, enricher_port, enricher).await?;
+
+    let result_label = if outcome.success() {
+        "success"
+    } else {
+        "error"
+    };
+    metrics::counter!(
+        "unified_api_enrich_total",
+        "source" => enricher.source_id.clone(),
+        "result" => result_label,
+    )
+    .increment(1);
+    metrics::histogram!(
+        "unified_api_enrich_duration_seconds",
+        "source" => enricher.source_id.clone(),
+    )
+    .record(outcome.duration_ms as f64 / 1000.0);
+
+    Some(outcome)
+}
+
+async fn execute_enricher(
+    cache: &dyn CachePort,
+    enricher_port: &dyn EnricherPort,
+    enricher: &Enricher,
+) -> Option<EnrichOutcome> {
     // Read snapshot: the enricher runs a script and takes time, we cannot
     // hold the cache lock while it runs. The merge below is atomic, so
     // concurrent writes during execution are not lost (the enricher only

@@ -48,6 +48,7 @@ pub fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz))
+        .route("/metrics", get(http::metrics::metrics))
         .merge(api_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(

@@ -69,6 +69,39 @@ pub async fn sync_source(
     source: &Source,
     scope: SyncScope,
 ) -> SyncOutcome {
+    let outcome = run_sync(cache, connector, secrets, source_id, source, scope).await;
+
+    // One counter per outcome and a duration histogram, labeled by source.
+    // The metrics facade works like tracing: recording here is fine for the
+    // application layer, the exporter lives in the adapters.
+    let result_label = if outcome.success() {
+        "success"
+    } else {
+        "error"
+    };
+    metrics::counter!(
+        "unified_api_sync_total",
+        "source" => source_id.to_string(),
+        "result" => result_label,
+    )
+    .increment(1);
+    metrics::histogram!(
+        "unified_api_sync_duration_seconds",
+        "source" => source_id.to_string(),
+    )
+    .record(outcome.duration_ms as f64 / 1000.0);
+
+    outcome
+}
+
+async fn run_sync(
+    cache: &dyn CachePort,
+    connector: &dyn ConnectorPort,
+    secrets: &dyn SecretsPort,
+    source_id: &str,
+    source: &Source,
+    scope: SyncScope,
+) -> SyncOutcome {
     let scope_label = scope.label();
 
     // The scope travels to the connector script via its config

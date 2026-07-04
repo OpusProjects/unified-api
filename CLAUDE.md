@@ -10,7 +10,7 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 
 - **GitHub Org:** [OpusProjects](https://github.com/OpusProjects)
 - **License:** Apache 2.0
-- **Owners:** Fernando Roca and Blai
+- **Owners:** Fernando Roca and Blai Peidro
 
 ## Tech stack
 
@@ -20,15 +20,23 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 - dashmap (concurrent in-memory cache)
 - serde + serde_json + serde_yaml (serialization)
 - utoipa (OpenAPI/Swagger docs)
+- russh (native SSH connector)
+- metrics + metrics-exporter-prometheus (`/metrics`)
+- subtle (constant-time API key comparison)
 
 ## Build & run
 
 ```bash
 cargo build              # compile
-cargo run                # compile + run
+cargo run                # compile + run (reads ./config, or $CONFIG_DIR)
 cargo test               # run tests
-cargo run -- --config config/config.yaml  # run with config (future)
+CONFIG_DIR=/etc/unified-api cargo run   # config from a different directory
 ```
+
+CI gates every PR on `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test`, and `cargo audit` (RUSTSEC; ignores documented in `.cargo/audit.toml`),
+then builds the Docker image (push only on `main`/tags). Run all four locally before
+pushing. Releases are cut by tagging `vX.Y.Z` (see CONTRIBUTING.md).
 
 ## Project structure
 
@@ -59,7 +67,7 @@ src/
 │   └── secrets.rs       # SecretsPort
 ├── adapters/            # Everything that touches the outside world
 │   ├── http/            # Driving: axum handlers, auth, routes, OpenAPI spec
-│   │   ├── routes.rs    # Router assembly
+│   │   ├── routes.rs    # Router assembly (+ optional CORS layer)
 │   │   ├── openapi.rs   # utoipa ApiDoc (register new handlers here)
 │   │   ├── sources.rs   # Read endpoints (list/dataset/status)
 │   │   ├── sync.rs      # POST sync
@@ -67,6 +75,7 @@ src/
 │   │   ├── hosts.rs     # PUT/DELETE host
 │   │   ├── endpoints.rs # Output endpoints
 │   │   ├── health.rs    # /healthz, /readyz
+│   │   ├── metrics.rs   # /metrics (Prometheus exporter, installed once)
 │   │   └── auth.rs      # API key middleware
 │   ├── scheduler.rs     # Driving: interval-based sync/enrich (calls application/)
 │   ├── memory_cache.rs  # CachePort → DashMap
@@ -77,8 +86,10 @@ src/
 │   ├── env_secrets.rs   # SecretsPort → env vars / JSON files
 │   └── mock_secrets.rs  # SecretsPort test double (AppBuilder default)
 config/                  # Split YAML config (server, credentials, sources, etc.)
-test-connectors/         # Fake connector scripts for testing
+test-connectors/         # Fake connector scripts for testing (incl. fake_slow.py)
 tests/                   # Integration tests
+.cargo/audit.toml        # cargo-audit ignore list (documented advisories)
+CHANGELOG.md             # Keep a Changelog; move Unreleased entries on release
 ```
 
 ## Architecture
@@ -90,7 +101,22 @@ translators that call it; don't put orchestration logic in either.
 No external data dependencies (no Redis, no PostgreSQL). All cache in-memory with DashMap.
 Cache mutations must use the atomic `CachePort::update`/`merge_or_insert` operations —
 never the get → modify → set pattern (it loses concurrent writes).
-Configuration from YAML files, secrets from HashiCorp Vault.
+Configuration from YAML files; secrets resolved from env vars / JSON files via
+`SecretsPort` (a Vault adapter is roadmap, not built).
+
+## Runtime behavior worth knowing
+
+- **Execution timeouts:** every connector/enricher/output run is bounded by
+  `timeout_seconds` (default 300); a hung script fails the run instead of blocking
+  its scheduler task or HTTP request.
+- **Metrics:** `GET /metrics` (Prometheus, public like the health probes) — sync,
+  enrich and endpoint counters + duration histograms. The recorder is a process
+  global installed once via `OnceLock`, so tests building many apps share it.
+- **CORS is off by default:** opt in with `server.cors_allowed_origins` (`["*"]`
+  = any). No configured origins = no CORS layer at all.
+- **Auth:** optional static key (`UNIFIED_API_KEY`); constant-time compare;
+  `/healthz`, `/readyz`, `/metrics` and Swagger stay public.
+- **OpenAPI version** comes from `CARGO_PKG_VERSION` — bump only `Cargo.toml`.
 
 ## Conventions
 

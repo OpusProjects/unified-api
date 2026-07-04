@@ -9,12 +9,11 @@ Lightweight infrastructure inventory aggregation and caching middleware, written
 
 Unified API ingests inventory data from sources of truth like Device42, VMware,
 Pure Storage, ad-hoc scripts or SSH facts, caches and enriches it in memory, and
-serves it through a fast REST API to consumers like AWX and AnsibleForms.
+serves it through a fast REST API to consumers like AWX and AnsibleForms — so every
+automation tool works from the same fresh, consistent view of the infrastructure
+without each run hammering the upstream systems of record behind it.
 
-Every automation tool gets the same fresh view of the infrastructure, with zero
-extra load on the backends.
-
-## Features
+## ✨ Features
 
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
 - **SSH connector**: gathers Ansible facts from whole fleets in parallel
@@ -25,7 +24,7 @@ extra load on the backends.
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
 
-## Quick start
+## 🚀 Quick start
 
 ```bash
 cargo run                      # uses ./config; demo sources run against test-connectors/
@@ -46,7 +45,7 @@ Or with Docker:
 docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 ```
 
-## Documentation
+## 📚 Documentation
 
 | Document | What it covers |
 |---|---|
@@ -57,25 +56,19 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 | [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides and atomicity rules |
 | [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
 
-## Contributing
+## 🤝 Contributing
 
 Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the PR workflow, commit style, CI gates and architecture rules.
 
 Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
 
-## Project status
-
-- Actively developed
-- The `/api/v1` surface is functional but not yet frozen
-- On the roadmap: HashiCorp Vault secrets and git-cloned connector projects
-
-## Authors
+## 👥 Authors
 
 - [Fernando Roca](https://github.com/fernandorocagonzalez)
 - [Blai Peidro](https://github.com/blaipr)
 
 Part of [OpusProjects](https://github.com/OpusProjects).
 
-## License
+## ⚖️ License
 
 [Apache 2.0](LICENSE)

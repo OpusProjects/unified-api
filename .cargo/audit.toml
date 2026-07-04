@@ -1,0 +1,11 @@
+# cargo-audit configuration, honored by both local `cargo audit` and the
+# rustsec/audit-check CI job.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack timing sidechannel in the `rsa` crate.
+    # Transitive via russh (RSA SSH key support); no fixed release exists yet.
+    # We use it only as an SSH client for public-key auth, not for RSA
+    # decryption of attacker-influenced ciphertext, so the sidechannel is not
+    # reachable in our usage. Revisit when an rsa fix ships.
+    "RUSTSEC-2023-0071",
+]

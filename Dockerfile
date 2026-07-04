@@ -1,5 +1,5 @@
 # Stage 1: build
-FROM rust:1.88-slim AS builder
+FROM rust:1.96-slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /var/lib/apt/lists/*
 
@@ -11,7 +11,7 @@ COPY src/ src/
 RUN touch src/main.rs && cargo build --release
 
 # Stage 2: runtime
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y ca-certificates python3 && rm -rf /var/lib/apt/lists/*
 

@@ -1,6 +1,8 @@
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 
 use crate::domain::cache_entry::CacheEntry;
+use crate::domain::dataset::Dataset;
 use crate::ports::cache::CachePort;
 
 // MemoryCache es nuestra implementación concreta de CachePort.
@@ -44,6 +46,35 @@ impl CachePort for MemoryCache {
         // .collect() junta los resultados en un Vec
         // Es como: [entry.key().clone() for entry in store.items()] en Python
         self.store.iter().map(|entry| entry.key().clone()).collect()
+    }
+
+    fn update(&self, key: &str, f: &mut dyn FnMut(&mut CacheEntry)) -> bool {
+        // .get_mut() bloquea el shard del DashMap mientras el guard viva,
+        // así que `f` modifica la entrada real sin que nadie más escriba.
+        match self.store.get_mut(key) {
+            Some(mut guard) => {
+                f(guard.value_mut());
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn merge_or_insert(
+        &self,
+        key: &str,
+        dataset: Dataset,
+        ttl_seconds: u64,
+        f: &mut dyn FnMut(&mut CacheEntry, Dataset),
+    ) {
+        // La entry API es como dict.setdefault de Python pero con lock:
+        // decide "existe / no existe" y actúa, todo bajo el mismo lock.
+        match self.store.entry(key.to_string()) {
+            Entry::Occupied(mut occupied) => f(occupied.get_mut(), dataset),
+            Entry::Vacant(vacant) => {
+                vacant.insert(CacheEntry::new(dataset, ttl_seconds));
+            }
+        }
     }
 }
 
@@ -108,5 +139,90 @@ mod tests {
 
         let entry = cache.get("src-1").unwrap(); // unwrap aquí es seguro, sabemos que existe
         assert_eq!(entry.ttl.as_secs(), 999);
+    }
+
+    #[test]
+    fn update_missing_key_returns_false() {
+        let cache = MemoryCache::new();
+        let called = cache.update("no-existe", &mut |_entry| {
+            panic!("el closure no debe ejecutarse si la clave no existe");
+        });
+        assert!(!called);
+    }
+
+    #[test]
+    fn update_mutates_entry_in_place() {
+        let cache = MemoryCache::new();
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+
+        let called = cache.update("src-1", &mut |entry| {
+            entry.update_host("host-a".to_string(), HashMap::new());
+        });
+
+        assert!(called);
+        let entry = cache.get("src-1").unwrap();
+        assert!(entry.dataset.hostvars.contains_key("host-a"));
+    }
+
+    #[test]
+    fn merge_or_insert_inserts_when_vacant() {
+        let cache = MemoryCache::new();
+
+        cache.merge_or_insert("src-1", empty_dataset(), 123, &mut |_entry, _new| {
+            panic!("el closure no debe ejecutarse si la clave no existe");
+        });
+
+        let entry = cache.get("src-1").unwrap();
+        assert_eq!(entry.ttl.as_secs(), 123);
+    }
+
+    #[test]
+    fn merge_or_insert_merges_when_occupied() {
+        let cache = MemoryCache::new();
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+
+        let mut partial = empty_dataset();
+        partial.hostvars.insert("host-b".to_string(), HashMap::new());
+
+        cache.merge_or_insert("src-1", partial, 3600, &mut |entry, new| {
+            entry.merge_dataset(new);
+        });
+
+        let entry = cache.get("src-1").unwrap();
+        assert!(entry.dataset.hostvars.contains_key("host-b"));
+        // El TTL original se conserva: no se creó una entrada nueva
+        assert_eq!(entry.ttl.as_secs(), 3600);
+    }
+
+    // Este test demuestra el bug que update() arregla: con el patrón antiguo
+    // get → modificar copia → set, escritores concurrentes se pisan y se
+    // pierden hosts. Con update() cada escritura es atómica y no se pierde nada.
+    #[test]
+    fn concurrent_updates_do_not_lose_writes() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let cache = Arc::new(MemoryCache::new());
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let cache = Arc::clone(&cache);
+                thread::spawn(move || {
+                    for i in 0..50 {
+                        cache.update("src-1", &mut |entry| {
+                            entry.update_host(format!("host-{}-{}", t, i), HashMap::new());
+                        });
+                    }
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        let entry = cache.get("src-1").unwrap();
+        assert_eq!(entry.dataset.hostvars.len(), 8 * 50);
     }
 }

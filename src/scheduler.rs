@@ -65,12 +65,14 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                                 state.cache.set(&source_id, CacheEntry::new(dataset, ttl_seconds));
                             }
                             SyncMode::Merge => {
-                                if let Some(mut entry) = state.cache.get(&source_id) {
-                                    entry.merge_dataset(dataset);
-                                    state.cache.set(&source_id, entry);
-                                } else {
-                                    state.cache.set(&source_id, CacheEntry::new(dataset, ttl_seconds));
-                                }
+                                // merge_or_insert es atómico: no pisa escrituras
+                                // concurrentes de la API o de un enricher
+                                state.cache.merge_or_insert(
+                                    &source_id,
+                                    dataset,
+                                    ttl_seconds,
+                                    &mut |entry, new| entry.merge_dataset(new),
+                                );
                             }
                         }
 
@@ -124,10 +126,12 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                         let updated = partial_dataset.hostvars.len();
                         let removed = partial_dataset.remove_hosts.len();
 
-                        if let Some(mut entry) = state.cache.get(&source_id) {
-                            entry.merge_dataset(partial_dataset);
-                            state.cache.set(&source_id, entry);
-                        }
+                        let mut partial = Some(partial_dataset);
+                        state.cache.update(&source_id, &mut |entry| {
+                            if let Some(p) = partial.take() {
+                                entry.merge_dataset(p);
+                            }
+                        });
 
                         info!(enricher = %enricher_id, hosts_updated = updated, hosts_removed = removed, "Enriched");
                     }

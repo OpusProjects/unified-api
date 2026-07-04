@@ -261,34 +261,40 @@ pub async fn sync_source(
             let total_hosts = dataset.hostvars.len();
             let total_groups = dataset.groups.len();
 
+            // Todas las fusiones van por merge_or_insert: la decisión
+            // "¿existe la entrada?" y la modificación ocurren bajo el mismo
+            // lock, así que un sync concurrente no puede pisar esta escritura.
             if let Some(ref host) = params.host {
-                if let Some(vars) = dataset.hostvars.get(host) {
-                    if let Some(mut entry) = state.cache.get(&id) {
-                        entry.update_host(host.clone(), vars.clone());
-                        state.cache.set(&id, entry);
-                    } else {
-                        state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
-                    }
+                // Solo cacheamos si el connector devolvió el host pedido
+                if let Some(vars) = dataset.hostvars.get(host).cloned() {
+                    let hostname = host.clone();
+                    state.cache.merge_or_insert(
+                        &id,
+                        dataset,
+                        source.ttl_seconds,
+                        &mut |entry, _new| entry.update_host(hostname.clone(), vars.clone()),
+                    );
                 }
             } else if let Some(ref group) = params.group {
-                if let Some(mut entry) = state.cache.get(&id) {
-                    entry.update_group(group, dataset);
-                    state.cache.set(&id, entry);
-                } else {
-                    state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
-                }
+                let group_name = group.clone();
+                state.cache.merge_or_insert(
+                    &id,
+                    dataset,
+                    source.ttl_seconds,
+                    &mut |entry, new| entry.update_group(&group_name, new),
+                );
             } else {
                 match source.sync_mode {
                     SyncMode::Replace => {
                         state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
                     }
                     SyncMode::Merge => {
-                        if let Some(mut entry) = state.cache.get(&id) {
-                            entry.merge_dataset(dataset);
-                            state.cache.set(&id, entry);
-                        } else {
-                            state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
-                        }
+                        state.cache.merge_or_insert(
+                            &id,
+                            dataset,
+                            source.ttl_seconds,
+                            &mut |entry, new| entry.merge_dataset(new),
+                        );
                     }
                 }
             }
@@ -364,10 +370,15 @@ pub async fn run_enricher(
             let hosts_updated = partial_dataset.hostvars.len();
             let hosts_removed = partial_dataset.remove_hosts.len();
 
-            if let Some(mut entry) = state.cache.get(&source_id) {
-                entry.merge_dataset(partial_dataset);
-                state.cache.set(&source_id, entry);
-            }
+            // Option::take dentro del closure: merge_dataset consume el dataset
+            // (por valor) pero un FnMut no puede mover lo que captura — con el
+            // Option lo "sacamos" una única vez.
+            let mut partial = Some(partial_dataset);
+            state.cache.update(&source_id, &mut |entry| {
+                if let Some(p) = partial.take() {
+                    entry.merge_dataset(p);
+                }
+            });
 
             Ok(Json(EnrichResult {
                 source_id,
@@ -412,9 +423,15 @@ pub async fn put_host(
     Path((id, hostname)): Path<(String, String)>,
     Json(vars): Json<HostVars>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    entry.update_host(hostname, vars);
-    state.cache.set(&id, entry);
+    let mut vars = Some(vars);
+    let found = state.cache.update(&id, &mut |entry| {
+        if let Some(v) = vars.take() {
+            entry.update_host(hostname.clone(), v);
+        }
+    });
+    if !found {
+        return Err(StatusCode::NOT_FOUND);
+    }
     Ok(StatusCode::OK)
 }
 
@@ -435,12 +452,18 @@ pub async fn delete_host(
     State(state): State<Arc<AppState>>,
     Path((id, hostname)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
-    let mut entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    if !entry.dataset.hostvars.contains_key(&hostname) {
+    // La comprobación "¿existe el host?" y el borrado van dentro del mismo
+    // update() — comprobar fuera con get() sería otra ventana de carrera.
+    let mut removed = false;
+    let found = state.cache.update(&id, &mut |entry| {
+        if entry.dataset.hostvars.contains_key(&hostname) {
+            entry.remove_host(&hostname);
+            removed = true;
+        }
+    });
+    if !found || !removed {
         return Err(StatusCode::NOT_FOUND);
     }
-    entry.remove_host(&hostname);
-    state.cache.set(&id, entry);
     Ok(StatusCode::OK)
 }
 

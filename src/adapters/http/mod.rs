@@ -5,6 +5,7 @@ pub mod endpoints;
 pub mod enrichers;
 pub mod health;
 pub mod hosts;
+pub mod metrics;
 pub mod openapi;
 pub mod routes;
 pub mod sources;

@@ -58,4 +58,19 @@ in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
 
 Structured logs via `tracing` to stdout; tune with `RUST_LOG` (e.g.
 `unified_api=debug`). Sync and enrich outcomes are logged with source ids, host
-counts and durations. There is no metrics endpoint yet.
+counts and durations.
+
+**Prometheus metrics** are exposed at `GET /metrics` (public, like the health
+probes — scrapers don't carry the API key):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `unified_api_sync_total` | `source`, `result` | Sync runs, success vs error |
+| `unified_api_sync_duration_seconds` | `source` | Sync duration histogram |
+| `unified_api_enrich_total` | `source`, `result` | Enricher runs |
+| `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |
+| `unified_api_endpoint_total` | `endpoint`, `result` | Output endpoint runs |
+| `unified_api_endpoint_duration_seconds` | `endpoint` | Endpoint duration histogram |
+
+Timed-out and failed runs count as `result="error"`, so alerting on the error
+rate catches hung connectors too.

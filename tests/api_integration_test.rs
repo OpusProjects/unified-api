@@ -223,3 +223,49 @@ async fn openapi_version_matches_crate_version() {
     let spec: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(spec["info"]["version"], env!("CARGO_PKG_VERSION"));
 }
+
+// =========================================================================
+// Test: /metrics exposes sync counters after a sync runs
+// =========================================================================
+#[tokio::test]
+async fn metrics_exposes_sync_counters() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert(
+        "src-metrics".to_string(),
+        unified_api::domain::source::Source {
+            name: "Metrics Test".to_string(),
+            project_id: "test".to_string(),
+            script_path: "test-connectors/fake_inventory.py".to_string(),
+            connector_type: unified_api::domain::source::ConnectorType::Script,
+            sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
+            credential_ids: vec![],
+            schedule: None,
+            sync_interval_seconds: None,
+            ttl_seconds: 3600,
+            timeout_seconds: 300,
+            ttl_overrides: Default::default(),
+            config: std::collections::HashMap::new(),
+        },
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    // Run a sync so there is something to measure
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-metrics/sync")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (status, body) = get(app, "/metrics").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("unified_api_sync_total"),
+        "missing counter in: {}",
+        body
+    );
+    assert!(body.contains("unified_api_sync_duration_seconds"));
+    assert!(body.contains("src-metrics"));
+}

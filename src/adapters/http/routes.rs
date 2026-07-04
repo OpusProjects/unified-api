@@ -7,7 +7,8 @@ use axum::{
     routing::{get, post, put},
 };
 use tower_http::cors::{Any, CorsLayer};
-use tracing::warn;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::{Level, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -62,10 +63,19 @@ pub fn create_router(
     // No configured origins = no CORS layer: the browser same-origin policy
     // applies and server-to-server consumers are unaffected. This replaces
     // the old always-on allow-anything layer.
-    match cors_layer(&cors_allowed_origins) {
+    let router = match cors_layer(&cors_allowed_origins) {
         Some(cors) => router.layer(cors),
         None => router,
-    }
+    };
+
+    // Outermost layer: one span + response log per request (method, path,
+    // status, latency) at INFO, so there are access logs, not just business
+    // logs. Tune verbosity with RUST_LOG (e.g. tower_http=debug for bodies).
+    router.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+    )
 }
 
 fn cors_layer(origins: &[String]) -> Option<CorsLayer> {

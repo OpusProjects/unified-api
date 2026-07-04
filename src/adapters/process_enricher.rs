@@ -30,9 +30,16 @@ impl EnricherPort for ProcessEnricher {
     ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>> {
         let script_path = script_path.to_string();
         let config = config.clone();
-        let dataset_json = serde_json::to_string(current_dataset).unwrap_or_default();
+        let current_dataset = current_dataset.clone();
 
         Box::pin(async move {
+            // Propagate a serialization failure instead of silently sending the
+            // script an empty stdin (which would look like an empty dataset).
+            let dataset_json =
+                serde_json::to_string(&current_dataset).map_err(|e| EnricherError {
+                    message: format!("Failed to serialize dataset: {}", e),
+                })?;
+
             let config_json = serde_json::to_string(&config).map_err(|e| EnricherError {
                 message: format!("Failed to serialize config: {}", e),
             })?;

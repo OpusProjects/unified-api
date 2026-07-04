@@ -7,30 +7,29 @@
 
 Lightweight infrastructure inventory aggregation and caching middleware, written in Rust.
 
-Unified API ingests inventory data from multiple sources of truth (Device42, VMware,
-Pure Storage, ad-hoc scripts, SSH facts...), caches and enriches it in memory, and serves
-it through a fast REST API to consumers like AWX and AnsibleForms — so every automation
-tool sees the same, fresh view of the infrastructure without hammering the backends.
+Unified API ingests inventory data from sources of truth like Device42, VMware,
+Pure Storage, ad-hoc scripts or SSH facts, caches and enriches it in memory, and
+serves it through a fast REST API to consumers like AWX and AnsibleForms.
+
+Every automation tool gets the same fresh view of the infrastructure, with zero
+extra load on the backends.
 
 ## Features
 
-- **Pluggable sources** — any executable that prints inventory JSON is a connector;
-  a native SSH connector gathers Ansible facts from fleets in parallel
-- **In-memory cache with TTLs** — per-dataset, per-host and per-group freshness,
-  no Redis or database required
-- **Enrichers** — post-process cached data on a schedule or on demand
-- **Output endpoints** — transform one or more cached datasets into whatever format
-  a consumer needs (e.g. a merged Ansible inventory)
-- **Scheduled + on-demand sync** — background interval sync per source, plus
-  full/host/group-scoped sync over the API
-- **Swagger UI** — interactive OpenAPI docs served at `/swagger-ui/`
-- **Single static binary** — axum + tokio, hexagonal architecture, ~3k lines
+- **Pluggable sources**: any executable that prints inventory JSON is a connector
+- **SSH connector**: gathers Ansible facts from whole fleets in parallel
+- **In-memory cache with TTLs**: per-dataset, per-host and per-group freshness, no database
+- **Enrichers**: post-process cached data on a schedule or on demand
+- **Output endpoints**: turn cached datasets into the format each consumer needs
+- **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
+- **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
+- **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
 
 ## Quick start
 
 ```bash
 cargo run                      # uses ./config; demo sources run against test-connectors/
-# open http://localhost:8182/  → redirects to Swagger UI
+# open http://localhost:8182/  -> redirects to Swagger UI
 ```
 
 Sync a source and read it back:
@@ -51,19 +50,20 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 
 | Document | What it covers |
 |---|---|
-| [Architecture](docs/architecture.md) | The hexagon: domain / application / ports / adapters, dependency rules, request flows, concurrency model |
-| [Configuration](docs/configuration.md) | Every YAML file and field, environment variables, startup validation |
+| [Architecture](docs/architecture.md) | Layers, dependency rules, request flows, concurrency model |
+| [Configuration](docs/configuration.md) | Every YAML file and field, env vars, startup validation |
 | [REST API](docs/api.md) | Endpoints, authentication, request/response examples |
-| [Connectors, enrichers & outputs](docs/connectors.md) | The script contracts: how to write a source connector, an enricher, or an output transformer |
-| [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides, atomicity guarantees |
-| [Deployment](docs/deployment.md) | Docker image, CI/CD pipeline, Kubernetes notes, secrets injection |
+| [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and outputs |
+| [Caching & TTLs](docs/caching.md) | Freshness model, sync modes, TTL overrides, atomicity |
+| [Deployment](docs/deployment.md) | Docker image, CI/CD pipeline, Kubernetes notes, secrets |
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project status
 
-Actively developed. The API surface under `/api/v1` is functional but not yet frozen;
-HashiCorp Vault secrets resolution and git-cloned connector projects are on the roadmap.
+- Actively developed
+- The `/api/v1` surface is functional but not yet frozen
+- On the roadmap: HashiCorp Vault secrets and git-cloned connector projects
 
 ## Authors
 

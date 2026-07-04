@@ -1,4 +1,4 @@
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use unified_api::adapters::env_secrets::EnvSecrets;
 
@@ -26,6 +26,11 @@ async fn main() {
     // The API key is read here, at the boundary: the rest of the app receives it
     // as a parameter and does not touch environment variables
     let api_key = std::env::var("UNIFIED_API_KEY").ok();
+
+    // Make an unauthenticated deployment loud, not a buried auth=false field
+    if api_key.is_none() {
+        warn!("UNIFIED_API_KEY is not set: the /api/v1 API is running WITHOUT authentication");
+    }
 
     info!(
         sources = cfg.sources.len(),

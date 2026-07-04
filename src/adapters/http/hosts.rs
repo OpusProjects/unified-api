@@ -1,10 +1,10 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use std::sync::Arc;
 
-use crate::domain::dataset::HostVars;
 use crate::AppState;
+use crate::domain::dataset::HostVars;
 
 // Alta y baja inmediata de hosts en el cache de un source
 

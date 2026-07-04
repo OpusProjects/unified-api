@@ -1,14 +1,14 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
 // Renombramos el caso de uso al importarlo porque el handler HTTP
 // que lo envuelve se llama igual (sync_source)
-use crate::application::sync::{sync_source as application_sync_source, SyncScope};
 use crate::AppState;
+use crate::application::sync::{SyncScope, sync_source as application_sync_source};
 
 // IntoParams = utoipa genera la documentación de los query params
 // Cada campo Option<String> aparece como parámetro opcional en Swagger

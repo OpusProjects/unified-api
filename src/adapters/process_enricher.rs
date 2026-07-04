@@ -9,6 +9,12 @@ use crate::ports::enricher::{EnricherError, EnricherPort, EnricherResult};
 
 pub struct ProcessEnricher;
 
+impl Default for ProcessEnricher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessEnricher {
     pub fn new() -> Self {
         Self
@@ -46,9 +52,12 @@ impl EnricherPort for ProcessEnricher {
 
             // Escribimos el dataset por stdin
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(dataset_json.as_bytes()).await.map_err(|e| EnricherError {
-                    message: format!("Failed to write to enricher stdin: {}", e),
-                })?;
+                stdin
+                    .write_all(dataset_json.as_bytes())
+                    .await
+                    .map_err(|e| EnricherError {
+                        message: format!("Failed to write to enricher stdin: {}", e),
+                    })?;
                 // drop(stdin) cierra el pipe — el script sabe que no hay más input
             }
 

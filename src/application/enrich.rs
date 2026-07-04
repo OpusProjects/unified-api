@@ -36,7 +36,11 @@ pub async fn run_enricher(
     let start = Instant::now();
 
     let result = enricher_port
-        .execute(&enricher.script_path, &enricher.config, &current_entry.dataset)
+        .execute(
+            &enricher.script_path,
+            &enricher.config,
+            &current_entry.dataset,
+        )
         .await;
 
     let duration_ms = start.elapsed().as_millis();

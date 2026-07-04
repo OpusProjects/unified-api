@@ -139,24 +139,18 @@ fn apply_to_cache(
             }
         }
         SyncScope::Group(group) => {
-            cache.merge_or_insert(
-                source_id,
-                dataset,
-                source.ttl_seconds,
-                &mut |entry, new| entry.update_group(group, new),
-            );
+            cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {
+                entry.update_group(group, new)
+            });
         }
         SyncScope::Full => match source.sync_mode {
             SyncMode::Replace => {
                 cache.set(source_id, CacheEntry::new(dataset, source.ttl_seconds));
             }
             SyncMode::Merge => {
-                cache.merge_or_insert(
-                    source_id,
-                    dataset,
-                    source.ttl_seconds,
-                    &mut |entry, new| entry.merge_dataset(new),
-                );
+                cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {
+                    entry.merge_dataset(new)
+                });
             }
         },
     }

@@ -87,13 +87,13 @@ impl AppConfig {
 
         // Private projects must reference existing credentials
         for (id, project) in &self.projects {
-            if let Some(ref cred_id) = project.credential_id {
-                if !self.credentials.contains_key(cred_id) {
-                    errors.push(format!(
-                        "Project '{}' references unknown credential '{}'",
-                        id, cred_id
-                    ));
-                }
+            if let Some(ref cred_id) = project.credential_id
+                && !self.credentials.contains_key(cred_id)
+            {
+                errors.push(format!(
+                    "Project '{}' references unknown credential '{}'",
+                    id, cred_id
+                ));
             }
         }
 
@@ -133,7 +133,9 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
 }
 
 // Lee y parsea un archivo YAML — falla si no existe
-fn load_yaml_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Box<dyn std::error::Error>> {
+fn load_yaml_file<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Result<T, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(path)?;
     let parsed = serde_yaml::from_str(&contents)?;
     Ok(parsed)
@@ -169,13 +171,15 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Escribimos credentials.yaml con formato mapa
         fs::write(
             dir.path().join("credentials.yaml"),
             "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  vault_path: \"secret/test\"\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         // dir.path().to_str() convierte el Path a &str
         let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
@@ -201,7 +205,8 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
             "enrich-test:\n  name: \"Test\"\n  source_id: \"src-nonexistent\"\n  script_path: \"test.py\"\n",
@@ -219,7 +224,8 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
             "ep-test:\n  name: \"Test\"\n  source_ids: [\"src-ghost\"]\n  script_path: \"test.py\"\n",
@@ -237,7 +243,8 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         // sources.yaml declara un project_id que no existe en projects.yaml
         fs::write(
             dir.path().join("sources.yaml"),
@@ -256,7 +263,8 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
             "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n  credential_id: \"cred-ghost\"\n",
@@ -274,11 +282,13 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
             "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
             "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
@@ -294,7 +304,8 @@ mod tests {
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        ).unwrap();
+        )
+        .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
             "src-test:\n  name: \"Test\"\n  project_id: \"p\"\n  script_path: \"test.py\"\n  credential_ids: [\"cred-missing\"]\n  ttl_seconds: 60\n",

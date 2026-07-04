@@ -7,10 +7,7 @@ use subtle::ConstantTimeEq;
 #[derive(Clone)]
 pub struct ApiKey(pub Option<String>);
 
-pub async fn require_api_key(
-    request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
+pub async fn require_api_key(request: Request, next: Next) -> Result<Response, StatusCode> {
     let api_key = request
         .extensions()
         .get::<ApiKey>()
@@ -47,11 +44,11 @@ pub async fn require_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use axum::middleware;
     use axum::routing::get;
-    use axum::Router;
     use tower::ServiceExt;
 
     async fn ok_handler() -> &'static str {

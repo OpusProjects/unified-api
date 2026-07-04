@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -36,9 +36,7 @@ pub struct ReadyStatus {
         (status = 503, description = "Service is not ready — sources pending sync", body = ReadyStatus)
     )
 )]
-pub async fn readyz(
-    State(state): State<Arc<AppState>>,
-) -> (StatusCode, Json<ReadyStatus>) {
+pub async fn readyz(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ReadyStatus>) {
     let sources_total = state.sources.len();
 
     let sources_pending: Vec<String> = state
@@ -59,10 +57,13 @@ pub async fn readyz(
         StatusCode::SERVICE_UNAVAILABLE
     };
 
-    (status, Json(ReadyStatus {
-        ready,
-        sources_total,
-        sources_synced,
-        sources_pending,
-    }))
+    (
+        status,
+        Json(ReadyStatus {
+            ready,
+            sources_total,
+            sources_synced,
+            sources_pending,
+        }),
+    )
 }

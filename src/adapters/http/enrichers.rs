@@ -1,14 +1,14 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
 // Renombramos el caso de uso al importarlo porque el handler HTTP
 // que lo envuelve se llama igual (run_enricher)
-use crate::application::enrich::run_enricher as application_run_enricher;
 use crate::AppState;
+use crate::application::enrich::run_enricher as application_run_enricher;
 
 #[derive(Serialize, ToSchema)]
 pub struct EnrichResult {

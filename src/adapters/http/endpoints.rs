@@ -1,15 +1,15 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use utoipa::ToSchema;
 
-use crate::domain::dataset::Dataset;
 use crate::AppState;
+use crate::domain::dataset::Dataset;
 
 #[derive(Serialize, ToSchema)]
 pub struct EndpointInfo {
@@ -28,9 +28,7 @@ pub struct EndpointInfo {
         (status = 200, description = "List configured endpoints", body = Vec<EndpointInfo>)
     )
 )]
-pub async fn list_endpoints(
-    State(state): State<Arc<AppState>>,
-) -> Json<Vec<EndpointInfo>> {
+pub async fn list_endpoints(State(state): State<Arc<AppState>>) -> Json<Vec<EndpointInfo>> {
     let mut endpoints: Vec<EndpointInfo> = state
         .endpoints
         .iter()
@@ -121,13 +119,10 @@ pub async fn run_endpoint(
                     StatusCode::OK,
                     [("content-type", "application/json")],
                     output,
-                ).into_response())
+                )
+                    .into_response())
             } else {
-                Ok((
-                    StatusCode::OK,
-                    [("content-type", "text/plain")],
-                    output,
-                ).into_response())
+                Ok((StatusCode::OK, [("content-type", "text/plain")], output).into_response())
             }
         }
         Err(e) => {

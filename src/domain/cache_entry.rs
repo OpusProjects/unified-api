@@ -123,10 +123,10 @@ impl CacheEntry {
         }
 
         // Actualizamos las vars del grupo si vienen
-        if let Some(new_group) = partial_dataset.groups.get(group_name) {
-            if let Some(existing_group) = self.dataset.groups.get_mut(group_name) {
-                existing_group.vars = new_group.vars.clone();
-            }
+        if let Some(new_group) = partial_dataset.groups.get(group_name)
+            && let Some(existing_group) = self.dataset.groups.get_mut(group_name)
+        {
+            existing_group.vars = new_group.vars.clone();
         }
     }
 }
@@ -232,7 +232,10 @@ mod tests {
         // El timestamp debe haber cambiado
         assert!(entry.host_timestamps["motoko.section9.net"] > original_ts);
         // Los vars deben estar actualizados
-        assert_eq!(entry.dataset.hostvars["motoko.section9.net"]["role"], "upgraded");
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["role"],
+            "upgraded"
+        );
     }
 
     #[test]
@@ -249,15 +252,22 @@ mod tests {
         let partial = Dataset {
             hostvars: [(
                 "togusa.section9.net".to_string(),
-                [("role".to_string(), serde_json::json!("detective"))].into_iter().collect(),
-            )].into_iter().collect(),
+                [("role".to_string(), serde_json::json!("detective"))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
             groups: HashMap::new(),
             remove_hosts: vec![],
         };
 
         entry.merge_dataset(partial);
         assert_eq!(entry.dataset.hostvars.len(), 3);
-        assert_eq!(entry.dataset.hostvars["togusa.section9.net"]["role"], "detective");
+        assert_eq!(
+            entry.dataset.hostvars["togusa.section9.net"]["role"],
+            "detective"
+        );
     }
 
     #[test]
@@ -267,15 +277,22 @@ mod tests {
         let partial = Dataset {
             hostvars: [(
                 "motoko.section9.net".to_string(),
-                [("role".to_string(), serde_json::json!("major"))].into_iter().collect(),
-            )].into_iter().collect(),
+                [("role".to_string(), serde_json::json!("major"))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
             groups: HashMap::new(),
             remove_hosts: vec![],
         };
 
         entry.merge_dataset(partial);
         assert_eq!(entry.dataset.hostvars.len(), 2);
-        assert_eq!(entry.dataset.hostvars["motoko.section9.net"]["role"], "major");
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["role"],
+            "major"
+        );
     }
 
     #[test]
@@ -299,21 +316,30 @@ mod tests {
     fn remove_host_deletes_from_groups() {
         use crate::domain::dataset::Group;
 
-        let mut entry = CacheEntry::new(Dataset {
-            hostvars: [(
-                "motoko.section9.net".to_string(),
-                [("role".to_string(), serde_json::json!("commander"))].into_iter().collect(),
-            )].into_iter().collect(),
-            groups: [(
-                "section9".to_string(),
-                Group {
-                    hosts: vec!["motoko.section9.net".to_string()],
-                    children: vec![],
-                    vars: None,
-                },
-            )].into_iter().collect(),
-            remove_hosts: vec![],
-        }, 3600);
+        let mut entry = CacheEntry::new(
+            Dataset {
+                hostvars: [(
+                    "motoko.section9.net".to_string(),
+                    [("role".to_string(), serde_json::json!("commander"))]
+                        .into_iter()
+                        .collect(),
+                )]
+                .into_iter()
+                .collect(),
+                groups: [(
+                    "section9".to_string(),
+                    Group {
+                        hosts: vec!["motoko.section9.net".to_string()],
+                        children: vec![],
+                        vars: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                remove_hosts: vec![],
+            },
+            3600,
+        );
 
         entry.remove_host("motoko.section9.net");
         assert!(!entry.dataset.hostvars.contains_key("motoko.section9.net"));

@@ -34,7 +34,8 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
 fn app_with_demo_data() -> axum::Router {
     let (app, state) = unified_api::AppBuilder::new().build_with_state();
 
-    let demo_dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(r#"{
+    let demo_dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(
+        r#"{
         "hostvars": {
             "motoko.section9.net": {
                 "ansible_host": "10.9.1.1",
@@ -59,7 +60,9 @@ fn app_with_demo_data() -> axum::Router {
                 "vars": {"ntp_server": "ntp.seele.net"}
             }
         }
-    }"#).expect("Failed to parse demo dataset");
+    }"#,
+    )
+    .expect("Failed to parse demo dataset");
 
     state.cache.set(
         "src-demo",
@@ -99,19 +102,22 @@ async fn readyz_returns_ok_without_sources() {
 #[tokio::test]
 async fn readyz_returns_503_before_sync() {
     let mut sources = std::collections::HashMap::new();
-    sources.insert("src-test".to_string(), unified_api::domain::source::Source {
-        name: "Test".to_string(),
-        project_id: "test".to_string(),
-        script_path: "test-connectors/fake_inventory.py".to_string(),
-        connector_type: unified_api::domain::source::ConnectorType::Script,
-        sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
-        credential_ids: vec![],
-        schedule: None,
-        sync_interval_seconds: None,
-        ttl_seconds: 3600,
-        ttl_overrides: Default::default(),
-        config: std::collections::HashMap::new(),
-    });
+    sources.insert(
+        "src-test".to_string(),
+        unified_api::domain::source::Source {
+            name: "Test".to_string(),
+            project_id: "test".to_string(),
+            script_path: "test-connectors/fake_inventory.py".to_string(),
+            connector_type: unified_api::domain::source::ConnectorType::Script,
+            sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
+            credential_ids: vec![],
+            schedule: None,
+            sync_interval_seconds: None,
+            ttl_seconds: 3600,
+            ttl_overrides: Default::default(),
+            config: std::collections::HashMap::new(),
+        },
+    );
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (status, body) = get(app, "/readyz").await;

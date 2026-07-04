@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 
 use crate::domain::credential::Credential;
-use crate::ports::secrets::{SecretsError, SecretsPort};
+use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 
 // Lee secrets de env vars o ficheros JSON — sin dependencias externas.
 // La infraestructura (ESO → k8s Secret → envFrom, docker secrets, .env) inyecta los valores.
@@ -18,11 +16,7 @@ impl EnvSecrets {
 }
 
 impl SecretsPort for EnvSecrets {
-    fn resolve(
-        &self,
-        credential_id: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, String>, SecretsError>> + Send + '_>>
-    {
+    fn resolve(&self, credential_id: &str) -> SecretsFuture<'_> {
         let credential_id = credential_id.to_string();
 
         Box::pin(async move {
@@ -130,17 +124,22 @@ mod tests {
         }
 
         let mut credentials = HashMap::new();
-        credentials.insert("cred-test".to_string(), Credential {
-            name: "Test".to_string(),
-            credential_type: CredentialType::UsernamePassword,
-            env_prefix: Some("TEST_CRED".to_string()),
-            secret_file: None,
-            secret_keys: [
-                ("username".to_string(), "USERNAME".to_string()),
-                ("password".to_string(), "PASSWORD".to_string()),
-            ].into_iter().collect(),
-            file_keys: HashMap::new(),
-        });
+        credentials.insert(
+            "cred-test".to_string(),
+            Credential {
+                name: "Test".to_string(),
+                credential_type: CredentialType::UsernamePassword,
+                env_prefix: Some("TEST_CRED".to_string()),
+                secret_file: None,
+                secret_keys: [
+                    ("username".to_string(), "USERNAME".to_string()),
+                    ("password".to_string(), "PASSWORD".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                file_keys: HashMap::new(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-test").await.unwrap();
@@ -161,17 +160,22 @@ mod tests {
         std::fs::write(&secret_path, r#"{"USER": "dbadmin", "PASS": "dbpass"}"#).unwrap();
 
         let mut credentials = HashMap::new();
-        credentials.insert("cred-db".to_string(), Credential {
-            name: "DB".to_string(),
-            credential_type: CredentialType::UsernamePassword,
-            env_prefix: None,
-            secret_file: Some(secret_path.to_str().unwrap().to_string()),
-            secret_keys: [
-                ("username".to_string(), "USER".to_string()),
-                ("password".to_string(), "PASS".to_string()),
-            ].into_iter().collect(),
-            file_keys: HashMap::new(),
-        });
+        credentials.insert(
+            "cred-db".to_string(),
+            Credential {
+                name: "DB".to_string(),
+                credential_type: CredentialType::UsernamePassword,
+                env_prefix: None,
+                secret_file: Some(secret_path.to_str().unwrap().to_string()),
+                secret_keys: [
+                    ("username".to_string(), "USER".to_string()),
+                    ("password".to_string(), "PASS".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                file_keys: HashMap::new(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-db").await.unwrap();
@@ -183,16 +187,19 @@ mod tests {
     #[tokio::test]
     async fn resolve_file_keys() {
         let mut credentials = HashMap::new();
-        credentials.insert("cred-ssh".to_string(), Credential {
-            name: "SSH".to_string(),
-            credential_type: CredentialType::SshKey,
-            env_prefix: Some("SSH_TEST".to_string()),
-            secret_file: None,
-            secret_keys: HashMap::new(),
-            file_keys: [
-                ("ssh_key".to_string(), "/run/secrets/id_rsa".to_string()),
-            ].into_iter().collect(),
-        });
+        credentials.insert(
+            "cred-ssh".to_string(),
+            Credential {
+                name: "SSH".to_string(),
+                credential_type: CredentialType::SshKey,
+                env_prefix: Some("SSH_TEST".to_string()),
+                secret_file: None,
+                secret_keys: HashMap::new(),
+                file_keys: [("ssh_key".to_string(), "/run/secrets/id_rsa".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-ssh").await.unwrap();
@@ -202,22 +209,29 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_mixed_secret_keys_and_file_keys() {
-        unsafe { std::env::set_var("MIX_TEST_USERNAME", "sshuser"); }
+        unsafe {
+            std::env::set_var("MIX_TEST_USERNAME", "sshuser");
+        }
 
         let mut credentials = HashMap::new();
-        credentials.insert("cred-mix".to_string(), Credential {
-            name: "Mixed".to_string(),
-            credential_type: CredentialType::SshKey,
-            env_prefix: Some("MIX_TEST".to_string()),
-            secret_file: None,
-            secret_keys: [
-                ("username".to_string(), "USERNAME".to_string()),
-            ].into_iter().collect(),
-            file_keys: [
-                ("ssh_key".to_string(), "/run/secrets/id_rsa".to_string()),
-                ("ca_cert".to_string(), "/run/secrets/ca.pem".to_string()),
-            ].into_iter().collect(),
-        });
+        credentials.insert(
+            "cred-mix".to_string(),
+            Credential {
+                name: "Mixed".to_string(),
+                credential_type: CredentialType::SshKey,
+                env_prefix: Some("MIX_TEST".to_string()),
+                secret_file: None,
+                secret_keys: [("username".to_string(), "USERNAME".to_string())]
+                    .into_iter()
+                    .collect(),
+                file_keys: [
+                    ("ssh_key".to_string(), "/run/secrets/id_rsa".to_string()),
+                    ("ca_cert".to_string(), "/run/secrets/ca.pem".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-mix").await.unwrap();
@@ -227,22 +241,30 @@ mod tests {
         assert_eq!(result["ca_cert_path"], "/run/secrets/ca.pem");
         assert_eq!(result.len(), 3);
 
-        unsafe { std::env::remove_var("MIX_TEST_USERNAME"); }
+        unsafe {
+            std::env::remove_var("MIX_TEST_USERNAME");
+        }
     }
 
     #[tokio::test]
     async fn resolve_only_file_keys_no_secret_keys() {
         let mut credentials = HashMap::new();
-        credentials.insert("cred-cert".to_string(), Credential {
-            name: "Cert Only".to_string(),
-            credential_type: CredentialType::SshKey,
-            env_prefix: None,
-            secret_file: None,
-            secret_keys: HashMap::new(),
-            file_keys: [
-                ("client_cert".to_string(), "/run/secrets/client.pem".to_string()),
-            ].into_iter().collect(),
-        });
+        credentials.insert(
+            "cred-cert".to_string(),
+            Credential {
+                name: "Cert Only".to_string(),
+                credential_type: CredentialType::SshKey,
+                env_prefix: None,
+                secret_file: None,
+                secret_keys: HashMap::new(),
+                file_keys: [(
+                    "client_cert".to_string(),
+                    "/run/secrets/client.pem".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-cert").await.unwrap();
@@ -254,14 +276,17 @@ mod tests {
     #[tokio::test]
     async fn resolve_empty_credential_fails() {
         let mut credentials = HashMap::new();
-        credentials.insert("cred-empty".to_string(), Credential {
-            name: "Empty".to_string(),
-            credential_type: CredentialType::Token,
-            env_prefix: None,
-            secret_file: None,
-            secret_keys: HashMap::new(),
-            file_keys: HashMap::new(),
-        });
+        credentials.insert(
+            "cred-empty".to_string(),
+            Credential {
+                name: "Empty".to_string(),
+                credential_type: CredentialType::Token,
+                env_prefix: None,
+                secret_file: None,
+                secret_keys: HashMap::new(),
+                file_keys: HashMap::new(),
+            },
+        );
 
         let secrets = EnvSecrets::new(credentials);
         let result = secrets.resolve("cred-empty").await;

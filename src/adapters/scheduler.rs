@@ -1,10 +1,10 @@
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use tracing::{error, info, warn};
 
-use crate::application::enrich::run_enricher;
-use crate::application::sync::{sync_source, SyncScope};
 use crate::AppState;
+use crate::application::enrich::run_enricher;
+use crate::application::sync::{SyncScope, sync_source};
 
 // El scheduler es un "driving adapter" más, igual que los handlers HTTP:
 // dispara los mismos casos de uso de application/, solo que por tiempo en

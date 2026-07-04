@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -151,16 +151,15 @@ pub async fn source_status(
 
             let effective_ttl = source
                 .and_then(|s| {
-                    s.ttl_overrides.hosts.get(hostname).copied()
-                        .or_else(|| {
-                            entry.dataset.groups.iter().find_map(|(group_name, group)| {
-                                if group.hosts.contains(hostname) {
-                                    s.ttl_overrides.groups.get(group_name).copied()
-                                } else {
-                                    None
-                                }
-                            })
+                    s.ttl_overrides.hosts.get(hostname).copied().or_else(|| {
+                        entry.dataset.groups.iter().find_map(|(group_name, group)| {
+                            if group.hosts.contains(hostname) {
+                                s.ttl_overrides.groups.get(group_name).copied()
+                            } else {
+                                None
+                            }
                         })
+                    })
                 })
                 .unwrap_or(entry.ttl.as_secs());
 

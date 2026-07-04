@@ -209,3 +209,17 @@ async fn nonexistent_route_returns_404() {
 
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// =========================================================================
+// Test: the OpenAPI spec version tracks Cargo.toml, never a hardcoded string
+// =========================================================================
+#[tokio::test]
+async fn openapi_version_matches_crate_version() {
+    let app = unified_api::AppBuilder::new().build();
+
+    let (status, body) = get(app, "/api-docs/openapi.json").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let spec: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(spec["info"]["version"], env!("CARGO_PKG_VERSION"));
+}

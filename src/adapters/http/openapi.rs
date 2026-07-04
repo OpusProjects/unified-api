@@ -54,9 +54,10 @@ impl Modify for SecurityAddon {
         (name = "Enrichers", description = "Post-processing enrichment of cached data"),
         (name = "Endpoints", description = "Output endpoints for consumers (AWX, AnsibleForms)")
     ),
+    // No explicit version: utoipa takes it from Cargo.toml (CARGO_PKG_VERSION),
+    // so the spec can never disagree with the crate version after a bump
     info(
         title = "Unified API",
-        version = "0.1.0",
         description = "Infrastructure inventory aggregation and caching middleware"
     )
 )]

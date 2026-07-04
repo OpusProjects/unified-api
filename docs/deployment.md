@@ -29,6 +29,8 @@ docker run -p 8182:8182 \
 2. **build-image** — after tests pass: on PRs the image is **built but not
    pushed** (catches Dockerfile breakage before merge); pushes to `main` and
    `v*` tags also publish to GHCR (`sha` + `latest` from `main`, semver from tags)
+1. **release** — on `v*` tags only, after the image is published: creates a
+   GitHub Release whose notes are that version's section from `CHANGELOG.md`
 
 The CI badge in the README tracks this workflow.
 

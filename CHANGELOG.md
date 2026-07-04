@@ -18,6 +18,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   syncs, enricher runs and output endpoint runs
 - `server.cors_allowed_origins` config to opt in to CORS for browser consumers
 - CI: `cargo audit` (RUSTSEC advisory scan) and Dockerfile build on PRs
+- CI: version tags create a GitHub Release with the changelog section as notes
 - Dependabot for Cargo dependencies (grouped weekly), alongside workflow actions
 
 ### Changed

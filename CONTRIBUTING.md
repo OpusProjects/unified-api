@@ -72,7 +72,8 @@ the same spirit is welcome. Beyond those, comment only when the *why* is non-obv
    `Cargo.lock` follows) and move the `Unreleased` entries in
    [CHANGELOG.md](CHANGELOG.md) under the new version with the date.
 2. After the squash merge: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. CI runs the gates and publishes `ghcr.io/opusprojects/unified-api:X.Y.Z`.
+3. CI runs the gates, publishes `ghcr.io/opusprojects/unified-api:X.Y.Z`, and
+   creates a GitHub Release with that version's CHANGELOG section as the notes.
    `latest` keeps tracking `main`; consumers should pin the version tag.
 
 ## Running the test suite

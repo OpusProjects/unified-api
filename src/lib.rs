@@ -5,11 +5,12 @@ pub mod domain;
 pub mod ports;
 pub mod scheduler;
 
-use axum::{middleware, routing::{get, post, put}, Router};
+use axum::{middleware, response::Redirect, routing::{get, post, put}, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use utoipa::OpenApi;
+use utoipa::openapi::security::{ApiKey as OpenApiKey, ApiKeyValue, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
 
 use api::auth::ApiKey;
@@ -48,8 +49,24 @@ impl AppState {
     }
 }
 
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.as_mut().unwrap();
+        components.add_security_scheme(
+            "api_key",
+            SecurityScheme::ApiKey(OpenApiKey::Header(ApiKeyValue::new("X-API-Key"))),
+        );
+    }
+}
+
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&SecurityAddon),
+    security(
+        ("api_key" = [])
+    ),
     paths(
         api::health::healthz,
         api::health::readyz,
@@ -100,6 +117,7 @@ fn create_router(state: Arc<AppState>, api_key: Option<String>) -> Router<()> {
         .layer(axum::Extension(ApiKey(api_key)));
 
     Router::new()
+        .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(api::health::healthz))
         .route("/readyz", get(api::health::readyz))
         .merge(api_routes)

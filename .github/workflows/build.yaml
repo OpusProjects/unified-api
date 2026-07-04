@@ -90,10 +90,12 @@ jobs:
       - name: Extract changelog section for this version
         run: |
           version="${GITHUB_REF_NAME#v}"
-          awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
-            flag && /^## \\[/ {exit}
-            flag {print}
+          # Print lines between this version's "## [x.y.z]" header and the next
+          # "## [" header. substr matching avoids regex-escaping pitfalls.
+          awk -v start="## [$version]" '
+            substr($0, 1, length(start)) == start { flag = 1; next }
+            flag && substr($0, 1, 4) == "## [" { exit }
+            flag { print }
           ' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then
             echo "See CHANGELOG.md for details." > release-notes.md

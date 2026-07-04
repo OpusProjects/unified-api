@@ -103,10 +103,23 @@ pub async fn run_endpoint(
 
     let start = Instant::now();
 
-    let result = state
-        .output
-        .execute(&endpoint.script_path, &endpoint.config, &params, &datasets)
-        .await;
+    // A hung transformer must not hang the HTTP request forever
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(endpoint.timeout_seconds),
+        state
+            .output
+            .execute(&endpoint.script_path, &endpoint.config, &params, &datasets),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            let body = serde_json::json!({
+                "error": format!("endpoint timed out after {}s", endpoint.timeout_seconds)
+            });
+            return Ok((StatusCode::GATEWAY_TIMEOUT, Json(body)).into_response());
+        }
+    };
 
     let _duration_ms = start.elapsed().as_millis();
 

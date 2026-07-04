@@ -41,6 +41,10 @@ The connector script is executed on every sync and must print a Dataset to stdou
 **Output:** the full Dataset JSON on stdout. Exit non-zero to fail the sync; stderr
 is captured into the error message.
 
+**Time limit:** the script must finish within the source's `timeout_seconds`
+(default 300). A slower run is aborted and the sync fails with
+`sync timed out after Ns` — a hung script never blocks the scheduler or an API call.
+
 Minimal example:
 
 ```python
@@ -106,6 +110,10 @@ needs — the shipped example renders a merged Ansible inventory.
 | stdin | `{ "<source_id>": <Dataset>, ... }` for every configured source |
 
 **Output:** anything on stdout — it is returned to the HTTP caller verbatim.
+
+**Time limit:** the endpoint's `timeout_seconds` (default 300); exceeding it returns
+`504 Gateway Timeout` to the caller. Enrichers have the same knob and fail with a
+clear error when exceeded.
 
 ## Testing your script
 

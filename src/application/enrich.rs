@@ -1,4 +1,6 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use tokio::time::timeout;
 
 use crate::domain::enricher::Enricher;
 use crate::ports::cache::CachePort;
@@ -35,13 +37,31 @@ pub async fn run_enricher(
 
     let start = Instant::now();
 
-    let result = enricher_port
-        .execute(
+    // Same rationale as in sync: a hung enricher script must not block
+    // its scheduler task forever.
+    let result = match timeout(
+        Duration::from_secs(enricher.timeout_seconds),
+        enricher_port.execute(
             &enricher.script_path,
             &enricher.config,
             &current_entry.dataset,
-        )
-        .await;
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            return Some(EnrichOutcome {
+                hosts_updated: 0,
+                hosts_removed: 0,
+                duration_ms: start.elapsed().as_millis(),
+                error: Some(format!(
+                    "enricher timed out after {}s",
+                    enricher.timeout_seconds
+                )),
+            });
+        }
+    };
 
     let duration_ms = start.elapsed().as_millis();
 

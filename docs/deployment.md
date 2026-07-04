@@ -23,6 +23,9 @@ docker run -p 8182:8182 \
 
 1. **test** — on every push and PR: `cargo fmt --check`, `cargo clippy --all-targets
    -- -D warnings`, `cargo test` (with `Swatinem/rust-cache`)
+1. **audit** — scans `Cargo.lock` against the RUSTSEC advisory database for
+   known-vulnerable dependency versions; ignored advisories are documented in
+   `.cargo/audit.toml`
 2. **build-image** — after tests pass: on PRs the image is **built but not
    pushed** (catches Dockerfile breakage before merge); pushes to `main` and
    `v*` tags also publish to GHCR (`sha` + `latest` from `main`, semver from tags)

@@ -96,6 +96,8 @@ Configuration from YAML files, secrets from HashiCorp Vault.
 
 - Private by default, `pub` only what needs to be exposed
 - Comments only when the WHY is non-obvious
+- **All code comments must be written in English** — no exceptions, including
+  teaching comments and test comments
 - **Teaching comments are intentional — do not strip them.** Many files carry
   explanatory comments (e.g. "A trait is like an interface in Java...") that teach
   Rust concepts to the maintainers. They are a deliberate exception to the comment

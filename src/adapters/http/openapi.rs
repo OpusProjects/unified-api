@@ -1,7 +1,7 @@
 use utoipa::openapi::security::{ApiKey as OpenApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::api;
+use crate::adapters::http;
 
 // Añade el esquema de seguridad (header X-API-Key) a la spec generada
 struct SecurityAddon;
@@ -27,26 +27,26 @@ impl Modify for SecurityAddon {
         ("api_key" = [])
     ),
     paths(
-        api::health::healthz,
-        api::health::readyz,
-        api::sources::list_cached_sources,
-        api::sources::get_source_dataset,
-        api::sources::source_status,
-        api::sources::sync_source,
-        api::sources::run_enricher,
-        api::sources::put_host,
-        api::sources::delete_host,
-        api::endpoints::run_endpoint,
-        api::endpoints::list_endpoints,
+        http::health::healthz,
+        http::health::readyz,
+        http::sources::list_cached_sources,
+        http::sources::get_source_dataset,
+        http::sources::source_status,
+        http::sync::sync_source,
+        http::enrichers::run_enricher,
+        http::hosts::put_host,
+        http::hosts::delete_host,
+        http::endpoints::run_endpoint,
+        http::endpoints::list_endpoints,
     ),
     components(schemas(
-        api::sources::CachedSourceInfo,
-        api::sources::HostStatus,
-        api::sources::SourceStatus,
-        api::sources::SyncResult,
-        api::sources::EnrichResult,
-        api::endpoints::EndpointInfo,
-        api::health::ReadyStatus,
+        http::sources::CachedSourceInfo,
+        http::sources::HostStatus,
+        http::sources::SourceStatus,
+        http::sync::SyncResult,
+        http::enrichers::EnrichResult,
+        http::endpoints::EndpointInfo,
+        http::health::ReadyStatus,
     )),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),

@@ -1,0 +1,72 @@
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use std::sync::Arc;
+
+use crate::domain::dataset::HostVars;
+use crate::AppState;
+
+// Alta y baja inmediata de hosts en el cache de un source
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/sources/{id}/hosts/{hostname}",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        ("hostname" = String, Path, description = "Host to add or update")
+    ),
+    request_body(content = Object, description = "Host variables as JSON key-value pairs"),
+    responses(
+        (status = 200, description = "Host added/updated"),
+        (status = 404, description = "Source not in cache")
+    )
+)]
+pub async fn put_host(
+    State(state): State<Arc<AppState>>,
+    Path((id, hostname)): Path<(String, String)>,
+    Json(vars): Json<HostVars>,
+) -> Result<StatusCode, StatusCode> {
+    let mut vars = Some(vars);
+    let found = state.cache.update(&id, &mut |entry| {
+        if let Some(v) = vars.take() {
+            entry.update_host(hostname.clone(), v);
+        }
+    });
+    if !found {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/sources/{id}/hosts/{hostname}",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        ("hostname" = String, Path, description = "Host to remove")
+    ),
+    responses(
+        (status = 200, description = "Host removed"),
+        (status = 404, description = "Source or host not in cache")
+    )
+)]
+pub async fn delete_host(
+    State(state): State<Arc<AppState>>,
+    Path((id, hostname)): Path<(String, String)>,
+) -> Result<StatusCode, StatusCode> {
+    // La comprobación "¿existe el host?" y el borrado van dentro del mismo
+    // update() — comprobar fuera con get() sería otra ventana de carrera.
+    let mut removed = false;
+    let found = state.cache.update(&id, &mut |entry| {
+        if entry.dataset.hostvars.contains_key(&hostname) {
+            entry.remove_host(&hostname);
+            removed = true;
+        }
+    });
+    if !found || !removed {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(StatusCode::OK)
+}

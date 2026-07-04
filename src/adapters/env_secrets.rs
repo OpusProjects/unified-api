@@ -117,35 +117,6 @@ fn resolve_from_file(
     Ok(secrets)
 }
 
-// Mock para tests
-pub struct MockSecrets {
-    secrets: HashMap<String, HashMap<String, String>>,
-}
-
-impl MockSecrets {
-    pub fn new() -> Self {
-        Self {
-            secrets: HashMap::new(),
-        }
-    }
-}
-
-impl SecretsPort for MockSecrets {
-    fn resolve(
-        &self,
-        credential_id: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<HashMap<String, String>, SecretsError>> + Send + '_>>
-    {
-        let credential_id = credential_id.to_string();
-
-        Box::pin(async move {
-            self.secrets.get(&credential_id).cloned().ok_or(SecretsError {
-                message: format!("Mock: credential '{}' not found", credential_id),
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

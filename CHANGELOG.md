@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-04
+
 ### Security
 
 - Bump `russh` 0.48 → 0.62.1 (via 0.60.3), fixing two high-severity advisories:
@@ -67,5 +69,6 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/OpusProjects/unified-api/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/OpusProjects/unified-api/releases/tag/v0.1.0

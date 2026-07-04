@@ -35,6 +35,7 @@ pub struct AppBuilder {
     endpoints: HashMap<String, OutputEndpoint>,
     secrets: Arc<dyn SecretsPort>,
     api_key: Option<String>,
+    cors_allowed_origins: Vec<String>,
 }
 
 impl AppBuilder {
@@ -46,6 +47,7 @@ impl AppBuilder {
             // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
             api_key: None,
+            cors_allowed_origins: Vec::new(),
         }
     }
 
@@ -74,6 +76,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn cors_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.cors_allowed_origins = origins;
+        self
+    }
+
     pub fn build(self) -> Router<()> {
         let (router, _state) = self.build_with_state();
         router
@@ -96,7 +103,11 @@ impl AppBuilder {
             enrichers: self.enrichers,
             endpoints: self.endpoints,
         });
-        let router = adapters::http::routes::create_router(Arc::clone(&state), self.api_key);
+        let router = adapters::http::routes::create_router(
+            Arc::clone(&state),
+            self.api_key,
+            self.cors_allowed_origins,
+        );
         (router, state)
     }
 }

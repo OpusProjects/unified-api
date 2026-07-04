@@ -13,6 +13,9 @@ or project id anywhere in the config aborts boot with a list of every error foun
 server:
   host: "0.0.0.0"
   port: 8182
+  # Optional. Empty/absent (default) = no CORS headers at all — right for
+  # server-to-server consumers. List browser origins to enable, "*" for any.
+  cors_allowed_origins: []
 ```
 
 ## sources.yaml

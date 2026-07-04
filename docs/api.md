@@ -15,8 +15,12 @@ Authorization: Bearer <key>
 ```
 
 Wrong or missing key → `401`. Keys are compared in constant time. Health probes
-(`/healthz`, `/readyz`) and the Swagger UI remain public. If the variable is not
-set, authentication is disabled (useful for local development).
+(`/healthz`, `/readyz`), `/metrics` and the Swagger UI remain public. If the
+variable is not set, authentication is disabled (useful for local development).
+
+**CORS** is off by default (no CORS headers; server-to-server consumers are
+unaffected). Browser-based consumers need their origins listed in
+`server.cors_allowed_origins` — see [configuration](configuration.md).
 
 ## Health
 

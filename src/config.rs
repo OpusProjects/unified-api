@@ -23,6 +23,11 @@ pub struct AppConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+
+    // Origins allowed for CORS. Empty (the default) = no CORS headers at all,
+    // which is right for server-to-server consumers. ["*"] = any origin.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 // Intermediate struct to parse config.yaml (only has server for now)

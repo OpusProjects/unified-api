@@ -223,7 +223,7 @@ fn build_command(gather_mode: &str, fact_path: &str, script_path: &str) -> Strin
     match gather_mode {
         "facts" => {
             format!(
-                r#"echo '{{'; first=1; for f in {}/*.fact {}/*.json; do [ -f "$f" ] || continue; name=$(basename "$f" | sed 's/\.[^.]*$//'); content=$(cat "$f"); if [ "$first" = "1" ]; then first=0; else echo ','; fi; printf '"%s": %s' "$name" "$content"; done; echo '}}'"#,
+                r#"echo '{{'; first=1; for f in {}/*.fact {}/*.json; do [ -f "$f" ] || continue; name=$(basename "$f" | sed 's/\.[^.]*$//'); if [ -x "$f" ]; then content=$("$f" 2>/dev/null); else content=$(cat "$f"); fi; if [ "$first" = "1" ]; then first=0; else echo ','; fi; printf '"%s": %s' "$name" "$content"; done; echo '}}'"#,
                 fact_path, fact_path
             )
         }

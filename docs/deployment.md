@@ -63,8 +63,10 @@ in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
 ## Observability
 
 Structured logs via `tracing` to stdout; tune with `RUST_LOG` (e.g.
-`unified_api=debug`). Sync and enrich outcomes are logged with source ids, host
-counts and durations.
+`unified_api=debug`). Every HTTP request is logged at INFO with method, path,
+status and latency (a `tower-http` trace layer); set `tower_http=debug` for more
+detail. Sync and enrich outcomes are logged with source ids, host counts and
+durations.
 
 **Prometheus metrics** are exposed at `GET /metrics` (public, like the health
 probes — scrapers don't carry the API key):

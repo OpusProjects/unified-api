@@ -3,11 +3,22 @@ use std::collections::HashMap;
 
 use super::sync_mode::SyncMode;
 
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorType {
+    #[default]
+    Script,
+    Ssh,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Source {
     pub name: String,
     pub project_id: String,
     pub script_path: String,
+
+    #[serde(default)]
+    pub connector_type: ConnectorType,
 
     #[serde(default)]
     pub sync_mode: SyncMode,

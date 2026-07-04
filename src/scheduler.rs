@@ -4,6 +4,7 @@ use tracing::{info, warn, error};
 
 use crate::api::sources::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
+use crate::domain::source::ConnectorType;
 use crate::domain::sync_mode::SyncMode;
 use crate::AppState;
 
@@ -21,6 +22,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
         let ttl_seconds = source.ttl_seconds;
         let credential_ids = source.credential_ids.clone();
         let sync_mode = source.sync_mode.clone();
+        let connector_type = source.connector_type.clone();
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(interval_secs));
@@ -35,6 +37,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     name: String::new(),
                     project_id: String::new(),
                     script_path: script_path.clone(),
+                    connector_type: ConnectorType::Script,
                     sync_mode: SyncMode::Replace,
                     credential_ids: credential_ids.clone(),
                     schedule: None,
@@ -47,8 +50,8 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                 let credentials =
                     resolve_credentials(&*state.secrets, &temp_source).await;
 
-                let result = state
-                    .connector
+                let connector = state.connector_for(&connector_type);
+                let result = connector
                     .execute(&script_path, &config, &credentials)
                     .await;
 

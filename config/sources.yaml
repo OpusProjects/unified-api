@@ -31,3 +31,19 @@ src-section9-large:
   ttl_seconds: 7200
   config:
     scenario: "large"
+
+src-ssh-example:
+  name: "SSH Facts Gathering"
+  connector_type: "ssh"
+  project_id: "prj-connectors-infra"
+  script_path: "gather_facts"
+  credential_ids: ["cred-ssh-infra"]
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+  config:
+    hosts: "host1.example.com,host2.example.com"
+    port: "22"
+    concurrency: "50"
+    timeout_seconds: "30"
+    gather_mode: "facts"
+    fact_path: "/etc/ansible/facts.d"

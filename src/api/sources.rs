@@ -247,11 +247,10 @@ pub async fn sync_source(
 
     let start = Instant::now();
 
-    // Resolver credenciales desde Vault (o mock en tests)
     let credentials = resolve_credentials(&*state.secrets, source).await;
 
-    let result = state
-        .connector
+    let connector = state.connector_for(&source.connector_type);
+    let result = connector
         .execute(&source.script_path, &config, &credentials)
         .await;
 

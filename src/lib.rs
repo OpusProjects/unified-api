@@ -19,22 +19,33 @@ use adapters::memory_cache::MemoryCache;
 use adapters::process_connector::ProcessConnector;
 use adapters::process_enricher::ProcessEnricher;
 use adapters::process_output::ProcessOutput;
+use adapters::ssh_connector::SshConnector;
 use domain::cache_entry::CacheEntry;
 use domain::credential::Credential;
 use domain::dataset::Dataset;
 use domain::endpoint::OutputEndpoint;
 use domain::enricher::Enricher;
-use domain::source::Source;
+use domain::source::{ConnectorType, Source};
 
 pub struct AppState {
     pub cache: Arc<dyn ports::cache::CachePort>,
     pub connector: Arc<dyn ports::connector::ConnectorPort>,
+    pub ssh_connector: Arc<dyn ports::connector::ConnectorPort>,
     pub enricher: Arc<dyn ports::enricher::EnricherPort>,
     pub output: Arc<dyn ports::output::OutputPort>,
     pub secrets: Arc<dyn ports::secrets::SecretsPort>,
     pub sources: HashMap<String, Source>,
     pub enrichers: HashMap<String, Enricher>,
     pub endpoints: HashMap<String, OutputEndpoint>,
+}
+
+impl AppState {
+    pub fn connector_for(&self, connector_type: &ConnectorType) -> &Arc<dyn ports::connector::ConnectorPort> {
+        match connector_type {
+            ConnectorType::Script => &self.connector,
+            ConnectorType::Ssh => &self.ssh_connector,
+        }
+    }
 }
 
 #[derive(OpenApi)]
@@ -104,6 +115,7 @@ pub fn build_app() -> Router<()> {
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
+        ssh_connector: Arc::new(SshConnector::new()),
         enricher: Arc::new(ProcessEnricher::new()),
         output: Arc::new(ProcessOutput::new()),
         secrets: Arc::new(MockSecrets::new()),
@@ -134,6 +146,7 @@ pub fn build_app_full(
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
+        ssh_connector: Arc::new(SshConnector::new()),
         enricher: Arc::new(ProcessEnricher::new()),
         output: Arc::new(ProcessOutput::new()),
         secrets: Arc::new(MockSecrets::new()),
@@ -155,6 +168,7 @@ pub fn build_app_production(
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
+        ssh_connector: Arc::new(SshConnector::new()),
         enricher: Arc::new(ProcessEnricher::new()),
         output: Arc::new(ProcessOutput::new()),
         secrets: Arc::new(EnvSecrets::new(credentials)),
@@ -170,6 +184,7 @@ pub fn build_app_with_demo_data() -> Router<()> {
     let state = Arc::new(AppState {
         cache: Arc::new(MemoryCache::new()),
         connector: Arc::new(ProcessConnector::new()),
+        ssh_connector: Arc::new(SshConnector::new()),
         enricher: Arc::new(ProcessEnricher::new()),
         output: Arc::new(ProcessOutput::new()),
         secrets: Arc::new(MockSecrets::new()),

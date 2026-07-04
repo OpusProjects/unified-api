@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use tower::ServiceExt;
 use unified_api::domain::endpoint::OutputEndpoint;
 use unified_api::domain::enricher::Enricher;
-use unified_api::domain::source::{Source, TtlOverrides};
+use unified_api::domain::source::{ConnectorType, Source, TtlOverrides};
 use unified_api::domain::sync_mode::SyncMode;
 
 async fn request(
@@ -54,6 +54,7 @@ fn test_source(scenario: &str) -> Source {
         name: "Test Source".to_string(),
         project_id: "test".to_string(),
         script_path: "test-connectors/fake_inventory.py".to_string(),
+        connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,
@@ -507,6 +508,7 @@ async fn sync_infra_source() {
         name: "Infrastructure Data".to_string(),
         project_id: "test".to_string(),
         script_path: "test-connectors/fake_infra.py".to_string(),
+        connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,
@@ -581,6 +583,7 @@ async fn endpoint_combines_sources() {
         name: "Infra Data".to_string(),
         project_id: "test".to_string(),
         script_path: "test-connectors/fake_infra.py".to_string(),
+        connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,

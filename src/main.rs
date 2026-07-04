@@ -14,7 +14,8 @@ async fn main() {
         )
         .init();
 
-    let cfg = match unified_api::config::load_config("config") {
+    let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
+    let cfg = match unified_api::config::load_config(&config_dir) {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("Failed to load configuration: {}", e);

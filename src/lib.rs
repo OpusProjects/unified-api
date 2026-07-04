@@ -1,10 +1,8 @@
 pub mod adapters;
-pub mod api;
 pub mod application;
 pub mod config;
 pub mod domain;
 pub mod ports;
-pub mod scheduler;
 mod state;
 
 // Re-export: el resto del código (y los tests) siguen usando crate::AppState
@@ -15,8 +13,8 @@ use std::sync::Arc;
 
 use axum::Router;
 
-use adapters::env_secrets::MockSecrets;
 use adapters::memory_cache::MemoryCache;
+use adapters::mock_secrets::MockSecrets;
 use adapters::process_connector::ProcessConnector;
 use adapters::process_enricher::ProcessEnricher;
 use adapters::process_output::ProcessOutput;
@@ -95,7 +93,7 @@ impl AppBuilder {
             enrichers: self.enrichers,
             endpoints: self.endpoints,
         });
-        let router = api::routes::create_router(Arc::clone(&state), self.api_key);
+        let router = adapters::http::routes::create_router(Arc::clone(&state), self.api_key);
         (router, state)
     }
 }

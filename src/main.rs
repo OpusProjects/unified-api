@@ -45,7 +45,7 @@ async fn main() {
         .api_key(api_key)
         .build_with_state();
 
-    unified_api::scheduler::start_sync_tasks(state);
+    unified_api::adapters::scheduler::start_sync_tasks(state);
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
 

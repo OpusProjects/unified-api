@@ -32,9 +32,15 @@ impl OutputPort for ProcessOutput {
         let script_path = script_path.to_string();
         let config = config.clone();
         let params = params.clone();
-        let datasets_json = serde_json::to_string(datasets).unwrap_or_default();
+        let datasets = datasets.clone();
 
         Box::pin(async move {
+            // Propagate a serialization failure instead of silently sending the
+            // script an empty stdin (which would look like "no data").
+            let datasets_json = serde_json::to_string(&datasets).map_err(|e| OutputError {
+                message: format!("Failed to serialize datasets: {}", e),
+            })?;
+
             let config_json = serde_json::to_string(&config).map_err(|e| OutputError {
                 message: format!("Failed to serialize config: {}", e),
             })?;

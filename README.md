@@ -61,6 +61,8 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 
 Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the PR workflow, commit style, CI gates and architecture rules.
 
+Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
+
 ## Project status
 
 - Actively developed

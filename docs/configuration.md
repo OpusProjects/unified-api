@@ -49,7 +49,7 @@ src-section9:
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
 | `ttl_*` | See [caching](caching.md) for the freshness model |
 | `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
-| `config` | Arbitrary `key: value` strings the connector script receives as JSON |
+| `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path` from here — see [connectors](connectors.md) |
 
 ## credentials.yaml
 

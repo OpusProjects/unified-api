@@ -73,8 +73,13 @@ in parallel and builds the Dataset from what it finds.
 | `hosts` | — | Comma-separated hostnames to connect to |
 | `port` | `22` | SSH port |
 | `concurrency` | `50` | Max parallel connections (tokio semaphore) |
+| `ssh_connect_timeout_seconds` | `30` | Per-host connection/exec timeout |
 | `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs `script_path` remotely |
 | `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
+
+> `ssh_connect_timeout_seconds` bounds a **single host** connection; the
+> source-level `timeout_seconds` (default 300) separately bounds the **whole
+> sync** across all hosts. They are different knobs.
 
 **Credentials:** expects `username` (or `ssh_username`) and an `ssh_key_path` /
 `key_path` from `file_keys` — see [configuration](configuration.md).

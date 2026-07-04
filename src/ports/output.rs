@@ -10,9 +10,9 @@ pub struct OutputError {
     pub message: String,
 }
 
-// El script recibe los datasets de los sources configurados por stdin,
-// y devuelve por stdout el formato que necesita el consumidor.
-// La respuesta es un String crudo — puede ser JSON, YAML, CSV, lo que sea.
+// The script receives the datasets from configured sources on stdin,
+// and returns on stdout the format needed by the consumer.
+// The response is a raw String — it could be JSON, YAML, CSV, whatever.
 pub trait OutputPort: Send + Sync {
     fn execute(
         &self,

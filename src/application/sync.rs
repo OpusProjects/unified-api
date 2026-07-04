@@ -9,7 +9,7 @@ use crate::ports::cache::CachePort;
 use crate::ports::connector::ConnectorPort;
 use crate::ports::secrets::SecretsPort;
 
-// Alcance de un sync: el inventario completo, un solo host o un grupo
+// Scope of a sync: the complete inventory, a single host, or a group
 pub enum SyncScope {
     Full,
     Host(String),
@@ -17,7 +17,7 @@ pub enum SyncScope {
 }
 
 impl SyncScope {
-    // Etiqueta legible para logs y respuestas: "full", "host:x", "group:y"
+    // Readable label for logs and responses: "full", "host:x", "group:y"
     pub fn label(&self) -> String {
         match self {
             SyncScope::Full => "full".to_string(),
@@ -27,8 +27,8 @@ impl SyncScope {
     }
 }
 
-// Resultado de un sync — datos puros, sin tipos HTTP.
-// El handler lo convierte a JSON; el scheduler lo convierte a logs.
+// Result of a sync — pure data, no HTTP types.
+// The handler converts it to JSON; the scheduler converts it to logs.
 pub struct SyncOutcome {
     pub scope: String,
     pub total_hosts: usize,
@@ -53,12 +53,12 @@ impl SyncOutcome {
     }
 }
 
-// El caso de uso "sincronizar un source": resolver credenciales, ejecutar
-// el connector y aplicar el resultado al cache según scope y sync_mode.
+// The use case "sync a source": resolve credentials, execute
+// the connector, and apply the result to cache based on scope and sync_mode.
 //
-// El caller elige el connector (ProcessConnector o SshConnector, según
-// source.connector_type) y lo pasa ya resuelto — así esta función solo
-// depende de ports, no del AppState.
+// The caller chooses the connector (ProcessConnector or SshConnector, based on
+// source.connector_type) and passes it already resolved — this way this function only
+// depends on ports, not on AppState.
 pub async fn sync_source(
     cache: &dyn CachePort,
     connector: &dyn ConnectorPort,
@@ -69,7 +69,7 @@ pub async fn sync_source(
 ) -> SyncOutcome {
     let scope_label = scope.label();
 
-    // El scope viaja al script del connector a través de su config
+    // The scope travels to the connector script via its config
     let mut config = source.config.clone();
     match &scope {
         SyncScope::Host(host) => {
@@ -115,9 +115,9 @@ pub async fn sync_source(
     }
 }
 
-// Aplica el dataset devuelto por el connector al cache. Todas las fusiones
-// van por merge_or_insert / update: la decisión "¿existe la entrada?" y la
-// modificación ocurren bajo el mismo lock (ver CachePort).
+// Applies the dataset returned by the connector to the cache. All merges
+// go through merge_or_insert / update: the decision "does the entry exist?" and the
+// modification occur under the same lock (see CachePort).
 fn apply_to_cache(
     cache: &dyn CachePort,
     source_id: &str,
@@ -127,7 +127,7 @@ fn apply_to_cache(
 ) {
     match scope {
         SyncScope::Host(host) => {
-            // Solo cacheamos si el connector devolvió el host pedido
+            // Only cache if the connector returned the requested host
             if let Some(vars) = dataset.hostvars.get(host).cloned() {
                 let hostname = host.clone();
                 cache.merge_or_insert(

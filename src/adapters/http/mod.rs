@@ -1,5 +1,5 @@
-// El adapter HTTP (driving adapter): handlers de axum, auth, rutas y la
-// spec OpenAPI. Cada archivo agrupa los handlers de un recurso.
+// The HTTP adapter (driving adapter): axum handlers, auth, routes, and
+// OpenAPI spec. Each file groups handlers for a single resource.
 pub mod auth;
 pub mod endpoints;
 pub mod enrichers;

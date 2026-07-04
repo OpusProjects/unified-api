@@ -4,10 +4,10 @@ use unified_api::adapters::env_secrets::EnvSecrets;
 
 #[tokio::main]
 async fn main() {
-    // Logging estructurado — nivel configurable con RUST_LOG env var
-    // RUST_LOG=debug cargo run → muestra debug+info+warn+error
-    // RUST_LOG=unified_api=debug → solo debug de nuestro crate
-    // Sin RUST_LOG → default info
+    // Structured logging — level configurable with RUST_LOG env var
+    // RUST_LOG=debug cargo run → shows debug+info+warn+error
+    // RUST_LOG=unified_api=debug → only debug from our crate
+    // Without RUST_LOG → default is info
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -23,8 +23,8 @@ async fn main() {
         }
     };
 
-    // La API key se lee aquí, en el borde: el resto de la app la recibe
-    // como parámetro y no toca variables de entorno
+    // The API key is read here, at the boundary: the rest of the app receives it
+    // as a parameter and does not touch environment variables
     let api_key = std::env::var("UNIFIED_API_KEY").ok();
 
     info!(
@@ -58,7 +58,7 @@ async fn main() {
 
     info!(addr = %addr, "Listening");
 
-    // Graceful shutdown — espera SIGTERM o Ctrl+C
+    // Graceful shutdown — waits for SIGTERM or Ctrl+C
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

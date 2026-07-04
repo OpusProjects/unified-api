@@ -18,22 +18,22 @@ pub struct AppConfig {
     pub endpoints: HashMap<String, OutputEndpoint>,
 }
 
-// Configuración del servidor HTTP — config.yaml
+// HTTP server configuration — config.yaml
 #[derive(Deserialize)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
 }
 
-// Struct intermedio para parsear config.yaml (solo tiene server por ahora)
+// Intermediate struct to parse config.yaml (only has server for now)
 #[derive(Deserialize)]
 struct ServerFile {
     server: ServerConfig,
 }
 
-// Carga toda la configuración desde un directorio.
-// Espera encontrar: config.yaml, credentials.yaml, sources.yaml, etc.
-// Los archivos opcionales simplemente se ignoran si no existen.
+// Loads all configuration from a directory.
+// Expects to find: config.yaml, credentials.yaml, sources.yaml, etc.
+// Optional files are simply ignored if they do not exist.
 impl AppConfig {
     pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut errors: Vec<String> = Vec::new();
@@ -72,10 +72,10 @@ impl AppConfig {
             }
         }
 
-        // Sources must reference existing projects. La feature de clonar
-        // los repos git aún no existe, pero projects.yaml ya se carga y
-        // los sources ya declaran project_id — mejor que un id con typo
-        // explote al arrancar y no cuando la feature llegue.
+        // Sources must reference existing projects. The feature to clone git
+        // repos does not exist yet, but projects.yaml is already loaded and
+        // sources already declare project_id — better for a typo'd id to fail
+        // at startup than when the feature arrives.
         for (id, source) in &self.sources {
             if !self.projects.contains_key(&source.project_id) {
                 errors.push(format!(
@@ -108,10 +108,10 @@ impl AppConfig {
 pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     let dir = Path::new(config_dir);
 
-    // config.yaml es obligatorio — sin server config no podemos arrancar
+    // config.yaml is mandatory — without server config we cannot start
     let server_file: ServerFile = load_yaml_file(&dir.join("config.yaml"))?;
 
-    // Los demás son opcionales — si no existen, HashMap vacío
+    // The rest are optional — if they do not exist, empty HashMap
     let credentials = load_optional_yaml(&dir.join("credentials.yaml"))?;
     let sources = load_optional_yaml(&dir.join("sources.yaml"))?;
     let enrichers = load_optional_yaml(&dir.join("enrichers.yaml"))?;
@@ -132,7 +132,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
     Ok(config)
 }
 
-// Lee y parsea un archivo YAML — falla si no existe
+// Reads and parses a YAML file — fails if it does not exist
 fn load_yaml_file<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<T, Box<dyn std::error::Error>> {
@@ -141,9 +141,9 @@ fn load_yaml_file<T: serde::de::DeserializeOwned>(
     Ok(parsed)
 }
 
-// Lee y parsea un archivo YAML — devuelve HashMap vacío si no existe
-// `T: DeserializeOwned` es un "trait bound": dice que T debe poder deserializarse.
-// Es como un type constraint en TypeScript o un Protocol en Python.
+// Reads and parses a YAML file — returns empty HashMap if it does not exist
+// `T: DeserializeOwned` is a "trait bound": it says T must be deserializable.
+// It's like a type constraint in TypeScript or a Protocol in Python.
 fn load_optional_yaml<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<HashMap<String, T>, Box<dyn std::error::Error>> {
@@ -159,36 +159,36 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // Los tests de config necesitan archivos reales en disco.
-    // Creamos un directorio temporal con YAML de prueba.
+    // Config tests need real files on disk.
+    // We create a temporary directory with test YAML.
 
     #[test]
     fn load_config_from_directory() {
-        // tempdir: creamos un directorio temporal para el test
+        // tempdir: we create a temporary directory for the test
         let dir = tempfile::tempdir().unwrap();
 
-        // Escribimos config.yaml mínimo
+        // Write minimal config.yaml
         fs::write(
             dir.path().join("config.yaml"),
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
         )
         .unwrap();
 
-        // Escribimos credentials.yaml con formato mapa
+        // Write credentials.yaml in map format
         fs::write(
             dir.path().join("credentials.yaml"),
             "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  vault_path: \"secret/test\"\n",
         )
         .unwrap();
 
-        // dir.path().to_str() convierte el Path a &str
+        // dir.path().to_str() converts the Path to &str
         let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
 
         assert_eq!(cfg.server.host, "127.0.0.1");
         assert_eq!(cfg.server.port, 9090);
         assert_eq!(cfg.credentials.len(), 1);
         assert!(cfg.credentials.contains_key("cred-test"));
-        // sources.yaml no existe → HashMap vacío, sin error
+        // sources.yaml does not exist → empty HashMap, no error
         assert_eq!(cfg.sources.len(), 0);
     }
 
@@ -245,7 +245,7 @@ mod tests {
             "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
         )
         .unwrap();
-        // sources.yaml declara un project_id que no existe en projects.yaml
+        // sources.yaml declares a project_id that does not exist in projects.yaml
         fs::write(
             dir.path().join("sources.yaml"),
             "src-test:\n  name: \"Test\"\n  project_id: \"prj-ghost\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",

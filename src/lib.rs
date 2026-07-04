@@ -5,7 +5,7 @@ pub mod domain;
 pub mod ports;
 mod state;
 
-// Re-export: el resto del código (y los tests) siguen usando crate::AppState
+// Re-export: the rest of the code (and tests) continue using crate::AppState
 pub use state::AppState;
 
 use std::collections::HashMap;
@@ -24,11 +24,11 @@ use domain::enricher::Enricher;
 use domain::source::Source;
 use ports::secrets::SecretsPort;
 
-// AppBuilder es el composition root: el ÚNICO sitio donde se eligen los
-// adapters concretos que llenan los ports del AppState. Producción cambia
-// los secrets (EnvSecrets en vez de MockSecrets) y añade la API key; los
-// tests usan los defaults. Patrón builder: cada método consume self y lo
-// devuelve, así se encadenan llamadas y build() cierra la construcción.
+// AppBuilder is the composition root: the ONLY place where concrete adapters
+// are chosen to fill AppState ports. Production swaps secrets (EnvSecrets
+// instead of MockSecrets) and adds the API key; tests use defaults. Builder
+// pattern: each method consumes self and returns it, so calls can be chained
+// and build() finalizes the construction.
 pub struct AppBuilder {
     sources: HashMap<String, Source>,
     enrichers: HashMap<String, Enricher>,
@@ -43,7 +43,7 @@ impl AppBuilder {
             sources: HashMap::new(),
             enrichers: HashMap::new(),
             endpoints: HashMap::new(),
-            // MockSecrets por defecto: en tests no hay almacén de secrets
+            // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
             api_key: None,
         }
@@ -79,8 +79,8 @@ impl AppBuilder {
         router
     }
 
-    // Devuelve también el AppState: lo necesitan main (para arrancar el
-    // scheduler sobre el mismo estado) y los tests que preparan el cache
+    // Also returns the AppState: needed by main (to start the scheduler on the
+    // same state) and tests that prepare the cache
     pub fn build_with_state(self) -> (Router<()>, Arc<AppState>) {
         let state = Arc::new(AppState {
             cache: Arc::new(MemoryCache::new()),

@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-// Alias para el tipo que devuelve resolve() — un futuro boxeado (ver
-// connector.rs para el porqué del Pin<Box<dyn Future>>). Con el alias, el
-// trait y sus impls no repiten el tipo completo cada vez.
+// Alias for the type returned by resolve() — a boxed future (see
+// connector.rs for why Pin<Box<dyn Future>>). With the alias, the
+// trait and its impls don't repeat the full type each time.
 pub type SecretsFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HashMap<String, String>, SecretsError>> + Send + 'a>>;
 
-// SecretsPort — interfaz para resolver credenciales desde un almacén de secrets
-// La implementación concreta será Vault, pero el trait permite testear con mocks
+// SecretsPort — interface to resolve credentials from a secrets store
+// The concrete implementation will be Vault, but the trait allows testing with mocks
 pub trait SecretsPort: Send + Sync {
-    // Dado un credential_id (ej: "cred-section9-api"),
-    // devuelve un HashMap con los secrets resueltos (ej: {"username": "admin", "password": "xxx"})
+    // Given a credential_id (e.g., "cred-section9-api"),
+    // returns a HashMap with the resolved secrets (e.g., {"username": "admin", "password": "xxx"})
     fn resolve(&self, credential_id: &str) -> SecretsFuture<'_>;
 }
 

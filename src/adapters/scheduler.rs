@@ -6,9 +6,9 @@ use crate::AppState;
 use crate::application::enrich::run_enricher;
 use crate::application::sync::{SyncScope, sync_source};
 
-// El scheduler es un "driving adapter" más, igual que los handlers HTTP:
-// dispara los mismos casos de uso de application/, solo que por tiempo en
-// vez de por request. Aquí no hay lógica de negocio — solo timers y logs.
+// The scheduler is another "driving adapter", just like HTTP handlers:
+// it triggers the same use cases from application/, just by time instead
+// of by request. There is no business logic here — only timers and logs.
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {

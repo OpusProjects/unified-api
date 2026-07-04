@@ -48,7 +48,7 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Rea
 
     let sources_synced = sources_total - sources_pending.len();
 
-    // Ready si no hay sources configurados, o si al menos uno está sincronizado
+    // Ready if no sources configured, or if at least one is synced
     let ready = sources_total == 0 || sources_synced > 0;
 
     let status = if ready {

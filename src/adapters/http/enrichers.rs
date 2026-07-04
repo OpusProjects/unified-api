@@ -5,8 +5,8 @@ use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-// Renombramos el caso de uso al importarlo porque el handler HTTP
-// que lo envuelve se llama igual (run_enricher)
+// Rename the use case on import because the HTTP handler wrapping
+// it has the same name (run_enricher)
 use crate::AppState;
 use crate::application::enrich::run_enricher as application_run_enricher;
 
@@ -39,7 +39,7 @@ pub async fn run_enricher(
 ) -> Result<Json<EnrichResult>, StatusCode> {
     let enricher_def = state.enrichers.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    // None = el source no está en cache → 404
+    // None = source not in cache → 404
     let outcome = application_run_enricher(&*state.cache, &*state.enricher, enricher_def)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;

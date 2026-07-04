@@ -7,11 +7,11 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::AppState;
 
-// Lectura del cache de sources: listado, dataset completo y estado por host.
-// Las operaciones que escriben viven en sync.rs, enrichers.rs y hosts.rs.
+// Read from the sources cache: list, full dataset, and per-host status.
+// Write operations live in sync.rs, enrichers.rs, and hosts.rs.
 
-// ToSchema = utoipa genera la definición JSON Schema de este struct
-// Aparecerá en la sección "Schemas" del Swagger UI
+// ToSchema = utoipa generates the JSON Schema definition for this struct
+// It will appear in the "Schemas" section of the Swagger UI
 #[derive(Serialize, ToSchema)]
 pub struct CachedSourceInfo {
     pub source_id: String,
@@ -20,11 +20,11 @@ pub struct CachedSourceInfo {
     pub total_hosts: usize,
 }
 
-// #[utoipa::path] describe el endpoint para la documentación:
-// - get = método HTTP
-// - path = la URL
-// - responses = qué devuelve y con qué status code
-// - tag = agrupación en el Swagger UI
+// #[utoipa::path] describes the endpoint for documentation:
+// - get = HTTP method
+// - path = the URL
+// - responses = what it returns and with which status code
+// - tag = grouping in the Swagger UI
 #[utoipa::path(
     get,
     path = "/api/v1/sources",
@@ -80,8 +80,8 @@ pub async fn get_source_dataset(
     }
 }
 
-// IntoParams = utoipa genera la documentación de los query params
-// Cada campo Option<String> aparece como parámetro opcional en Swagger
+// IntoParams = utoipa generates documentation for query params
+// Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]
 pub struct StatusParams {
     /// Filter by hostname (e.g. motoko.section9.net)

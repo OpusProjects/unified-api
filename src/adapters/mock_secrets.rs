@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 
-// Implementación de SecretsPort para tests y desarrollo local: no hay
-// almacén de secrets, solo lo que se le mete a mano. Es el default del
-// AppBuilder — producción lo sustituye por EnvSecrets.
+// Implementation of SecretsPort for tests and local development: no
+// secrets store, only what is manually provided. It is the default of
+// AppBuilder — production replaces it with EnvSecrets.
 //
-// Vive en su propio archivo (y no dentro de env_secrets.rs) para que quede
-// claro qué es: un doble de pruebas, no una variante del adapter real.
+// Lives in its own file (and not inside env_secrets.rs) to make it
+// clear what it is: a test double, not a variant of the real adapter.
 pub struct MockSecrets {
     secrets: HashMap<String, HashMap<String, String>>,
 }

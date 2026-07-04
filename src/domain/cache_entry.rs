@@ -3,17 +3,17 @@ use std::time::{Duration, Instant};
 
 use super::dataset::{Dataset, HostVars};
 
-// CacheEntry envuelve un Dataset con metadata de caché a tres niveles:
-// - dataset level: cuándo se hizo el último sync completo
-// - host level: cuándo se refrescó cada host individual
-// - group level: se resuelve consultando los hosts del grupo
+// CacheEntry wraps a Dataset with cache metadata at three levels:
+// - dataset level: when was the last full sync performed
+// - host level: when was each individual host refreshed
+// - group level: resolved by querying the group's hosts
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
     pub dataset: Dataset,
     pub fetched_at: Instant,
     pub ttl: Duration,
-    // Timestamp individual por host — permite saber cuándo se refrescó cada uno
-    // Si un host no está aquí, se usa fetched_at del dataset
+    // Individual timestamp per host — allows knowing when each one was refreshed
+    // If a host is not here, fetched_at from the dataset is used
     pub host_timestamps: HashMap<String, Instant>,
 }
 
@@ -21,7 +21,7 @@ impl CacheEntry {
     pub fn new(dataset: Dataset, ttl_seconds: u64) -> Self {
         let now = Instant::now();
 
-        // Al crear, todos los hosts tienen el mismo timestamp
+        // When creating, all hosts have the same timestamp
         let host_timestamps: HashMap<String, Instant> = dataset
             .hostvars
             .keys()
@@ -36,46 +36,46 @@ impl CacheEntry {
         }
     }
 
-    // ¿El dataset completo está fresco?
+    // Is the complete dataset fresh?
     pub fn is_fresh(&self) -> bool {
         self.fetched_at.elapsed() < self.ttl
     }
 
-    // Edad del dataset completo en segundos
+    // Age of the complete dataset in seconds
     pub fn age_seconds(&self) -> u64 {
         self.fetched_at.elapsed().as_secs()
     }
 
-    // ¿Un host específico está fresco? Acepta un TTL override por host
+    // Is a specific host fresh? Accepts a TTL override per host
     pub fn is_host_fresh(&self, hostname: &str, ttl_override: Option<u64>) -> bool {
         let ttl = match ttl_override {
             Some(secs) => Duration::from_secs(secs),
-            None => self.ttl, // si no hay override, usa el TTL global
+            None => self.ttl, // if no override, use the global TTL
         };
 
         match self.host_timestamps.get(hostname) {
             Some(timestamp) => timestamp.elapsed() < ttl,
-            None => false, // host no existe en cache
+            None => false, // host does not exist in cache
         }
     }
 
-    // Edad de un host específico en segundos
+    // Age of a specific host in seconds
     pub fn host_age_seconds(&self, hostname: &str) -> Option<u64> {
         self.host_timestamps
             .get(hostname)
             .map(|ts| ts.elapsed().as_secs())
     }
 
-    // Actualiza un solo host: sus vars y su timestamp
-    // &mut self = referencia MUTABLE — podemos modificar la instancia
-    // Es la primera vez que vemos &mut: hasta ahora todo era &self (solo lectura)
+    // Updates a single host: its vars and its timestamp
+    // &mut self = MUTABLE reference — we can modify the instance
+    // This is the first time we see &mut: until now everything was &self (read-only)
     pub fn update_host(&mut self, hostname: String, vars: HostVars) {
         self.dataset.hostvars.insert(hostname.clone(), vars);
         self.host_timestamps.insert(hostname, Instant::now());
     }
 
-    // Merge: parchea los hosts que vienen, el resto no se toca.
-    // También procesa remove_hosts si vienen.
+    // Merge: patches the hosts that come, the rest is left alone.
+    // Also processes remove_hosts if they come.
     pub fn merge_dataset(&mut self, partial: Dataset) {
         let now = Instant::now();
 
@@ -94,14 +94,14 @@ impl CacheEntry {
         for hostname in &partial.remove_hosts {
             self.dataset.hostvars.remove(hostname);
             self.host_timestamps.remove(hostname);
-            // Quitar el host de todos los grupos
+            // Remove the host from all groups
             for group in self.dataset.groups.values_mut() {
                 group.hosts.retain(|h| h != hostname);
             }
         }
     }
 
-    // Elimina un host del cache
+    // Deletes a host from the cache
     pub fn remove_host(&mut self, hostname: &str) {
         self.dataset.hostvars.remove(hostname);
         self.host_timestamps.remove(hostname);
@@ -111,7 +111,7 @@ impl CacheEntry {
     }
 
     pub fn update_group(&mut self, group_name: &str, partial_dataset: Dataset) {
-        // Solo actualizamos los hosts que pertenecen al grupo
+        // Only update the hosts that belong to the group
         if let Some(group) = self.dataset.groups.get(group_name) {
             let now = Instant::now();
             for hostname in &group.hosts {
@@ -122,7 +122,7 @@ impl CacheEntry {
             }
         }
 
-        // Actualizamos las vars del grupo si vienen
+        // Update the group's vars if they come
         if let Some(new_group) = partial_dataset.groups.get(group_name)
             && let Some(existing_group) = self.dataset.groups.get_mut(group_name)
         {
@@ -207,7 +207,7 @@ mod tests {
     fn host_is_stale_with_override_ttl() {
         let entry = CacheEntry::new(dataset_with_hosts(), 3600);
         thread::sleep(std::time::Duration::from_millis(10));
-        // Override de 0 segundos = siempre expirado
+        // Override of 0 seconds = always expired
         assert!(!entry.is_host_fresh("motoko.section9.net", Some(0)));
     }
 
@@ -229,9 +229,9 @@ mod tests {
             .collect();
         entry.update_host("motoko.section9.net".to_string(), new_vars);
 
-        // El timestamp debe haber cambiado
+        // The timestamp must have changed
         assert!(entry.host_timestamps["motoko.section9.net"] > original_ts);
-        // Los vars deben estar actualizados
+        // The vars must be updated
         assert_eq!(
             entry.dataset.hostvars["motoko.section9.net"]["role"],
             "upgraded"

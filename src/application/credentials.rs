@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 use crate::ports::secrets::{SecretsError, SecretsPort};
 
-// Resuelve una lista de credential_ids contra el SecretsPort y junta
-// todos los pares clave-valor en un solo HashMap.
+// Resolves a list of credential_ids against the SecretsPort and combines
+// all key-value pairs into a single HashMap.
 //
-// Recibe &[String] (solo los ids) y no un Source entero: no necesita más,
-// y así el scheduler no tiene que fabricar un Source falso para llamarla.
+// Receives &[String] (only the ids) and not an entire Source: it doesn't need more,
+// and this way the scheduler doesn't have to fabricate a fake Source to call it.
 //
-// Un fallo de resolución CORTA el caso de uso y sube al caller. Antes se
-// tragaba con un warn! y se seguía con credenciales parciales o vacías —
-// el sync fallaba después con un error confuso del connector, o peor,
-// "funcionaba" sin la autenticación esperada.
+// A resolution failure HALTS the use case and propagates to the caller. Previously it
+// was swallowed with a warn! and continued with partial or empty credentials —
+// the sync would later fail with a confusing connector error, or worse,
+// "worked" without the expected authentication.
 pub async fn resolve_credentials(
     secrets: &dyn SecretsPort,
     credential_ids: &[String],

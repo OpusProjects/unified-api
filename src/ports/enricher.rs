@@ -10,8 +10,8 @@ pub struct EnricherError {
     pub message: String,
 }
 
-// Un enricher recibe el dataset actual y devuelve un dataset parcial
-// con los hosts modificados y/o hosts a eliminar
+// An enricher receives the current dataset and returns a partial dataset
+// with modified hosts and/or hosts to remove
 pub trait EnricherPort: Send + Sync {
     fn execute(
         &self,

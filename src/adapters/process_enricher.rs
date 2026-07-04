@@ -37,9 +37,9 @@ impl EnricherPort for ProcessEnricher {
                 message: format!("Failed to serialize config: {}", e),
             })?;
 
-            // El enricher recibe:
-            // - SOURCE_CONFIG como env var (igual que el connector)
-            // - El dataset actual por stdin (JSON)
+            // The enricher receives:
+            // - SOURCE_CONFIG as env var (same as the connector)
+            // - The current dataset via stdin (JSON)
             let mut cmd = Command::new(&script_path);
             cmd.env("SOURCE_CONFIG", &config_json);
             cmd.stdin(std::process::Stdio::piped());
@@ -50,7 +50,7 @@ impl EnricherPort for ProcessEnricher {
                 message: format!("Failed to execute enricher '{}': {}", script_path, e),
             })?;
 
-            // Escribimos el dataset por stdin
+            // We write the dataset via stdin
             if let Some(mut stdin) = child.stdin.take() {
                 stdin
                     .write_all(dataset_json.as_bytes())
@@ -58,7 +58,7 @@ impl EnricherPort for ProcessEnricher {
                     .map_err(|e| EnricherError {
                         message: format!("Failed to write to enricher stdin: {}", e),
                     })?;
-                // drop(stdin) cierra el pipe — el script sabe que no hay más input
+                // drop(stdin) closes the pipe — the script knows there's no more input
             }
 
             let output = child.wait_with_output().await.map_err(|e| EnricherError {

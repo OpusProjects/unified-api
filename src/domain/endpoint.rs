@@ -5,14 +5,14 @@ use std::collections::HashMap;
 pub struct OutputEndpoint {
     pub name: String,
 
-    // Qué sources alimentan este endpoint
+    // Which sources feed this endpoint
     #[serde(default)]
     pub source_ids: Vec<String>,
 
-    // Script que transforma los datasets en el formato final
+    // Script that transforms the datasets into the final format
     pub script_path: String,
 
-    // Config libre para el script de transformación
+    // Free config for the transformation script
     #[serde(default)]
     pub config: HashMap<String, String>,
 }

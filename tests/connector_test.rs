@@ -2,20 +2,20 @@ use std::collections::HashMap;
 use unified_api::adapters::process_connector::ProcessConnector;
 use unified_api::ports::connector::ConnectorPort;
 
-// Helper: construye un config con el escenario deseado
+// Helper: builds a config with the desired scenario
 fn config_with_scenario(scenario: &str) -> HashMap<String, String> {
     let mut config = HashMap::new();
     config.insert("scenario".to_string(), scenario.to_string());
     config
 }
 
-// Credenciales vacías (el fake connector no las necesita)
+// Empty credentials (the fake connector does not need them)
 fn empty_credentials() -> HashMap<String, String> {
     HashMap::new()
 }
 
 // =========================================================================
-// Test: escenario default — inventario con 3 hosts
+// Test: default scenario — inventory with 3 hosts
 // =========================================================================
 #[tokio::test]
 async fn execute_default_inventory() {
@@ -29,12 +29,12 @@ async fn execute_default_inventory() {
         )
         .await;
 
-    // Verificamos que no falló
+    // Verify it did not fail
     assert!(result.is_ok(), "Connector failed: {:?}", result.err());
 
     let dataset = result.unwrap();
 
-    // 6 hosts en el inventario default: 3 en Section 9, 3 MAGI en SEELE
+    // 6 hosts in default inventory: 3 in Section 9, 3 MAGI in SEELE
     assert_eq!(dataset.hostvars.len(), 6);
     assert!(dataset.hostvars.contains_key("motoko.section9.net"));
     assert!(dataset.hostvars.contains_key("batou.section9.net"));
@@ -43,7 +43,7 @@ async fn execute_default_inventory() {
     assert!(dataset.hostvars.contains_key("balthasar.seele.net"));
     assert!(dataset.hostvars.contains_key("casper.seele.net"));
 
-    // Verificamos que los grupos existen
+    // Verify the groups exist
     assert!(dataset.groups.contains_key("section9"));
     assert!(dataset.groups.contains_key("seele"));
     assert!(dataset.groups.contains_key("magi"));
@@ -51,7 +51,7 @@ async fn execute_default_inventory() {
 }
 
 // =========================================================================
-// Test: escenario empty — inventario vacío
+// Test: empty scenario — empty inventory
 // =========================================================================
 #[tokio::test]
 async fn execute_empty_inventory() {
@@ -73,7 +73,7 @@ async fn execute_empty_inventory() {
 }
 
 // =========================================================================
-// Test: escenario large — 50 hosts
+// Test: large scenario — 50 hosts
 // =========================================================================
 #[tokio::test]
 async fn execute_large_inventory() {
@@ -94,13 +94,13 @@ async fn execute_large_inventory() {
     assert!(dataset.groups.contains_key("production"));
     assert!(dataset.groups.contains_key("staging"));
 
-    // production tiene 25 hosts, staging tiene 25
+    // production has 25 hosts, staging has 25
     let prod = dataset.groups.get("production").unwrap();
     assert_eq!(prod.hosts.len(), 25);
 }
 
 // =========================================================================
-// Test: escenario error — el script falla con exit code 1
+// Test: error scenario — script fails with exit code 1
 // =========================================================================
 #[tokio::test]
 async fn execute_error_scenario() {
@@ -114,7 +114,7 @@ async fn execute_error_scenario() {
         )
         .await;
 
-    // Debe ser un error
+    // Must be an error
     assert!(result.is_err());
 
     let error = result.unwrap_err();
@@ -123,7 +123,7 @@ async fn execute_error_scenario() {
 }
 
 // =========================================================================
-// Test: script que no existe — error de ejecución
+// Test: nonexistent script — execution error
 // =========================================================================
 #[tokio::test]
 async fn execute_nonexistent_script() {
@@ -143,7 +143,7 @@ async fn execute_nonexistent_script() {
 }
 
 // =========================================================================
-// Test: credenciales se pasan como env vars
+// Test: credentials are passed as env vars
 // =========================================================================
 #[tokio::test]
 async fn credentials_are_passed_as_env_vars() {
@@ -153,8 +153,8 @@ async fn credentials_are_passed_as_env_vars() {
     credentials.insert("username".to_string(), "admin".to_string());
     credentials.insert("password".to_string(), "secret123".to_string());
 
-    // El fake connector no usa las credenciales, pero al menos
-    // verificamos que no crashea al pasarlas
+    // The fake connector does not use credentials, but at least
+    // we verify it does not crash when passed them
     let result = connector
         .execute(
             "test-connectors/fake_inventory.py",

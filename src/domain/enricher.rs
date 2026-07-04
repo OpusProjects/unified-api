@@ -1,24 +1,24 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-// Un Enricher post-procesa datos que ya están en cache.
-// Recibe el dataset actual de un source, lo transforma, y devuelve
-// los hosts modificados (merge) y/o hosts a eliminar.
+// An Enricher post-processes data that is already in cache.
+// It receives the current dataset from a source, transforms it, and returns
+// the modified hosts (merge) and/or hosts to delete.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Enricher {
     pub name: String,
 
-    // El source cuyos datos enriquece — ej: "src-device42"
+    // The source whose data it enriches — ex: "src-device42"
     pub source_id: String,
 
-    // Script que ejecuta el enriquecimiento
+    // Script that performs the enrichment
     pub script_path: String,
 
-    // Intervalo de ejecución automática (0 o None = solo manual)
+    // Automatic execution interval (0 or None = manual only)
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
 
-    // Config libre para el script
+    // Free config for the script
     #[serde(default)]
     pub config: HashMap<String, String>,
 }

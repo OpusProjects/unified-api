@@ -4,10 +4,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use futures::future::join_all;
 use russh::client;
-use russh_keys::{PrivateKey, PublicKey};
+use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -31,10 +30,11 @@ impl SshConnector {
 
 struct SshClientHandler;
 
-#[async_trait]
 impl client::Handler for SshClientHandler {
     type Error = russh::Error;
 
+    // We accept any server key: hosts come from trusted config, and there is
+    // no known_hosts store to check against in this deployment model.
     async fn check_server_key(
         &mut self,
         _server_public_key: &PublicKey,
@@ -108,7 +108,7 @@ impl ConnectorPort for SshConnector {
             };
 
             let private_key =
-                russh_keys::decode_secret_key(&key_data, None).map_err(|e| ConnectorError {
+                russh::keys::decode_secret_key(&key_data, None).map_err(|e| ConnectorError {
                     message: format!("Failed to decode SSH private key: {}", e),
                     stderr: String::new(),
                     exit_code: None,
@@ -251,11 +251,11 @@ async fn execute_on_host(
         .map_err(|e| format!("Connection to {} failed: {}", host, e))?;
 
     let auth_ok = session
-        .authenticate_publickey(username, Arc::clone(key))
+        .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::clone(key), None))
         .await
         .map_err(|e| format!("Auth to {} failed: {}", host, e))?;
 
-    if !auth_ok {
+    if !auth_ok.success() {
         return Err(format!("Public key authentication rejected by {}", host));
     }
 

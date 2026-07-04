@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Bump `russh` 0.48 → 0.60.3, fixing two high-severity advisories:
+  unbounded 32-bit allocation (RUSTSEC-2026-0154) and unchecked
+  `CryptoVec` growth (RUSTSEC-2026-0153)
+
 ### Added
 
 - Prometheus metrics at `GET /metrics`: counters and duration histograms for

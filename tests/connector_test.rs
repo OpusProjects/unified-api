@@ -165,3 +165,64 @@ async fn credentials_are_passed_as_env_vars() {
 
     assert!(result.is_ok());
 }
+
+// =========================================================================
+// ProcessOutput: runs an output transformer script over cached datasets
+// =========================================================================
+mod output {
+    use std::collections::HashMap;
+    use unified_api::adapters::process_output::ProcessOutput;
+    use unified_api::domain::dataset::Dataset;
+    use unified_api::ports::output::OutputPort;
+
+    fn dataset_with_host(host: &str) -> Dataset {
+        let mut hostvars = HashMap::new();
+        let mut vars = HashMap::new();
+        vars.insert("os".to_string(), serde_json::json!("OracleLinux"));
+        hostvars.insert(host.to_string(), vars);
+        Dataset {
+            hostvars,
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn output_transforms_datasets_to_ansible_inventory() {
+        let output = ProcessOutput::new();
+
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src-a".to_string(),
+            dataset_with_host("motoko.section9.net"),
+        );
+
+        let result = output
+            .execute(
+                "test-connectors/output_ansible_inventory.py",
+                &HashMap::new(),
+                &serde_json::json!({}),
+                &datasets,
+            )
+            .await;
+
+        assert!(result.is_ok(), "output script failed: {:?}", result.err());
+        let inventory: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        // Ansible inventory format: hostvars live under _meta
+        assert!(inventory["_meta"]["hostvars"]["motoko.section9.net"].is_object());
+    }
+
+    #[tokio::test]
+    async fn output_reports_error_for_missing_script() {
+        let output = ProcessOutput::new();
+        let result = output
+            .execute(
+                "test-connectors/does_not_exist.py",
+                &HashMap::new(),
+                &serde_json::json!({}),
+                &HashMap::new(),
+            )
+            .await;
+        assert!(result.is_err());
+    }
+}

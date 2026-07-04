@@ -1,4 +1,4 @@
-// The adapters: TODO everything that touches the outside world, in both directions.
+// The adapters: everything that touches the outside world, in both directions.
 // - Driving (incoming requests): http/ (axum) and scheduler (timers)
 // - Driven (we go out): cache, connectors, secrets, output
 pub mod env_secrets;

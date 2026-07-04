@@ -2,8 +2,9 @@
 
 ## Container image
 
-CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main`, tagged
-`latest` and with the commit SHA. The image is a two-stage build (Rust builder →
+CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main` (tagged
+`latest` and with the commit SHA) and on every `vX.Y.Z` git tag (tagged `X.Y.Z`).
+Production deployments should pin a version tag; `latest` tracks `main`. The image is a two-stage build (Rust builder →
 `debian:bookworm-slim`), runs as a non-root `unified` user, ships `python3` for
 script connectors, and bakes in the repo's `config/` and `test-connectors/` as
 defaults.
@@ -22,8 +23,8 @@ docker run -p 8182:8182 \
 
 1. **test** — on every push and PR: `cargo fmt --check`, `cargo clippy --all-targets
    -- -D warnings`, `cargo test` (with `Swatinem/rust-cache`)
-2. **build-image** — only on push to `main`, after tests pass: builds and pushes the
-   image to GHCR with `sha` + `latest` tags
+2. **build-image** — on pushes to `main` and on `v*` tags, after tests pass: builds
+   and pushes the image to GHCR (`sha` + `latest` from `main`, semver from tags)
 
 The CI badge in the README tracks this workflow.
 

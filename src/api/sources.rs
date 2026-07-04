@@ -2,17 +2,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
-use tracing::warn;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::domain::cache_entry::CacheEntry;
+// Renombramos los casos de uso al importarlos porque los handlers HTTP
+// que los envuelven se llaman igual (sync_source, run_enricher)
+use crate::application::enrich::run_enricher as application_run_enricher;
+use crate::application::sync::{sync_source as application_sync_source, SyncScope};
 use crate::domain::dataset::HostVars;
-use crate::domain::source::Source;
-use crate::domain::sync_mode::SyncMode;
-use crate::ports::secrets::SecretsPort;
 use crate::AppState;
 
 // ToSchema = utoipa genera la definición JSON Schema de este struct
@@ -230,95 +227,36 @@ pub async fn sync_source(
 ) -> Result<Json<SyncResult>, StatusCode> {
     let source = state.sources.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    let mut config = source.config.clone();
-    let scope_label;
-
-    if let Some(ref host) = params.host {
-        config.insert("scope".to_string(), "host".to_string());
-        config.insert("target".to_string(), host.clone());
-        scope_label = format!("host:{}", host);
-    } else if let Some(ref group) = params.group {
-        config.insert("scope".to_string(), "group".to_string());
-        config.insert("target".to_string(), group.clone());
-        scope_label = format!("group:{}", group);
+    let scope = if let Some(host) = params.host {
+        SyncScope::Host(host)
+    } else if let Some(group) = params.group {
+        SyncScope::Group(group)
     } else {
-        scope_label = "full".to_string();
-    }
+        SyncScope::Full
+    };
 
-    let start = Instant::now();
-
-    let credentials = resolve_credentials(&*state.secrets, source).await;
-
+    // El handler solo traduce HTTP ↔ caso de uso; la lógica del sync
+    // vive en application::sync (compartida con el scheduler)
     let connector = state.connector_for(&source.connector_type);
-    let result = connector
-        .execute(&source.script_path, &config, &credentials)
-        .await;
+    let outcome = application_sync_source(
+        &*state.cache,
+        &**connector,
+        &*state.secrets,
+        &id,
+        source,
+        scope,
+    )
+    .await;
 
-    let duration_ms = start.elapsed().as_millis();
-
-    match result {
-        Ok(dataset) => {
-            let total_hosts = dataset.hostvars.len();
-            let total_groups = dataset.groups.len();
-
-            // Todas las fusiones van por merge_or_insert: la decisión
-            // "¿existe la entrada?" y la modificación ocurren bajo el mismo
-            // lock, así que un sync concurrente no puede pisar esta escritura.
-            if let Some(ref host) = params.host {
-                // Solo cacheamos si el connector devolvió el host pedido
-                if let Some(vars) = dataset.hostvars.get(host).cloned() {
-                    let hostname = host.clone();
-                    state.cache.merge_or_insert(
-                        &id,
-                        dataset,
-                        source.ttl_seconds,
-                        &mut |entry, _new| entry.update_host(hostname.clone(), vars.clone()),
-                    );
-                }
-            } else if let Some(ref group) = params.group {
-                let group_name = group.clone();
-                state.cache.merge_or_insert(
-                    &id,
-                    dataset,
-                    source.ttl_seconds,
-                    &mut |entry, new| entry.update_group(&group_name, new),
-                );
-            } else {
-                match source.sync_mode {
-                    SyncMode::Replace => {
-                        state.cache.set(&id, CacheEntry::new(dataset, source.ttl_seconds));
-                    }
-                    SyncMode::Merge => {
-                        state.cache.merge_or_insert(
-                            &id,
-                            dataset,
-                            source.ttl_seconds,
-                            &mut |entry, new| entry.merge_dataset(new),
-                        );
-                    }
-                }
-            }
-
-            Ok(Json(SyncResult {
-                source_id: id,
-                success: true,
-                scope: scope_label,
-                total_hosts,
-                total_groups,
-                sync_duration_ms: duration_ms,
-                error: None,
-            }))
-        }
-        Err(connector_error) => Ok(Json(SyncResult {
-            source_id: id,
-            success: false,
-            scope: scope_label,
-            total_hosts: 0,
-            total_groups: 0,
-            sync_duration_ms: duration_ms,
-            error: Some(connector_error.message),
-        })),
-    }
+    Ok(Json(SyncResult {
+        source_id: id,
+        success: outcome.success(),
+        scope: outcome.scope,
+        total_hosts: outcome.total_hosts,
+        total_groups: outcome.total_groups,
+        sync_duration_ms: outcome.duration_ms,
+        error: outcome.error,
+    }))
 }
 
 // --- Enricher endpoint ---
@@ -351,55 +289,21 @@ pub async fn run_enricher(
     Path(id): Path<String>,
 ) -> Result<Json<EnrichResult>, StatusCode> {
     let enricher_def = state.enrichers.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let source_id = enricher_def.source_id.clone();
 
-    let current_entry = state.cache.get(&source_id).ok_or(StatusCode::NOT_FOUND)?;
+    // None = el source no está en cache → 404
+    let outcome = application_run_enricher(&*state.cache, &*state.enricher, enricher_def)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
 
-    let start = Instant::now();
-
-    let result = state.enricher.execute(
-        &enricher_def.script_path,
-        &enricher_def.config,
-        &current_entry.dataset,
-    ).await;
-
-    let duration_ms = start.elapsed().as_millis();
-
-    match result {
-        Ok(partial_dataset) => {
-            let hosts_updated = partial_dataset.hostvars.len();
-            let hosts_removed = partial_dataset.remove_hosts.len();
-
-            // Option::take dentro del closure: merge_dataset consume el dataset
-            // (por valor) pero un FnMut no puede mover lo que captura — con el
-            // Option lo "sacamos" una única vez.
-            let mut partial = Some(partial_dataset);
-            state.cache.update(&source_id, &mut |entry| {
-                if let Some(p) = partial.take() {
-                    entry.merge_dataset(p);
-                }
-            });
-
-            Ok(Json(EnrichResult {
-                source_id,
-                enricher_id: id,
-                success: true,
-                hosts_updated,
-                hosts_removed,
-                duration_ms,
-                error: None,
-            }))
-        }
-        Err(e) => Ok(Json(EnrichResult {
-            source_id,
-            enricher_id: id,
-            success: false,
-            hosts_updated: 0,
-            hosts_removed: 0,
-            duration_ms,
-            error: Some(e.message),
-        })),
-    }
+    Ok(Json(EnrichResult {
+        source_id: enricher_def.source_id.clone(),
+        enricher_id: id,
+        success: outcome.success(),
+        hosts_updated: outcome.hosts_updated,
+        hosts_removed: outcome.hosts_removed,
+        duration_ms: outcome.duration_ms,
+        error: outcome.error,
+    }))
 }
 
 // --- Alta y baja inmediata de hosts ---
@@ -467,22 +371,3 @@ pub async fn delete_host(
     Ok(StatusCode::OK)
 }
 
-pub async fn resolve_credentials(
-    secrets: &dyn SecretsPort,
-    source: &Source,
-) -> HashMap<String, String> {
-    let mut all_credentials = HashMap::new();
-
-    for credential_id in &source.credential_ids {
-        match secrets.resolve(credential_id).await {
-            Ok(creds) => {
-                all_credentials.extend(creds);
-            }
-            Err(e) => {
-                warn!(credential = %credential_id, error = %e.message, "Failed to resolve credential");
-            }
-        }
-    }
-
-    all_credentials
-}

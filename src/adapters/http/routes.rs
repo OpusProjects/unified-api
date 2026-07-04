@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post, put},
 };
 use tower_http::cors::{Any, CorsLayer};
+use tracing::warn;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -75,7 +76,18 @@ fn cors_layer(origins: &[String]) -> Option<CorsLayer> {
     let layer = if origins.iter().any(|o| o == "*") {
         CorsLayer::new().allow_origin(Any)
     } else {
-        let list: Vec<HeaderValue> = origins.iter().filter_map(|o| o.parse().ok()).collect();
+        // Parse each origin, warning (not silently dropping) on a bad one so a
+        // typo in config.yaml doesn't fail closed with no explanation.
+        let list: Vec<HeaderValue> = origins
+            .iter()
+            .filter_map(|o| match o.parse() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    warn!(origin = %o, "ignoring invalid CORS origin");
+                    None
+                }
+            })
+            .collect();
         CorsLayer::new().allow_origin(list)
     };
 

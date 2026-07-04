@@ -13,6 +13,8 @@ serves it through a fast REST API to consumers like AWX and AnsibleForms — so 
 automation tool works from the same fresh, consistent view of the infrastructure
 without each run hammering the upstream systems of record behind it.
 
+---
+
 ## ✨ Features
 
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
@@ -23,6 +25,8 @@ without each run hammering the upstream systems of record behind it.
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
+
+---
 
 ## 🚀 Quick start
 
@@ -45,6 +49,8 @@ Or with Docker:
 docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 ```
 
+---
+
 ## 📚 Documentation
 
 | Document | What it covers |
@@ -56,11 +62,15 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 | [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides and atomicity rules |
 | [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
 
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) covers the PR workflow, commit style, CI gates and architecture rules.
 
 Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
+
+---
 
 ## 👥 Authors
 
@@ -68,6 +78,8 @@ Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
 - [Blai Peidro](https://github.com/blaipr)
 
 Part of [OpusProjects](https://github.com/OpusProjects).
+
+---
 
 ## ⚖️ License
 

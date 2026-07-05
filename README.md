@@ -60,6 +60,7 @@ docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
 | [REST API](docs/api.md) | All routes with authentication, status code semantics and curl examples |
 | [Connectors](docs/connectors.md) | The script contracts for source connectors, enrichers and output transformers |
 | [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides and atomicity rules |
+| [Testing](docs/testing.md) | How to run the suite, what the unit and integration tests cover, and how to add more |
 | [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
 
 ---

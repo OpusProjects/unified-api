@@ -84,4 +84,5 @@ cargo test                # unit + integration; integration tests use the fixtur
 
 The sample scripts under `tests/adapters/out/` (`connectors/`, `enrichers/`,
 `output/`) are plain Python — no external services are needed to run the full
-suite.
+suite. See [docs/testing.md](docs/testing.md) for what the suite covers, running
+a subset, and where new tests belong.

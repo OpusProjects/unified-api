@@ -34,12 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Scans Cargo.lock against the RUSTSEC advisory database. Warns on
-      # known-vulnerable dependency versions; does not open bump PRs.
-      # Ignored advisories (with rationale) live in .cargo/audit.toml.
-      - uses: rustsec/audit-check@v2
+      # Scans Cargo.lock against the RUSTSEC advisory database, failing on
+      # known-vulnerable dependency versions; ignored advisories (with
+      # rationale) live in .cargo/audit.toml. We run cargo-audit directly
+      # rather than rustsec/audit-check so the job needs no checks:write token
+      # (the default token is read-only) and avoids the deprecated Node 20
+      # action runtime.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - run: cargo audit
 
   build-image:
     needs: test

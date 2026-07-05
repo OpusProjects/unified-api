@@ -1,6 +1,6 @@
 [package]
 name = "unified-api"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Infrastructure inventory aggregation and caching middleware"
 license = "Apache-2.0"

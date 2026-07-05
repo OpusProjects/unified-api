@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fake connector that simulates a Device42-like inventory source.
+Sample connector that simulates a Device42-like inventory source.
 Reads config from environment variables, outputs Ansible inventory JSON to stdout.
 
 This is exactly how a real connector would work:

@@ -31,7 +31,7 @@ without each run hammering the upstream systems of record behind it.
 ## 🚀 Quick start
 
 ```bash
-cargo run                      # uses ./config; demo sources run against test-connectors/
+cargo run                      # uses ./config; demo sources run the sample scripts under tests/
 # open http://localhost:8182/  -> redirects to Swagger UI
 ```
 

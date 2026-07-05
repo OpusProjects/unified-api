@@ -1,18 +1,18 @@
 ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
-  script_path: "test-connectors/output_ansible_inventory.py"
+  script_path: "tests/adapters/out/output/ansible_inventory.py"
 
 ep-ansible-section9:
   name: "Section 9 Only"
   source_ids: ["src-section9", "src-infra"]
-  script_path: "test-connectors/output_ansible_inventory.py"
+  script_path: "tests/adapters/out/output/ansible_inventory.py"
   config:
     filter_datacenter: "section9"
 
 ep-ansible-oraclelinux:
   name: "OracleLinux Hosts"
   source_ids: ["src-section9", "src-infra"]
-  script_path: "test-connectors/output_ansible_inventory.py"
+  script_path: "tests/adapters/out/output/ansible_inventory.py"
   config:
     filter_os: "OracleLinux"

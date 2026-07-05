@@ -1,2 +1,2 @@
-# Enrichers — post-procesadores que enriquecen datos ya cacheados
-# Reciben el dataset actual por stdin, devuelven los hosts modificados por stdout
+# Enrichers — post-processors that enrich already-cached data.
+# They receive the current dataset on stdin and return the modified hosts on stdout.

@@ -27,8 +27,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
-# [dev-dependencies] = solo se compilan para tests, no van al binario de producción
+# [dev-dependencies] = compiled only for tests, never shipped in the production binary
 [dev-dependencies]
 tempfile = "3"
-tower = "0.5"            # para llamar al app como servicio (sin TCP)
-http-body-util = "0.1"   # para leer el body de las respuestas
+tower = "0.5"            # to call the app as a service (no TCP)
+http-body-util = "0.1"   # to read the body of responses

@@ -51,7 +51,7 @@ fn test_source(scenario: &str) -> Source {
     Source {
         name: "Test Source".to_string(),
         project_id: "test".to_string(),
-        script_path: "test-connectors/fake_inventory.py".to_string(),
+        script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
@@ -458,7 +458,7 @@ async fn enricher_updates_hosts_in_cache() {
         Enricher {
             name: "Test Enricher".to_string(),
             source_id: "src-test".to_string(),
-            script_path: "test-connectors/fake_enricher.py".to_string(),
+            script_path: "tests/adapters/out/enrichers/enricher.py".to_string(),
             sync_interval_seconds: None,
             config: HashMap::new(),
             timeout_seconds: 300,
@@ -505,7 +505,7 @@ async fn enricher_removes_hosts() {
         Enricher {
             name: "Cleanup Enricher".to_string(),
             source_id: "src-test".to_string(),
-            script_path: "test-connectors/fake_enricher.py".to_string(),
+            script_path: "tests/adapters/out/enrichers/enricher.py".to_string(),
             sync_interval_seconds: None,
             config: enricher_config,
             timeout_seconds: 300,
@@ -550,7 +550,7 @@ async fn sync_infra_source() {
         Source {
             name: "Infrastructure Data".to_string(),
             project_id: "test".to_string(),
-            script_path: "test-connectors/fake_infra.py".to_string(),
+            script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -605,7 +605,7 @@ async fn enricher_without_cached_source_returns_404() {
         Enricher {
             name: "Orphan Enricher".to_string(),
             source_id: "src-nonexistent".to_string(),
-            script_path: "test-connectors/fake_enricher.py".to_string(),
+            script_path: "tests/adapters/out/enrichers/enricher.py".to_string(),
             sync_interval_seconds: None,
             config: HashMap::new(),
             timeout_seconds: 300,
@@ -635,7 +635,7 @@ async fn endpoint_combines_sources() {
         Source {
             name: "Infra Data".to_string(),
             project_id: "test".to_string(),
-            script_path: "test-connectors/fake_infra.py".to_string(),
+            script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -654,7 +654,7 @@ async fn endpoint_combines_sources() {
         OutputEndpoint {
             name: "Full Inventory".to_string(),
             source_ids: vec!["src-inventory".to_string(), "src-infra".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: HashMap::new(),
             timeout_seconds: 300,
         },
@@ -701,7 +701,7 @@ async fn endpoint_filters_by_datacenter() {
         OutputEndpoint {
             name: "Section 9 Only".to_string(),
             source_ids: vec!["src-inventory".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: ep_config,
             timeout_seconds: 300,
         },
@@ -736,7 +736,7 @@ async fn endpoint_without_synced_sources_returns_503() {
         OutputEndpoint {
             name: "Missing Sources".to_string(),
             source_ids: vec!["src-nonexistent".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: HashMap::new(),
             timeout_seconds: 300,
         },
@@ -777,7 +777,7 @@ async fn list_endpoints_shows_readiness() {
         OutputEndpoint {
             name: "Test Endpoint".to_string(),
             source_ids: vec!["src-test".to_string(), "src-missing".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: HashMap::new(),
             timeout_seconds: 300,
         },
@@ -821,7 +821,7 @@ async fn endpoint_with_dynamic_params() {
         OutputEndpoint {
             name: "Dynamic Endpoint".to_string(),
             source_ids: vec!["src-test".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: HashMap::new(),
             timeout_seconds: 300,
         },
@@ -878,7 +878,7 @@ async fn endpoint_params_override_config() {
         OutputEndpoint {
             name: "Override Test".to_string(),
             source_ids: vec!["src-test".to_string()],
-            script_path: "test-connectors/output_ansible_inventory.py".to_string(),
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
             config: ep_config,
             timeout_seconds: 300,
         },
@@ -915,7 +915,7 @@ async fn endpoint_params_override_config() {
 #[tokio::test]
 async fn sync_times_out_on_slow_connector() {
     let mut source = test_source("default");
-    source.script_path = "test-connectors/fake_slow.py".to_string();
+    source.script_path = "tests/adapters/out/connectors/slow.py".to_string();
     source.timeout_seconds = 1; // the script sleeps 10s
 
     let mut sources = HashMap::new();

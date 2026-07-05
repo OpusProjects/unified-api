@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake connector that takes too long — used to test execution timeouts."""
+"""Sample connector that takes too long — used to test execution timeouts."""
 import json
 import time
 

@@ -79,8 +79,9 @@ the same spirit is welcome. Beyond those, comment only when the *why* is non-obv
 ## Running the test suite
 
 ```bash
-cargo test                # unit + integration; integration tests use test-connectors/
+cargo test                # unit + integration; integration tests use the fixtures under tests/
 ```
 
-The fake connectors in `test-connectors/` are plain Python scripts — no external
-services are needed to run the full suite.
+The sample scripts under `tests/adapters/out/` (`connectors/`, `enrichers/`,
+`output/`) are plain Python — no external services are needed to run the full
+suite.

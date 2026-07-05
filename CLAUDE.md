@@ -33,11 +33,6 @@ cargo test               # run tests
 CONFIG_DIR=/etc/unified-api cargo run   # config from a different directory
 ```
 
-CI gates every PR on `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo test`, and `cargo audit` (RUSTSEC; ignores documented in `.cargo/audit.toml`),
-then builds the Docker image (push only on `main`/tags). Run all four locally before
-pushing. Releases are cut by tagging `vX.Y.Z` (see CONTRIBUTING.md).
-
 ## Project structure
 
 ```
@@ -86,8 +81,12 @@ src/
 │       ├── output/           # process.rs: OutputPort → tokio::process
 │       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double
 config/                       # Split YAML config (server, credentials, sources, etc.)
-test-connectors/              # Fake connector scripts for testing (incl. fake_slow.py)
-tests/                        # Integration tests
+tests/                        # Integration tests (*.rs), with sample scripts mirroring src/adapters/out/:
+└── adapters/
+    └── out/                  # sample scripts — stand-ins for the driven adapters
+        ├── connectors/       #   sample source connectors (incl. slow.py for timeout tests)
+        ├── enrichers/        #   sample enricher scripts
+        └── output/           #   sample output transformer scripts
 .cargo/audit.toml             # cargo-audit ignore list (documented advisories)
 CHANGELOG.md                  # Keep a Changelog; move Unreleased entries on release
 ```

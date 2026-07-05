@@ -19,7 +19,10 @@ RUN groupadd -r unified && useradd -r -g unified -s /sbin/nologin unified
 
 COPY --from=builder /app/target/release/unified-api /usr/local/bin/unified-api
 COPY config/ /app/config/
-COPY test-connectors/ /app/test-connectors/
+# Demo connector/enricher/output scripts the default config points at. They
+# double as the integration-test fixtures, so they live under tests/ (mirroring
+# the src/adapters/out/ layout they stand in for).
+COPY tests/adapters/out/ /app/tests/adapters/out/
 
 WORKDIR /app
 

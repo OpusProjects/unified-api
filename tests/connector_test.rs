@@ -9,7 +9,7 @@ fn config_with_scenario(scenario: &str) -> HashMap<String, String> {
     config
 }
 
-// Empty credentials (the fake connector does not need them)
+// Empty credentials (the sample connector does not need them)
 fn empty_credentials() -> HashMap<String, String> {
     HashMap::new()
 }
@@ -23,7 +23,7 @@ async fn execute_default_inventory() {
 
     let result = connector
         .execute(
-            "test-connectors/fake_inventory.py",
+            "tests/adapters/out/connectors/inventory.py",
             &config_with_scenario("default"),
             &empty_credentials(),
         )
@@ -59,7 +59,7 @@ async fn execute_empty_inventory() {
 
     let result = connector
         .execute(
-            "test-connectors/fake_inventory.py",
+            "tests/adapters/out/connectors/inventory.py",
             &config_with_scenario("empty"),
             &empty_credentials(),
         )
@@ -81,7 +81,7 @@ async fn execute_large_inventory() {
 
     let result = connector
         .execute(
-            "test-connectors/fake_inventory.py",
+            "tests/adapters/out/connectors/inventory.py",
             &config_with_scenario("large"),
             &empty_credentials(),
         )
@@ -108,7 +108,7 @@ async fn execute_error_scenario() {
 
     let result = connector
         .execute(
-            "test-connectors/fake_inventory.py",
+            "tests/adapters/out/connectors/inventory.py",
             &config_with_scenario("error"),
             &empty_credentials(),
         )
@@ -131,7 +131,7 @@ async fn execute_nonexistent_script() {
 
     let result = connector
         .execute(
-            "test-connectors/this_does_not_exist.py",
+            "tests/adapters/out/connectors/this_does_not_exist.py",
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -153,11 +153,11 @@ async fn credentials_are_passed_as_env_vars() {
     credentials.insert("username".to_string(), "admin".to_string());
     credentials.insert("password".to_string(), "secret123".to_string());
 
-    // The fake connector does not use credentials, but at least
+    // The sample connector does not use credentials, but at least
     // we verify it does not crash when passed them
     let result = connector
         .execute(
-            "test-connectors/fake_inventory.py",
+            "tests/adapters/out/connectors/inventory.py",
             &config_with_scenario("default"),
             &credentials,
         )
@@ -199,7 +199,7 @@ mod output {
 
         let result = output
             .execute(
-                "test-connectors/output_ansible_inventory.py",
+                "tests/adapters/out/output/ansible_inventory.py",
                 &HashMap::new(),
                 &serde_json::json!({}),
                 &datasets,
@@ -217,7 +217,7 @@ mod output {
         let output = ProcessOutput::new();
         let result = output
             .execute(
-                "test-connectors/does_not_exist.py",
+                "tests/adapters/out/connectors/does_not_exist.py",
                 &HashMap::new(),
                 &serde_json::json!({}),
                 &HashMap::new(),

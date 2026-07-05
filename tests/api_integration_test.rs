@@ -107,7 +107,7 @@ async fn readyz_returns_503_before_sync() {
         unified_api::domain::source::Source {
             name: "Test".to_string(),
             project_id: "test".to_string(),
-            script_path: "test-connectors/fake_inventory.py".to_string(),
+            script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
             connector_type: unified_api::domain::source::ConnectorType::Script,
             sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
             credential_ids: vec![],
@@ -235,7 +235,7 @@ async fn metrics_exposes_sync_counters() {
         unified_api::domain::source::Source {
             name: "Metrics Test".to_string(),
             project_id: "test".to_string(),
-            script_path: "test-connectors/fake_inventory.py".to_string(),
+            script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
             connector_type: unified_api::domain::source::ConnectorType::Script,
             sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
             credential_ids: vec![],

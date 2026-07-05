@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fake enricher for testing.
+Sample enricher for testing.
 Reads the current dataset from stdin, adds an "enriched" field to each host,
 and optionally removes hosts listed in REMOVE_HOSTS config.
 """

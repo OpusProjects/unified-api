@@ -1,7 +1,7 @@
 # Connectors, enrichers & outputs
 
 Everything pluggable in Unified API is an **executable** speaking JSON. Any language
-works — the shipped examples in `test-connectors/` are Python. This page defines the
+works — the shipped examples under `tests/` are Python. This page defines the
 three contracts.
 
 ## The Dataset shape
@@ -131,4 +131,4 @@ curl localhost:8182/api/v1/sources/src-mine/dataset
 ```
 
 For automated tests, follow the patterns in `tests/` — the suite runs entirely
-against the fake scripts in `test-connectors/`.
+against the sample scripts under `tests/adapters/out/` (`connectors/`, `enrichers/`, `output/`).

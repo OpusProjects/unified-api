@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fake infrastructure data collector.
+Sample infrastructure data collector.
 Simulates SSH-based collection of: filesystems, CPU, memory, sysctl, users.
 In production this would SSH into each host and run commands.
 """

@@ -26,7 +26,7 @@ One entry per inventory source; the key is the source id used in URLs.
 src-section9:
   name: "Section 9 Inventory"
   project_id: "prj-connectors-infra"   # must exist in projects.yaml
-  script_path: "test-connectors/fake_inventory.py"
+  script_path: "tests/adapters/out/connectors/inventory.py"
   connector_type: "script"             # "script" (default) or "ssh"
   sync_mode: "replace"                 # "replace" (default) or "merge"
   credential_ids: ["cred-section9-api"] # must exist in credentials.yaml
@@ -102,7 +102,7 @@ Output endpoints combine one or more cached datasets through a transformer scrip
 ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
-  script_path: "test-connectors/output_ansible_inventory.py"
+  script_path: "tests/adapters/out/output/ansible_inventory.py"
   timeout_seconds: 300              # abort a transform that takes longer (default 300)
   config:
     filter_datacenter: "section9"   # free-form, script-specific

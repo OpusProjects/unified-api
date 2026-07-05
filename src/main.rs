@@ -1,6 +1,6 @@
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use unified_api::adapters::env_secrets::EnvSecrets;
+use unified_api::adapters::out::secrets::env::EnvSecrets;
 
 #[tokio::main]
 async fn main() {
@@ -51,7 +51,7 @@ async fn main() {
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .build_with_state();
 
-    unified_api::adapters::scheduler::start_sync_tasks(state);
+    unified_api::adapters::r#in::scheduler::start_sync_tasks(state);
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
 

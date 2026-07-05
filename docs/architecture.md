@@ -9,7 +9,7 @@ in process memory (DashMap) and configuration comes from YAML files.
 ```
             ┌───────────────────────── adapters (outside) ─────────────────────────┐
             │                                                                      │
- driving →  │  http/ (axum handlers, auth, routes, OpenAPI)     scheduler.rs      │
+ driving →  │  http/ (axum handlers, auth, routes, OpenAPI)     scheduler/         │
             │            │                                          │              │
             │            ▼                                          ▼              │
             │  ┌──────────────────── application/ ────────────────────┐            │
@@ -25,8 +25,7 @@ in process memory (DashMap) and configuration comes from YAML files.
             │  │  Dataset  CacheEntry  Source  Credential  Enricher   │            │
             │  └──────────────────────────────────────────────────────┘            │
             │                                                                      │
- driven  →  │  memory_cache  process_connector  ssh_connector                      │
-            │  process_enricher  process_output  env_secrets  mock_secrets         │
+ driven  →  │  cache/  connectors/  enrichers/  output/  secrets/                  │
             └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,12 +44,12 @@ in `src/lib.rs` (plus `main.rs`, which reads env/config and hands them in).
 
 ## Driving vs driven adapters
 
-- **Driving** (requests come *in*): `adapters/http/` (axum) and `adapters/scheduler.rs`
+- **Driving** (requests come *in*): `adapters/in/http/` (axum) and `adapters/in/scheduler/`
   (interval timers). Both are thin: they translate their trigger (an HTTP request, a
   tick) into a call to the same `application/` function and translate the outcome back
   (JSON response, log line). Use-case logic exists **once**, in `application/`.
-- **Driven** (we reach *out*): the cache, the two connectors, the enricher and output
-  executors, and secrets resolution.
+- **Driven** (we reach *out*): under `adapters/out/` — the cache, the two connectors,
+  the enricher and output executors, and secrets resolution.
 
 ## Request flows
 

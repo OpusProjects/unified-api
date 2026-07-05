@@ -1,7 +1,7 @@
 use utoipa::openapi::security::{ApiKey as OpenApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::adapters::http;
+use crate::adapters::r#in::http;
 
 // Add the security scheme (X-API-Key header) to the generated spec
 struct SecurityAddon;

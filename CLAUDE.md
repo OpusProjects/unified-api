@@ -42,54 +42,54 @@ pushing. Releases are cut by tagging `vX.Y.Z` (see CONTRIBUTING.md).
 
 ```
 src/
-├── main.rs              # Entrypoint: load config, build app, start Axum
-├── lib.rs               # Module tree + AppBuilder (composition root)
-├── state.rs             # AppState (ports as Arc<dyn Trait> + static config)
-├── config.rs            # YAML configuration loading from config/ directory
-├── domain/              # Core domain types (pure, no dependencies)
-│   ├── dataset.rs       # Dataset, Group, HostVars
-│   ├── source.rs        # Source, TtlOverrides, ConnectorType
-│   ├── cache_entry.rs   # CacheEntry with TTL logic
-│   ├── credential.rs    # Credential, CredentialType
-│   ├── enricher.rs      # Enricher
-│   ├── sync_mode.rs     # SyncMode (replace/merge)
-│   ├── project.rs       # GitProject
-│   └── endpoint.rs      # OutputEndpoint
-├── application/         # Use cases (domain + ports only; shared by HTTP and scheduler)
-│   ├── sync.rs          # sync_source, SyncScope, SyncOutcome
-│   ├── enrich.rs        # run_enricher, EnrichOutcome
-│   └── credentials.rs   # resolve_credentials
-├── ports/               # Trait definitions (interfaces)
-│   ├── cache.rs         # CachePort (incl. atomic update/merge_or_insert)
-│   ├── connector.rs     # ConnectorPort
-│   ├── enricher.rs      # EnricherPort
-│   ├── output.rs        # OutputPort
-│   └── secrets.rs       # SecretsPort
-├── adapters/            # Everything that touches the outside world
-│   ├── http/            # Driving: axum handlers, auth, routes, OpenAPI spec
-│   │   ├── routes.rs    # Router assembly (+ optional CORS layer)
-│   │   ├── openapi.rs   # utoipa ApiDoc (register new handlers here)
-│   │   ├── sources.rs   # Read endpoints (list/dataset/status)
-│   │   ├── sync.rs      # POST sync
-│   │   ├── enrichers.rs # POST enricher run
-│   │   ├── hosts.rs     # PUT/DELETE host
-│   │   ├── endpoints.rs # Output endpoints
-│   │   ├── health.rs    # /healthz, /readyz
-│   │   ├── metrics.rs   # /metrics (Prometheus exporter, installed once)
-│   │   └── auth.rs      # API key middleware
-│   ├── scheduler.rs     # Driving: interval-based sync/enrich (calls application/)
-│   ├── memory_cache.rs  # CachePort → DashMap
-│   ├── process_connector.rs  # ConnectorPort → tokio::process
-│   ├── ssh_connector.rs # ConnectorPort → russh
-│   ├── process_enricher.rs   # EnricherPort → tokio::process
-│   ├── process_output.rs     # OutputPort → tokio::process
-│   ├── env_secrets.rs   # SecretsPort → env vars / JSON files
-│   └── mock_secrets.rs  # SecretsPort test double (AppBuilder default)
-config/                  # Split YAML config (server, credentials, sources, etc.)
-test-connectors/         # Fake connector scripts for testing (incl. fake_slow.py)
-tests/                   # Integration tests
-.cargo/audit.toml        # cargo-audit ignore list (documented advisories)
-CHANGELOG.md             # Keep a Changelog; move Unreleased entries on release
+├── main.rs                   # Entrypoint: load config, build app, start Axum
+├── lib.rs                    # Module tree + AppBuilder (composition root)
+├── state.rs                  # AppState (ports as Arc<dyn Trait> + static config)
+├── config.rs                 # YAML configuration loading from config/ directory
+├── domain/                   # Core domain types (pure, no dependencies)
+│   ├── dataset.rs            # Dataset, Group, HostVars
+│   ├── source.rs             # Source, TtlOverrides, ConnectorType
+│   ├── cache_entry.rs        # CacheEntry with TTL logic
+│   ├── credential.rs         # Credential, CredentialType
+│   ├── enricher.rs           # Enricher
+│   ├── sync_mode.rs          # SyncMode (replace/merge)
+│   ├── project.rs            # GitProject
+│   └── endpoint.rs           # OutputEndpoint
+├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
+│   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
+│   ├── enrich.rs             # run_enricher, EnrichOutcome
+│   └── credentials.rs        # resolve_credentials
+├── ports/                    # Trait definitions (interfaces)
+│   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
+│   ├── connector.rs          # ConnectorPort
+│   ├── enricher.rs           # EnricherPort
+│   ├── output.rs             # OutputPort
+│   └── secrets.rs            # SecretsPort
+├── adapters/                 # Everything that touches the outside world
+│   ├── in/                   # Driving adapters: the outside world drives the app
+│   │   ├── http/             # axum handlers, auth, routes, OpenAPI spec
+│   │   │   ├── routes.rs     # Router assembly (+ optional CORS layer)
+│   │   │   ├── openapi.rs    # utoipa ApiDoc (register new handlers here)
+│   │   │   ├── sources.rs    # Read endpoints (list/dataset/status)
+│   │   │   ├── sync.rs       # POST sync
+│   │   │   ├── enrichers.rs  # POST enricher run
+│   │   │   ├── hosts.rs      # PUT/DELETE host
+│   │   │   ├── endpoints.rs  # Output endpoints
+│   │   │   ├── health.rs     # /healthz, /readyz
+│   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
+│   │   │   └── auth.rs       # API key middleware
+│   │   └── scheduler/        # interval-based sync/enrich (calls application/)
+│   └── out/                  # Driven adapters: the app drives the outside world
+│       ├── cache/            # memory.rs: CachePort → DashMap
+│       ├── connectors/       # process.rs: ConnectorPort → tokio::process; ssh.rs → russh
+│       ├── enrichers/        # process.rs: EnricherPort → tokio::process
+│       ├── output/           # process.rs: OutputPort → tokio::process
+│       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double
+config/                       # Split YAML config (server, credentials, sources, etc.)
+test-connectors/              # Fake connector scripts for testing (incl. fake_slow.py)
+tests/                        # Integration tests
+.cargo/audit.toml             # cargo-audit ignore list (documented advisories)
+CHANGELOG.md                  # Keep a Changelog; move Unreleased entries on release
 ```
 
 ## Architecture

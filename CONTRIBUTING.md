@@ -59,10 +59,10 @@ the same spirit is welcome. Beyond those, comment only when the *why* is non-obv
 
 ## Adding an HTTP endpoint
 
-1. Handler in the matching file under `src/adapters/http/` (one file per resource)
-2. Route in `src/adapters/http/routes.rs`
+1. Handler in the matching file under `src/adapters/in/http/` (one file per resource)
+2. Route in `src/adapters/in/http/routes.rs`
 3. Register the handler in `paths(...)` — and any response structs in
-   `components(schemas(...))` — in `src/adapters/http/openapi.rs`, or it won't
+   `components(schemas(...))` — in `src/adapters/in/http/openapi.rs`, or it won't
    appear in Swagger
 4. Integration test in `tests/`
 

@@ -1,12 +1,7 @@
-// The adapters: everything that touches the outside world, in both directions.
-// - Driving (incoming requests): http/ (axum) and scheduler (timers)
-// - Driven (we go out): cache, connectors, secrets, output
-pub mod env_secrets;
-pub mod http;
-pub mod memory_cache;
-pub mod mock_secrets;
-pub mod process_connector;
-pub mod process_enricher;
-pub mod process_output;
-pub mod scheduler;
-pub mod ssh_connector;
+// The adapters: everything that touches the outside world, split by direction.
+// - `in` (driving): the outside world drives us — http/ (axum) and scheduler/ (timers)
+// - `out` (driven): we drive the outside world — cache, connectors, enrichers, output, secrets
+//
+// `in` is a Rust keyword, so the module is spelled `r#in` (the folder is `in/`).
+pub mod r#in;
+pub mod out;

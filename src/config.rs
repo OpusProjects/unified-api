@@ -142,7 +142,7 @@ fn load_yaml_file<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(path)?;
-    let parsed = serde_yaml::from_str(&contents)?;
+    let parsed = serde_yaml_ng::from_str(&contents)?;
     Ok(parsed)
 }
 

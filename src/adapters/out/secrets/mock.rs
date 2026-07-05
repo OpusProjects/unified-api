@@ -6,7 +6,7 @@ use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 // secrets store, only what is manually provided. It is the default of
 // AppBuilder — production replaces it with EnvSecrets.
 //
-// Lives in its own file (and not inside env_secrets.rs) to make it
+// Lives in its own module (and not inside secrets/env.rs) to make it
 // clear what it is: a test double, not a variant of the real adapter.
 pub struct MockSecrets {
     secrets: HashMap<String, HashMap<String, String>>,

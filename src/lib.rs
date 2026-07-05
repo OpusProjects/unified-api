@@ -13,12 +13,12 @@ use std::sync::Arc;
 
 use axum::Router;
 
-use adapters::memory_cache::MemoryCache;
-use adapters::mock_secrets::MockSecrets;
-use adapters::process_connector::ProcessConnector;
-use adapters::process_enricher::ProcessEnricher;
-use adapters::process_output::ProcessOutput;
-use adapters::ssh_connector::SshConnector;
+use adapters::out::cache::memory::MemoryCache;
+use adapters::out::connectors::process::ProcessConnector;
+use adapters::out::connectors::ssh::SshConnector;
+use adapters::out::enrichers::process::ProcessEnricher;
+use adapters::out::output::process::ProcessOutput;
+use adapters::out::secrets::mock::MockSecrets;
 use domain::endpoint::OutputEndpoint;
 use domain::enricher::Enricher;
 use domain::source::Source;
@@ -90,7 +90,7 @@ impl AppBuilder {
     // same state) and tests that prepare the cache
     pub fn build_with_state(self) -> (Router<()>, Arc<AppState>) {
         // Install the metrics recorder before anything can record
-        adapters::http::metrics::init();
+        adapters::r#in::http::metrics::init();
 
         let state = Arc::new(AppState {
             cache: Arc::new(MemoryCache::new()),
@@ -103,7 +103,7 @@ impl AppBuilder {
             enrichers: self.enrichers,
             endpoints: self.endpoints,
         });
-        let router = adapters::http::routes::create_router(
+        let router = adapters::r#in::http::routes::create_router(
             Arc::clone(&state),
             self.api_key,
             self.cors_allowed_origins,

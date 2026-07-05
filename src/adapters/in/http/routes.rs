@@ -13,9 +13,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::AppState;
-use crate::adapters::http;
-use crate::adapters::http::auth::ApiKey;
-use crate::adapters::http::openapi::ApiDoc;
+use crate::adapters::r#in::http;
+use crate::adapters::r#in::http::auth::ApiKey;
+use crate::adapters::r#in::http::openapi::ApiDoc;
 
 // Build the complete router: API routes (protected by API key if
 // configured), public health probes, and Swagger UI.

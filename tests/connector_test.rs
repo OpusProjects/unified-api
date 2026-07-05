@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use unified_api::adapters::process_connector::ProcessConnector;
+use unified_api::adapters::out::connectors::process::ProcessConnector;
 use unified_api::ports::connector::ConnectorPort;
 
 // Helper: builds a config with the desired scenario
@@ -171,7 +171,7 @@ async fn credentials_are_passed_as_env_vars() {
 // =========================================================================
 mod output {
     use std::collections::HashMap;
-    use unified_api::adapters::process_output::ProcessOutput;
+    use unified_api::adapters::out::output::process::ProcessOutput;
     use unified_api::domain::dataset::Dataset;
     use unified_api::ports::output::OutputPort;
 

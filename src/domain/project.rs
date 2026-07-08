@@ -16,10 +16,22 @@ pub struct GitProject {
     // Credential for private repos (GitHub token, SSH key, etc.)
     pub credential_id: Option<String>,
 
-    // Seconds between periodic re-pulls (0 or None = clone once at boot).
+    // Seconds between periodic re-pulls (0 or None = no periodic sync).
     // Same convention as sources and enrichers.
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
+
+    // Update the checkout at boot? With `false` an EXISTING checkout is used
+    // as-is (no network at startup) and updates happen only on demand
+    // (POST /api/v1/projects/{id}/sync, e.g. from a pipeline) or on the
+    // periodic interval. A MISSING checkout is always cloned regardless —
+    // without the scripts there is nothing to execute.
+    #[serde(default = "default_true")]
+    pub sync_on_boot: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // Function that returns the default value for branch.

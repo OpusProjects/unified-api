@@ -38,6 +38,8 @@ impl Modify for SecurityAddon {
         http::hosts::delete_host,
         http::endpoints::run_endpoint,
         http::endpoints::list_endpoints,
+        http::projects::list_projects,
+        http::projects::sync_project_now,
     ),
     components(schemas(
         http::sources::CachedSourceInfo,
@@ -47,12 +49,15 @@ impl Modify for SecurityAddon {
         http::enrichers::EnrichResult,
         http::endpoints::EndpointInfo,
         http::health::ReadyStatus,
+        http::projects::ProjectInfo,
+        http::projects::ProjectSyncResult,
     )),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),
         (name = "Sources", description = "Inventory source management, sync, and cache status"),
         (name = "Enrichers", description = "Post-processing enrichment of cached data"),
-        (name = "Endpoints", description = "Output endpoints for consumers (AWX, AnsibleForms)")
+        (name = "Endpoints", description = "Output endpoints for consumers (AWX, AnsibleForms)"),
+        (name = "Projects", description = "Git project checkouts (admin-only operational routes)")
     ),
     // No explicit version: utoipa takes it from Cargo.toml (CARGO_PKG_VERSION),
     // so the spec can never disagree with the crate version after a bump

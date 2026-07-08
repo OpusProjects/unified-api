@@ -48,6 +48,11 @@ pub fn create_router(
             "/api/v1/endpoints/{id}",
             post(http::endpoints::run_endpoint),
         )
+        .route("/api/v1/projects", get(http::projects::list_projects))
+        .route(
+            "/api/v1/projects/{id}/sync",
+            post(http::projects::sync_project_now),
+        )
         .layer(middleware::from_fn(http::auth::require_api_key))
         .layer(axum::Extension(ApiKeys(api_keys.into())));
 

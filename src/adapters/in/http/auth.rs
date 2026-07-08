@@ -29,6 +29,12 @@ pub enum Permissions {
 }
 
 impl Permissions {
+    // Operational routes (project sync, listing projects) are admin-only:
+    // they are deploy tooling, not consumer data access.
+    pub fn is_admin(&self) -> bool {
+        matches!(self, Permissions::Admin)
+    }
+
     pub fn allows_source(&self, id: &str) -> bool {
         match self {
             Permissions::Admin => true,

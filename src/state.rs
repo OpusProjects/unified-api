@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::domain::endpoint::OutputEndpoint;
 use crate::domain::enricher::Enricher;
+use crate::domain::project::GitProject;
 use crate::domain::source::{ConnectorType, Source};
 use crate::ports;
 
@@ -19,9 +21,12 @@ pub struct AppState {
     pub enricher: Arc<dyn ports::enricher::EnricherPort>,
     pub output: Arc<dyn ports::output::OutputPort>,
     pub secrets: Arc<dyn ports::secrets::SecretsPort>,
+    pub git: Arc<dyn ports::git::GitPort>,
     pub sources: HashMap<String, Source>,
     pub enrichers: HashMap<String, Enricher>,
     pub endpoints: HashMap<String, OutputEndpoint>,
+    pub projects: HashMap<String, GitProject>,
+    pub projects_dir: PathBuf,
 }
 
 impl AppState {

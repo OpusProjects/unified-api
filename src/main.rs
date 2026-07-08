@@ -65,6 +65,16 @@ async fn main() {
         let projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
 
         for (project_id, project) in &cfg.projects {
+            // sync_on_boot=false + existing checkout (e.g. a persistent
+            // volume) = start offline from what is on disk; updates then come
+            // from the interval or POST /api/v1/projects/{id}/sync. A missing
+            // checkout is always cloned — no scripts, nothing to run.
+            let checkout_exists = projects_dir.join(project_id).join(".git").exists();
+            if !project.sync_on_boot && checkout_exists {
+                info!(project = %project_id, "Using existing checkout (sync_on_boot: false)");
+                continue;
+            }
+
             match unified_api::application::projects::sync_project(
                 &*git,
                 &*secrets,
@@ -93,6 +103,10 @@ async fn main() {
         .sources(cfg.sources)
         .enrichers(cfg.enrichers)
         .endpoints(cfg.endpoints)
+        .projects(
+            cfg.projects.clone(),
+            std::path::PathBuf::from(&cfg.projects_config.dir),
+        )
         .secrets(std::sync::Arc::clone(&secrets))
         .api_keys(api_keys)
         .cors_allowed_origins(cfg.server.cors_allowed_origins)

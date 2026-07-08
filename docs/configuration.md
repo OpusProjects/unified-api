@@ -133,8 +133,25 @@ prj-connectors-infra:
   git_url: "https://github.com/OpusProjects/connectors-infra.git"
   branch: "main"                  # default "main"
   credential_id: "cred-github-token"  # optional, for private repos
-  sync_interval_seconds: 1800     # 0/absent = clone at boot only
+  sync_interval_seconds: 1800     # 0/absent = no periodic re-pull
+  sync_on_boot: true              # default true; see below
 ```
+
+Three sync styles compose from those two knobs:
+
+| Style | Config | Behavior |
+|---|---|---|
+| Automatic | `sync_interval_seconds: N` | update at boot + every N seconds |
+| Boot only | interval 0/absent | clone/update at boot, then frozen |
+| Manual / pipeline-driven | `sync_on_boot: false`, interval 0/absent | an existing checkout is used **as-is** (no network at startup); updates only via `POST /api/v1/projects/{id}/sync` |
+
+With `sync_on_boot: false` a *missing* checkout is still cloned at boot (no
+scripts, nothing to run), so first bring-up needs no special casing. Keep
+`projects.dir` on a persistent volume for the manual style — the checkout IS
+the durable state, there is nothing else to save at shutdown. A pipeline in
+the scripts repo can push and then call the sync endpoint (admin key) to roll
+new scripts without restarting; script files are re-read on every execution,
+so the update takes effect on the next run.
 
 How script paths resolve: a *relative* `script_path` whose file exists inside
 the checkout runs from there (`<projects.dir>/<project_id>/<script_path>`);

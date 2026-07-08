@@ -7,6 +7,7 @@ pub mod health;
 pub mod hosts;
 pub mod metrics;
 pub mod openapi;
+pub mod projects;
 pub mod routes;
 pub mod sources;
 pub mod sync;

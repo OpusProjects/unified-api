@@ -1,8 +1,9 @@
 # Caching & TTLs
 
 The cache is the heart of the service: consumers read from it, syncs and enrichers
-write to it. It is entirely in-memory (a concurrent DashMap keyed by source id) —
-restart the process and it starts empty, repopulated by scheduled syncs.
+write to it. It is in-memory (a concurrent DashMap keyed by source id) — by default
+a restart starts empty, repopulated by scheduled syncs. Optional disk persistence
+(below) changes that to "starts from the last snapshot".
 
 ## The three-level freshness model
 
@@ -59,6 +60,38 @@ other's writes. Two rules follow:
 2. Closures passed to the atomic operations must be quick and must never call back
    into the cache — script execution happens *outside* the lock, on a snapshot,
    and only the final merge is atomic
+
+## Disk persistence (optional)
+
+By default nothing touches disk. Adding a `cache.persistence` block to
+`config.yaml` turns on periodic snapshots:
+
+```yaml
+cache:
+  persistence:
+    path: "/var/lib/unified-api/cache.json"
+    interval_seconds: 60   # default 60
+```
+
+Behavior:
+
+- **Boot:** the snapshot is loaded before the schedulers start, so `/readyz`
+  is green immediately and consumers get the pre-restart data while the first
+  syncs run. A missing file just means "start empty"; a corrupt or
+  version-mismatched file is logged and ignored — persistence never blocks
+  startup.
+- **Runtime:** every `interval_seconds` the whole cache is serialized and
+  written atomically (temp file + rename), so a crash mid-write leaves the
+  previous snapshot intact. A final snapshot is written on graceful shutdown.
+- **Freshness survives:** snapshots store per-entry and per-host *ages*, not
+  timestamps, and loading reconstructs them — an entry that was 40s old with a
+  60s TTL comes back 40s old (plus the downtime), and anything past its TTL is
+  reported stale exactly as if the process had never restarted.
+
+This is a durability optimization for restarts, not shared storage: with
+multiple replicas each pod snapshots its own cache, so give each its own path
+(or its own volume). The DashMap remains the source of truth — reads and
+writes never wait on disk.
 
 ## Memory notes
 

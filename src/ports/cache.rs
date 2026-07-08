@@ -22,6 +22,11 @@ pub trait CachePort: Send + Sync {
     // List all stored keys
     fn keys(&self) -> Vec<String>;
 
+    // Copy out every entry with its key — used by the disk persistence to
+    // snapshot the whole cache. Returns owned copies (not references) so the
+    // caller can serialize them without holding any cache lock.
+    fn export(&self) -> Vec<(String, CacheEntry)>;
+
     // Modify an existing cache entry atomically.
     //
     // Why? get() returns a COPY: the pattern get → modify → set

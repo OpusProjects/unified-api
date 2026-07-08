@@ -11,6 +11,7 @@ use crate::domain::source::Source;
 
 pub struct AppConfig {
     pub server: ServerConfig,
+    pub cache: CacheConfig,
     pub credentials: HashMap<String, Credential>,
     pub sources: HashMap<String, Source>,
     pub enrichers: HashMap<String, Enricher>,
@@ -30,10 +31,35 @@ pub struct ServerConfig {
     pub cors_allowed_origins: Vec<String>,
 }
 
-// Intermediate struct to parse config.yaml (only has server for now)
+// Cache behavior — config.yaml, `cache:` section (optional)
+#[derive(Deserialize, Default)]
+pub struct CacheConfig {
+    // Without a `persistence` block the cache is purely in-memory (the
+    // original behavior): nothing is ever written to disk.
+    #[serde(default)]
+    pub persistence: Option<PersistenceConfig>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct PersistenceConfig {
+    // Snapshot file, e.g. /var/lib/unified-api/cache.json
+    pub path: String,
+
+    // How often to write the snapshot (seconds)
+    #[serde(default = "default_persistence_interval")]
+    pub interval_seconds: u64,
+}
+
+fn default_persistence_interval() -> u64 {
+    60
+}
+
+// Intermediate struct to parse config.yaml (server + optional cache)
 #[derive(Deserialize)]
 struct ServerFile {
     server: ServerConfig,
+    #[serde(default)]
+    cache: CacheConfig,
 }
 
 // Loads all configuration from a directory.
@@ -125,6 +151,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
 
     let config = AppConfig {
         server: server_file.server,
+        cache: server_file.cache,
         credentials,
         sources,
         enrichers,

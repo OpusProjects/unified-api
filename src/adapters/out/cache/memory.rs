@@ -54,6 +54,15 @@ impl CachePort for MemoryCache {
         self.store.iter().map(|entry| entry.key().clone()).collect()
     }
 
+    fn export(&self) -> Vec<(String, CacheEntry)> {
+        // Each iteration clones one entry under its shard lock and releases it
+        // before the next — the cache is never locked as a whole.
+        self.store
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
     fn update(&self, key: &str, f: &mut dyn FnMut(&mut CacheEntry)) -> bool {
         // .get_mut() locks the DashMap shard while the guard lives,
         // so `f` modifies the actual entry without anyone else writing.

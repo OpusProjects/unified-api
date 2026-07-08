@@ -3,4 +3,6 @@ prj-connectors-infra:
   git_url: "https://github.com/OpusProjects/connectors-infra.git"
   # branch: "main"                    # default "main"
   # credential_id: "cred-github-token"  # for private repos (token or ssh_key)
-  sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = boot only)
+  sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = no periodic sync)
+  # sync_on_boot: false               # start from the existing checkout as-is;
+  #                                   # update only via POST /api/v1/projects/{id}/sync

@@ -104,3 +104,19 @@ curl -X POST localhost:8182/api/v1/endpoints/ep-ansible-full \
      -H 'Content-Type: application/json' \
      -d '{"filter_os": "OracleLinux"}'
 ```
+
+## Projects (admin-only)
+
+Operational routes for git project checkouts — restricted keys always get `403`.
+
+| Route | Meaning |
+|---|---|
+| `GET /api/v1/projects` | Configured projects with `checkout_present` and their sync settings |
+| `POST /api/v1/projects/{id}/sync` | Clone/update the checkout to the branch tip, on demand |
+
+The sync route is how a pipeline in the scripts repository rolls new script
+versions without restarting the app (see
+[configuration → projects.yaml](configuration.md#projectsyaml)): `200` with the
+duration on success, `502` when git fails (bad URL, auth, network), `404` for
+an unknown project id. Scripts are re-read from disk on every execution, so an
+updated checkout takes effect on the next run.

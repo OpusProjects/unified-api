@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- On-demand project sync: `POST /api/v1/projects/{id}/sync` (admin keys only)
+  clones/updates a project checkout without restarting — made for pipelines in
+  the scripts repository. `GET /api/v1/projects` lists projects with their
+  checkout state. New per-project `sync_on_boot` (default `true`): set to
+  `false` to start from an existing checkout as-is (no network at boot, pairs
+  with a persistent volume) while a missing checkout is still cloned.
+
 - Git project cloning: at boot the app shallow-clones every `projects.yaml`
   repository into `projects.dir` (config.yaml, default `./projects`) and
   re-pulls on `sync_interval_seconds` (fetch + hard reset). Relative script

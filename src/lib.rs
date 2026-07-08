@@ -18,10 +18,12 @@ use adapters::out::cache::memory::MemoryCache;
 use adapters::out::connectors::process::ProcessConnector;
 use adapters::out::connectors::ssh::SshConnector;
 use adapters::out::enrichers::process::ProcessEnricher;
+use adapters::out::git::cli::CliGit;
 use adapters::out::output::process::ProcessOutput;
 use adapters::out::secrets::mock::MockSecrets;
 use domain::endpoint::OutputEndpoint;
 use domain::enricher::Enricher;
+use domain::project::GitProject;
 use domain::source::Source;
 use ports::secrets::SecretsPort;
 
@@ -34,6 +36,8 @@ pub struct AppBuilder {
     sources: HashMap<String, Source>,
     enrichers: HashMap<String, Enricher>,
     endpoints: HashMap<String, OutputEndpoint>,
+    projects: HashMap<String, GitProject>,
+    projects_dir: std::path::PathBuf,
     secrets: Arc<dyn SecretsPort>,
     api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
@@ -45,6 +49,8 @@ impl AppBuilder {
             sources: HashMap::new(),
             enrichers: HashMap::new(),
             endpoints: HashMap::new(),
+            projects: HashMap::new(),
+            projects_dir: std::path::PathBuf::from("projects"),
             // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
             api_keys: Vec::new(),
@@ -64,6 +70,16 @@ impl AppBuilder {
 
     pub fn endpoints(mut self, endpoints: HashMap<String, OutputEndpoint>) -> Self {
         self.endpoints = endpoints;
+        self
+    }
+
+    pub fn projects(
+        mut self,
+        projects: HashMap<String, GitProject>,
+        projects_dir: std::path::PathBuf,
+    ) -> Self {
+        self.projects = projects;
+        self.projects_dir = projects_dir;
         self
     }
 
@@ -113,9 +129,12 @@ impl AppBuilder {
             enricher: Arc::new(ProcessEnricher::new()),
             output: Arc::new(ProcessOutput::new()),
             secrets: self.secrets,
+            git: Arc::new(CliGit::new()),
             sources: self.sources,
             enrichers: self.enrichers,
             endpoints: self.endpoints,
+            projects: self.projects,
+            projects_dir: self.projects_dir,
         });
         let router = adapters::r#in::http::routes::create_router(
             Arc::clone(&state),

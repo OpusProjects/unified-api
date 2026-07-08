@@ -1,4 +1,6 @@
 prj-connectors-infra:
   name: "Infrastructure Connectors"
   git_url: "https://github.com/OpusProjects/connectors-infra.git"
-  sync_interval: "0 */30 * * *"
+  # branch: "main"                    # default "main"
+  # credential_id: "cred-github-token"  # for private repos (token or ssh_key)
+  sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = boot only)

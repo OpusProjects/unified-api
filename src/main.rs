@@ -1,5 +1,6 @@
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use unified_api::adapters::out::git::cli::CliGit;
 use unified_api::adapters::out::secrets::env::EnvSecrets;
 
 #[tokio::main]
@@ -15,7 +16,7 @@ async fn main() {
         .init();
 
     let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
-    let cfg = match unified_api::config::load_config(&config_dir) {
+    let mut cfg = match unified_api::config::load_config(&config_dir) {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("Failed to load configuration: {}", e);
@@ -51,11 +52,48 @@ async fn main() {
         "Configuration loaded"
     );
 
+    let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> =
+        std::sync::Arc::new(EnvSecrets::new(cfg.credentials.clone()));
+
+    // Bring project checkouts up to date BEFORE building the app, so script
+    // paths can be resolved into them. A failed clone logs an error and the
+    // boot continues: the affected source fails loudly at sync time and the
+    // periodic project task (if configured) retries.
+    if !cfg.projects.is_empty() {
+        let git: std::sync::Arc<dyn unified_api::ports::git::GitPort> =
+            std::sync::Arc::new(CliGit::new());
+        let projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
+
+        for (project_id, project) in &cfg.projects {
+            match unified_api::application::projects::sync_project(
+                &*git,
+                &*secrets,
+                project_id,
+                project,
+                &projects_dir,
+            )
+            .await
+            {
+                Ok(()) => info!(project = %project_id, "Project checkout ready"),
+                Err(e) => error!(project = %project_id, error = %e, "Project sync failed"),
+            }
+        }
+
+        cfg.resolve_script_paths(&projects_dir);
+
+        unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
+            git,
+            std::sync::Arc::clone(&secrets),
+            cfg.projects.clone(),
+            projects_dir,
+        );
+    }
+
     let (app, state) = unified_api::AppBuilder::new()
         .sources(cfg.sources)
         .enrichers(cfg.enrichers)
         .endpoints(cfg.endpoints)
-        .secrets(std::sync::Arc::new(EnvSecrets::new(cfg.credentials)))
+        .secrets(std::sync::Arc::clone(&secrets))
         .api_keys(api_keys)
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .build_with_state();

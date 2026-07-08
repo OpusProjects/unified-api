@@ -13,9 +13,14 @@ RUN touch src/main.rs && cargo build --release
 # Stage 2: runtime
 FROM debian:trixie-slim
 
-RUN apt-get update && apt-get install -y ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+# git: the app clones connector-script projects at boot (projects.yaml)
+RUN apt-get update && apt-get install -y ca-certificates python3 git && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r unified && useradd -r -g unified -s /sbin/nologin unified
+
+# Writable state directory: project checkouts and the optional cache snapshot
+# default here. In k8s, mount a volume over it to survive pod replacement.
+RUN mkdir -p /var/lib/unified-api && chown unified:unified /var/lib/unified-api
 
 COPY --from=builder /app/target/release/unified-api /usr/local/bin/unified-api
 COPY config/ /app/config/

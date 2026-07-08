@@ -1,10 +1,16 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
 use tracing::{error, info, warn};
 
 use crate::AppState;
 use crate::application::enrich::run_enricher;
+use crate::application::projects::sync_project;
 use crate::application::sync::{SyncScope, sync_source};
+use crate::domain::project::GitProject;
+use crate::ports::git::GitPort;
+use crate::ports::secrets::SecretsPort;
 
 // The scheduler is another "driving adapter", just like HTTP handlers:
 // it triggers the same use cases from application/, just by time instead
@@ -57,6 +63,47 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
         });
     }
 
+    start_enricher_tasks(state);
+}
+
+// Periodic re-pull of git project checkouts. Separate from start_sync_tasks
+// because it doesn't need AppState: main wires it with its own git/secrets
+// handles, before the HTTP router even exists.
+pub fn start_project_sync_tasks(
+    git: Arc<dyn GitPort>,
+    secrets: Arc<dyn SecretsPort>,
+    projects: HashMap<String, GitProject>,
+    projects_dir: PathBuf,
+) {
+    for (project_id, project) in projects {
+        let interval_secs = match project.sync_interval_seconds {
+            Some(secs) if secs > 0 => secs,
+            _ => continue,
+        };
+
+        let git = Arc::clone(&git);
+        let secrets = Arc::clone(&secrets);
+        let projects_dir = projects_dir.clone();
+
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(interval_secs));
+            // The boot sequence already cloned; skip the immediate first tick
+            ticker.tick().await;
+
+            info!(project = %project_id, interval_secs, "Project scheduled");
+
+            loop {
+                ticker.tick().await;
+                match sync_project(&*git, &*secrets, &project_id, &project, &projects_dir).await {
+                    Ok(()) => info!(project = %project_id, "Project updated"),
+                    Err(e) => error!(project = %project_id, error = %e, "Project update failed"),
+                }
+            }
+        });
+    }
+}
+
+fn start_enricher_tasks(state: Arc<AppState>) {
     for (enricher_id, enricher) in &state.enrichers {
         let interval_secs = match enricher.sync_interval_seconds {
             Some(secs) if secs > 0 => secs,

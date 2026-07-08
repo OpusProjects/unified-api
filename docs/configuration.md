@@ -24,6 +24,10 @@ cache:
   persistence:
     path: "/var/lib/unified-api/cache.json"
     interval_seconds: 60
+
+# Optional. Where git projects are cloned (one subdirectory per project id).
+projects:
+  dir: "/var/lib/unified-api/projects"   # default "projects"
 ```
 
 ## sources.yaml
@@ -118,10 +122,10 @@ ep-ansible-full:
 
 ## projects.yaml
 
-Git repositories that hold connector/transformer scripts. The clone/pull feature
-is on the roadmap; today the file is loaded and its references are validated
-(`source.project_id` must exist here; a project's `credential_id` must exist in
-credentials).
+Git repositories that hold connector/enricher/transformer scripts. At boot the
+app clones each project (shallow, one directory per project id under the
+`projects.dir` from `config.yaml`, default `./projects`) and re-pulls it every
+`sync_interval_seconds` (fetch + hard reset: local drift is discarded).
 
 ```yaml
 prj-connectors-infra:
@@ -129,8 +133,23 @@ prj-connectors-infra:
   git_url: "https://github.com/OpusProjects/connectors-infra.git"
   branch: "main"                  # default "main"
   credential_id: "cred-github-token"  # optional, for private repos
-  sync_interval: "0 */30 * * *"
+  sync_interval_seconds: 1800     # 0/absent = clone at boot only
 ```
+
+How script paths resolve: a *relative* `script_path` whose file exists inside
+the checkout runs from there (`<projects.dir>/<project_id>/<script_path>`);
+otherwise the configured path is kept as-is (image-baked and mounted scripts
+keep working, with a warning when the checkout exists but the file doesn't).
+SSH sources are never resolved — their `script_path` is a remote command.
+Sources always declare `project_id`; enrichers and endpoints may add an
+optional `project_id` to resolve their scripts the same way. Scripts must
+carry the executable bit in git (`git update-index --chmod=+x`).
+
+Private repos: a `token` credential authenticates over https (the token is
+passed to git through the environment, never on the command line); an
+`ssh_key` credential sets `GIT_SSH_COMMAND` with the key file. A failed
+clone/pull logs an error and does not stop the boot — affected sources fail
+at sync time and the periodic re-pull retries.
 
 ## api_keys.yaml
 

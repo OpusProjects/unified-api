@@ -16,8 +16,10 @@ pub struct GitProject {
     // Credential for private repos (GitHub token, SSH key, etc.)
     pub credential_id: Option<String>,
 
-    // Cron to re-pull the repo periodically
-    pub sync_interval: Option<String>,
+    // Seconds between periodic re-pulls (0 or None = clone once at boot).
+    // Same convention as sources and enrichers.
+    #[serde(default)]
+    pub sync_interval_seconds: Option<u64>,
 }
 
 // Function that returns the default value for branch.

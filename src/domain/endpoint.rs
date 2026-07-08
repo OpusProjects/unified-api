@@ -12,6 +12,11 @@ pub struct OutputEndpoint {
     // Script that transforms the datasets into the final format
     pub script_path: String,
 
+    // Project whose checkout contains the script (None = script_path is a
+    // plain filesystem path, absolute or relative to the working directory)
+    #[serde(default)]
+    pub project_id: Option<String>,
+
     // Free config for the transformation script
     #[serde(default)]
     pub config: HashMap<String, String>,

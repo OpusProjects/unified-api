@@ -2748,6 +2748,7 @@ name = "unified-api"
 version = "0.2.1"
 dependencies = [
  "axum",
+ "base64",
  "dashmap",
  "futures",
  "http-body-util",

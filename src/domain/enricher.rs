@@ -14,6 +14,11 @@ pub struct Enricher {
     // Script that performs the enrichment
     pub script_path: String,
 
+    // Project whose checkout contains the script (None = script_path is a
+    // plain filesystem path, absolute or relative to the working directory)
+    #[serde(default)]
+    pub project_id: Option<String>,
+
     // Automatic execution interval (0 or None = manual only)
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,

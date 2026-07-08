@@ -6,4 +6,5 @@
 // between the handler and the scheduler, and the two copies had already diverged.
 pub mod credentials;
 pub mod enrich;
+pub mod projects;
 pub mod sync;

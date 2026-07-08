@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Optional cache persistence to disk: a `cache.persistence` block in
+  `config.yaml` (snapshot `path` + `interval_seconds`, default 60) makes the
+  app snapshot the in-memory cache atomically on an interval and on graceful
+  shutdown, and reload it at boot — restarts serve the pre-restart data
+  immediately (`/readyz` green from second zero) while the first syncs run.
+  Without the block the cache stays purely in-memory as before.
+
 ## [0.2.1] - 2026-07-05
 
 ### Changed

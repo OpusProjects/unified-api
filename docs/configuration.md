@@ -16,6 +16,14 @@ server:
   # Optional. Empty/absent (default) = no CORS headers at all — right for
   # server-to-server consumers. List browser origins to enable, "*" for any.
   cors_allowed_origins: []
+
+# Optional. Absent = purely in-memory cache (restarts start empty).
+# With the block, the cache is snapshotted to `path` every `interval_seconds`
+# (default 60) and on graceful shutdown, and reloaded at boot. See docs/caching.md.
+cache:
+  persistence:
+    path: "/var/lib/unified-api/cache.json"
+    interval_seconds: 60
 ```
 
 ## sources.yaml

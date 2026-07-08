@@ -51,7 +51,21 @@ async fn main() {
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .build_with_state();
 
-    unified_api::adapters::r#in::scheduler::start_sync_tasks(state);
+    // With persistence configured, reload the last snapshot BEFORE the
+    // schedulers start: /readyz is green from second zero and consumers get
+    // the pre-restart data while the first syncs run. Then keep snapshotting
+    // on an interval.
+    if let Some(persistence) = &cfg.cache.persistence {
+        let path = std::path::PathBuf::from(&persistence.path);
+        unified_api::adapters::out::cache::persistence::load_or_warn(&*state.cache, &path).await;
+        unified_api::adapters::out::cache::persistence::start_snapshot_task(
+            std::sync::Arc::clone(&state.cache),
+            path,
+            persistence.interval_seconds,
+        );
+    }
+
+    unified_api::adapters::r#in::scheduler::start_sync_tasks(std::sync::Arc::clone(&state));
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
 
@@ -72,6 +86,16 @@ async fn main() {
             error!("Server error: {}", e);
             std::process::exit(1);
         });
+
+    // Final snapshot on graceful shutdown, so the file reflects everything up
+    // to the last second (the interval task may not have fired recently).
+    if let Some(persistence) = &cfg.cache.persistence {
+        let path = std::path::Path::new(&persistence.path);
+        match unified_api::adapters::out::cache::persistence::save(&*state.cache, path).await {
+            Ok(count) => info!(entries = count, "Final cache snapshot saved"),
+            Err(e) => error!(error = %e, "Final cache snapshot failed"),
+        }
+    }
 
     info!("Shutdown complete");
 }

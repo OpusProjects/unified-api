@@ -36,6 +36,44 @@ impl CacheEntry {
         }
     }
 
+    // Rebuild an entry from a persisted snapshot. Instants cannot be stored on
+    // disk (they are process-relative), so snapshots store AGES (elapsed
+    // seconds) and this constructor converts them back: fetched_at = now - age.
+    //
+    // checked_sub returns None if the subtraction would go below the earliest
+    // instant the OS clock can represent (age older than system boot). In that
+    // corner case the entry is at least `age` old, so it is expired for any
+    // reasonable TTL: we keep the data but with a zero TTL, making it served
+    // as stale until the next sync refreshes it.
+    pub fn restore(
+        dataset: Dataset,
+        ttl_seconds: u64,
+        age_seconds: u64,
+        host_ages: HashMap<String, u64>,
+    ) -> Self {
+        let now = Instant::now();
+
+        let (fetched_at, ttl) = match now.checked_sub(Duration::from_secs(age_seconds)) {
+            Some(instant) => (instant, Duration::from_secs(ttl_seconds)),
+            None => (now, Duration::ZERO),
+        };
+
+        let host_timestamps: HashMap<String, Instant> = host_ages
+            .into_iter()
+            .filter_map(|(host, age)| {
+                now.checked_sub(Duration::from_secs(age))
+                    .map(|instant| (host, instant))
+            })
+            .collect();
+
+        Self {
+            dataset,
+            fetched_at,
+            ttl,
+            host_timestamps,
+        }
+    }
+
     // Is the complete dataset fresh?
     pub fn is_fresh(&self) -> bool {
         self.fetched_at.elapsed() < self.ttl

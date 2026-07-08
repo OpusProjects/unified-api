@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Scoped API keys: `api_keys.yaml` defines named keys whose secrets live in
+  environment variables. A key is either `role: admin` (everything) or
+  restricted to explicit `sources`/`endpoints` id lists — restricted keys see
+  filtered list responses and get `403` elsewhere. The legacy
+  `UNIFIED_API_KEY` env var keeps working as an extra admin key, and key
+  rotation stays an external process (swap the env var value and restart).
+
 - Optional cache persistence to disk: a `cache.persistence` block in
   `config.yaml` (snapshot `path` + `interval_seconds`, default 60) makes the
   app snapshot the in-memory cache atomically on an interval and on graceful

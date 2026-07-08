@@ -362,3 +362,150 @@ async fn cors_skips_invalid_origin_keeps_valid() {
         Some("https://ok.example")
     );
 }
+
+// =========================================================================
+// Tests: scoped API keys
+// =========================================================================
+
+use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
+
+// Same as get() but authenticating with an API key header
+async fn get_with_key(app: axum::Router, path: &str, key: &str) -> (StatusCode, String) {
+    let request = Request::builder()
+        .uri(path)
+        .header("x-api-key", key)
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(body.to_vec()).unwrap())
+}
+
+// Two cached sources, one admin key and one key scoped to src-alpha only
+fn app_with_scoped_keys() -> axum::Router {
+    let keys = vec![
+        ResolvedApiKey {
+            name: "admin".to_string(),
+            secret: "admin-secret".to_string(),
+            permissions: Permissions::Admin,
+        },
+        ResolvedApiKey {
+            name: "alpha-only".to_string(),
+            secret: "alpha-secret".to_string(),
+            permissions: Permissions::Scoped {
+                sources: ["src-alpha".to_string()].into_iter().collect(),
+                endpoints: std::collections::HashSet::new(),
+            },
+        },
+    ];
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .api_keys(keys)
+        .build_with_state();
+
+    let empty: unified_api::domain::dataset::Dataset =
+        serde_json::from_str(r#"{"hostvars": {}, "groups": {}}"#).unwrap();
+    state.cache.set(
+        "src-alpha",
+        unified_api::domain::cache_entry::CacheEntry::new(empty.clone(), 3600),
+    );
+    state.cache.set(
+        "src-beta",
+        unified_api::domain::cache_entry::CacheEntry::new(empty, 3600),
+    );
+
+    app
+}
+
+#[tokio::test]
+async fn admin_key_sees_all_sources() {
+    let (status, body) =
+        get_with_key(app_with_scoped_keys(), "/api/v1/sources", "admin-secret").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("src-alpha"));
+    assert!(body.contains("src-beta"));
+}
+
+#[tokio::test]
+async fn scoped_key_list_is_filtered() {
+    let (status, body) =
+        get_with_key(app_with_scoped_keys(), "/api/v1/sources", "alpha-secret").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("src-alpha"));
+    // The other source is invisible, not an error
+    assert!(!body.contains("src-beta"));
+}
+
+#[tokio::test]
+async fn scoped_key_reads_allowed_source() {
+    let (status, _) = get_with_key(
+        app_with_scoped_keys(),
+        "/api/v1/sources/src-alpha/dataset",
+        "alpha-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn scoped_key_gets_403_on_other_source() {
+    let (status, _) = get_with_key(
+        app_with_scoped_keys(),
+        "/api/v1/sources/src-beta/dataset",
+        "alpha-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn scoped_key_gets_403_on_other_source_status() {
+    let (status, _) = get_with_key(
+        app_with_scoped_keys(),
+        "/api/v1/sources/src-beta/status",
+        "alpha-secret",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn wrong_key_still_401() {
+    let (status, _) = get_with_key(app_with_scoped_keys(), "/api/v1/sources", "nope").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn scoped_key_cannot_run_unlisted_endpoint() {
+    // Endpoints require configuration; an empty scoped key must get 403
+    // before the 404 lookup (the id is not theirs to probe).
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/endpoints/ep-anything")
+        .header("x-api-key", "alpha-secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app_with_scoped_keys().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn legacy_single_api_key_is_admin() {
+    // The old .api_key(Some(...)) path must keep behaving as full access
+    let (app, state) = unified_api::AppBuilder::new()
+        .api_key(Some("legacy-secret".to_string()))
+        .build_with_state();
+
+    let empty: unified_api::domain::dataset::Dataset =
+        serde_json::from_str(r#"{"hostvars": {}, "groups": {}}"#).unwrap();
+    state.cache.set(
+        "src-any",
+        unified_api::domain::cache_entry::CacheEntry::new(empty, 3600),
+    );
+
+    let (status, body) = get_with_key(app, "/api/v1/sources", "legacy-secret").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("src-any"));
+}

@@ -1,3 +1,4 @@
+pub mod api_key;
 pub mod cache_entry;
 pub mod credential;
 pub mod dataset;

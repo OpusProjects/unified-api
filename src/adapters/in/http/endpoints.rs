@@ -9,6 +9,7 @@ use std::time::Instant;
 use utoipa::ToSchema;
 
 use crate::AppState;
+use crate::adapters::r#in::http::auth::AuthContext;
 use crate::domain::dataset::Dataset;
 
 #[derive(Serialize, ToSchema)]
@@ -28,10 +29,14 @@ pub struct EndpointInfo {
         (status = 200, description = "List configured endpoints", body = Vec<EndpointInfo>)
     )
 )]
-pub async fn list_endpoints(State(state): State<Arc<AppState>>) -> Json<Vec<EndpointInfo>> {
+pub async fn list_endpoints(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+) -> Json<Vec<EndpointInfo>> {
     let mut endpoints: Vec<EndpointInfo> = state
         .endpoints
         .iter()
+        .filter(|(id, _)| auth.permissions.allows_endpoint(id))
         .map(|(id, ep)| {
             let sources_missing: Vec<String> = ep
                 .source_ids
@@ -66,15 +71,23 @@ pub async fn list_endpoints(State(state): State<Arc<AppState>>) -> Json<Vec<Endp
     request_body(content = Object, description = "Dynamic parameters for the endpoint script (optional)"),
     responses(
         (status = 200, description = "Transformed output from the endpoint script"),
+        (status = 403, description = "API key not allowed to run this endpoint"),
         (status = 404, description = "Endpoint not configured"),
         (status = 503, description = "Required sources not yet synced")
     )
 )]
 pub async fn run_endpoint(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Response, StatusCode> {
+    // Granting an endpoint implicitly grants reading its output, even when
+    // the key cannot read the underlying sources directly — the endpoint IS
+    // the product being granted (e.g. a rendered inventory).
+    if !auth.permissions.allows_endpoint(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let endpoint = state.endpoints.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
 

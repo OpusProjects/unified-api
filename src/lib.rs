@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use axum::Router;
 
+use adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
 use adapters::out::cache::memory::MemoryCache;
 use adapters::out::connectors::process::ProcessConnector;
 use adapters::out::connectors::ssh::SshConnector;
@@ -34,7 +35,7 @@ pub struct AppBuilder {
     enrichers: HashMap<String, Enricher>,
     endpoints: HashMap<String, OutputEndpoint>,
     secrets: Arc<dyn SecretsPort>,
-    api_key: Option<String>,
+    api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
 }
 
@@ -46,7 +47,7 @@ impl AppBuilder {
             endpoints: HashMap::new(),
             // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
-            api_key: None,
+            api_keys: Vec::new(),
             cors_allowed_origins: Vec::new(),
         }
     }
@@ -71,8 +72,21 @@ impl AppBuilder {
         self
     }
 
+    // Shorthand kept from the single-key era: one secret = one admin key.
+    // Tests and the legacy UNIFIED_API_KEY path use it.
     pub fn api_key(mut self, api_key: Option<String>) -> Self {
-        self.api_key = api_key;
+        if let Some(secret) = api_key {
+            self.api_keys.push(ResolvedApiKey {
+                name: "default".to_string(),
+                secret,
+                permissions: Permissions::Admin,
+            });
+        }
+        self
+    }
+
+    pub fn api_keys(mut self, api_keys: Vec<ResolvedApiKey>) -> Self {
+        self.api_keys = api_keys;
         self
     }
 
@@ -105,7 +119,7 @@ impl AppBuilder {
         });
         let router = adapters::r#in::http::routes::create_router(
             Arc::clone(&state),
-            self.api_key,
+            self.api_keys,
             self.cors_allowed_origins,
         );
         (router, state)

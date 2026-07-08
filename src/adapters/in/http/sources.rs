@@ -1,3 +1,4 @@
+use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -6,9 +7,16 @@ use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::AppState;
+use crate::adapters::r#in::http::auth::AuthContext;
 
 // Read from the sources cache: list, full dataset, and per-host status.
 // Write operations live in sync.rs, enrichers.rs, and hosts.rs.
+//
+// Authorization pattern used by every handler that takes an id: the auth
+// middleware already verified WHO calls (AuthContext in the extensions);
+// each handler checks whether that identity may touch THIS id and answers
+// 403 Forbidden if not. List endpoints filter instead of failing: a scoped
+// key sees its slice of the world, not an error.
 
 // ToSchema = utoipa generates the JSON Schema definition for this struct
 // It will appear in the "Schemas" section of the Swagger UI
@@ -35,11 +43,13 @@ pub struct CachedSourceInfo {
 )]
 pub async fn list_cached_sources(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
 ) -> Json<Vec<CachedSourceInfo>> {
     let keys = state.cache.keys();
 
     let sources: Vec<CachedSourceInfo> = keys
         .iter()
+        .filter(|key| auth.permissions.allows_source(key))
         .filter_map(|key| {
             let entry = state.cache.get(key)?;
             Some(CachedSourceInfo {
@@ -63,13 +73,18 @@ pub async fn list_cached_sources(
     ),
     responses(
         (status = 200, description = "Full cached dataset with hostvars and groups"),
+        (status = 403, description = "API key not allowed to read this source"),
         (status = 404, description = "Source not found in cache")
     )
 )]
 pub async fn get_source_dataset(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     match state.cache.get(&id) {
         Some(entry) => {
             let json = serde_json::to_value(&entry.dataset)
@@ -118,14 +133,19 @@ pub struct SourceStatus {
     ),
     responses(
         (status = 200, description = "Cache status per host with TTL info", body = SourceStatus),
+        (status = 403, description = "API key not allowed to read this source"),
         (status = 404, description = "Source not in cache, or host/group not found")
     )
 )]
 pub async fn source_status(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<StatusParams>,
 ) -> Result<Json<SourceStatus>, StatusCode> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let source = state.sources.get(&id);
 

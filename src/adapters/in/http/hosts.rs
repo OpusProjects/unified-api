@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::adapters::r#in::http::auth::AuthContext;
 use crate::domain::dataset::HostVars;
 
 // Immediate host add/remove in a source's cache
@@ -24,9 +25,13 @@ use crate::domain::dataset::HostVars;
 )]
 pub async fn put_host(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
     Json(vars): Json<HostVars>,
 ) -> Result<StatusCode, StatusCode> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut vars = Some(vars);
     let found = state.cache.update(&id, &mut |entry| {
         if let Some(v) = vars.take() {
@@ -54,8 +59,12 @@ pub async fn put_host(
 )]
 pub async fn delete_host(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     // The "does host exist?" check and deletion happen in the same
     // update() — checking outside with get() would be another race window.
     let mut removed = false;

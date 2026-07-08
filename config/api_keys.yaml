@@ -1,0 +1,15 @@
+# API keys with per-consumer permissions. The secret is never in this file:
+# `env` names the environment variable that holds it. No keys defined and no
+# UNIFIED_API_KEY = open API (a warning is logged at startup).
+#
+# key-awx:
+#   name: "AWX"
+#   env: "UNIFIED_API_KEY_AWX"
+#   role: "admin"                    # everything
+#
+# key-forms:
+#   name: "AnsibleForms"
+#   env: "UNIFIED_API_KEY_FORMS"
+#   # role defaults to "restricted": only what is listed below
+#   sources: ["src-section9"]        # may list/read/sync these sources
+#   endpoints: ["ep-ansible-full"]   # may list/run these endpoints

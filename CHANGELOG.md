@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Git project cloning: at boot the app shallow-clones every `projects.yaml`
+  repository into `projects.dir` (config.yaml, default `./projects`) and
+  re-pulls on `sync_interval_seconds` (fetch + hard reset). Relative script
+  paths that exist inside a project's checkout run from there; anything else
+  (absolute paths, image-baked scripts, SSH remote commands) keeps working
+  unchanged. Private repos authenticate with a `token` credential (https,
+  secret passed via environment, never argv) or an `ssh_key` credential
+  (GIT_SSH_COMMAND). Enrichers and endpoints gain an optional `project_id`.
+  The Docker image now ships `git` and a writable `/var/lib/unified-api`.
+
+### Changed
+
+- `projects.yaml`: `sync_interval` (a cron string that was never read) is now
+  `sync_interval_seconds`, matching sources and enrichers.
+
 - Scoped API keys: `api_keys.yaml` defines named keys whose secrets live in
   environment variables. A key is either `role: admin` (everything) or
   restricted to explicit `sources`/`endpoints` id lists — restricted keys see

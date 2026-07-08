@@ -53,11 +53,13 @@ src/
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
 │   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
 │   ├── enrich.rs             # run_enricher, EnrichOutcome
+│   ├── projects.rs           # sync_project (git checkout up to date)
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
 │   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
 │   ├── connector.rs          # ConnectorPort
 │   ├── enricher.rs           # EnricherPort
+│   ├── git.rs                # GitPort (project checkouts)
 │   ├── output.rs             # OutputPort
 │   └── secrets.rs            # SecretsPort
 ├── adapters/                 # Everything that touches the outside world
@@ -75,9 +77,10 @@ src/
 │   │   │   └── auth.rs       # API key middleware
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
-│       ├── cache/            # memory.rs: CachePort → DashMap
+│       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
 │       ├── connectors/       # process.rs: ConnectorPort → tokio::process; ssh.rs → russh
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
+│       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
 │       ├── output/           # process.rs: OutputPort → tokio::process
 │       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double
 config/                       # Split YAML config (server, credentials, sources, etc.)

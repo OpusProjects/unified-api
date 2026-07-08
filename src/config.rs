@@ -13,6 +13,7 @@ use crate::domain::source::Source;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub cache: CacheConfig,
+    pub projects_config: ProjectsConfig,
     pub credentials: HashMap<String, Credential>,
     pub sources: HashMap<String, Source>,
     pub enrichers: HashMap<String, Enricher>,
@@ -56,12 +57,34 @@ fn default_persistence_interval() -> u64 {
     60
 }
 
-// Intermediate struct to parse config.yaml (server + optional cache)
+// Where git projects are cloned — config.yaml, `projects:` section (optional)
+#[derive(Deserialize)]
+pub struct ProjectsConfig {
+    // Working directory for checkouts: one subdirectory per project id
+    #[serde(default = "default_projects_dir")]
+    pub dir: String,
+}
+
+impl Default for ProjectsConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_projects_dir(),
+        }
+    }
+}
+
+fn default_projects_dir() -> String {
+    "projects".to_string()
+}
+
+// Intermediate struct to parse config.yaml (server + optional sections)
 #[derive(Deserialize)]
 struct ServerFile {
     server: ServerConfig,
     #[serde(default)]
     cache: CacheConfig,
+    #[serde(default)]
+    projects: ProjectsConfig,
 }
 
 // Loads all configuration from a directory.
@@ -105,15 +128,35 @@ impl AppConfig {
             }
         }
 
-        // Sources must reference existing projects. The feature to clone git
-        // repos does not exist yet, but projects.yaml is already loaded and
-        // sources already declare project_id — better for a typo'd id to fail
-        // at startup than when the feature arrives.
+        // Sources must reference existing projects — the checkout of that
+        // project is where a relative script_path resolves first.
         for (id, source) in &self.sources {
             if !self.projects.contains_key(&source.project_id) {
                 errors.push(format!(
                     "Source '{}' references unknown project '{}'",
                     id, source.project_id
+                ));
+            }
+        }
+
+        // Enrichers and endpoints with a project must reference an existing one
+        for (id, enricher) in &self.enrichers {
+            if let Some(ref project_id) = enricher.project_id
+                && !self.projects.contains_key(project_id)
+            {
+                errors.push(format!(
+                    "Enricher '{}' references unknown project '{}'",
+                    id, project_id
+                ));
+            }
+        }
+        for (id, endpoint) in &self.endpoints {
+            if let Some(ref project_id) = endpoint.project_id
+                && !self.projects.contains_key(project_id)
+            {
+                errors.push(format!(
+                    "Endpoint '{}' references unknown project '{}'",
+                    id, project_id
                 ));
             }
         }
@@ -161,6 +204,63 @@ impl AppConfig {
             Err(format!("Configuration errors:\n  - {}", errors.join("\n  - ")).into())
         }
     }
+
+    // After the project checkouts exist on disk, point script paths into them.
+    // Called by main once the boot git sync ran; a no-op without projects.
+    //
+    // The rewrite is deliberately conservative — a path is only redirected
+    // when the file actually exists inside the checkout:
+    // - SSH sources are skipped (their script_path is a REMOTE command)
+    // - absolute paths are kept as-is
+    // - if the project failed to clone, or the file is not in it, the original
+    //   path stays (it may be baked into the image or mounted) and syncs keep
+    //   working exactly as before this feature existed
+    pub fn resolve_script_paths(&mut self, projects_dir: &Path) {
+        use crate::domain::source::ConnectorType;
+
+        for (id, source) in self.sources.iter_mut() {
+            if matches!(source.connector_type, ConnectorType::Ssh) {
+                continue;
+            }
+            resolve_one(
+                projects_dir,
+                id,
+                &source.project_id,
+                &mut source.script_path,
+            );
+        }
+        for (id, enricher) in self.enrichers.iter_mut() {
+            if let Some(project_id) = enricher.project_id.clone() {
+                resolve_one(projects_dir, id, &project_id, &mut enricher.script_path);
+            }
+        }
+        for (id, endpoint) in self.endpoints.iter_mut() {
+            if let Some(project_id) = endpoint.project_id.clone() {
+                resolve_one(projects_dir, id, &project_id, &mut endpoint.script_path);
+            }
+        }
+    }
+}
+
+fn resolve_one(projects_dir: &Path, owner_id: &str, project_id: &str, script_path: &mut String) {
+    if Path::new(script_path.as_str()).is_absolute() {
+        return;
+    }
+    let candidate = projects_dir.join(project_id).join(script_path.as_str());
+    if candidate.is_file() {
+        tracing::debug!(id = %owner_id, path = %candidate.display(), "Script resolved in project checkout");
+        *script_path = candidate.to_string_lossy().into_owned();
+    } else if projects_dir.join(project_id).is_dir() {
+        // The checkout exists but the script is not in it — likely a typo in
+        // config. Keep the original path (it may still resolve against the
+        // working directory) but say something.
+        tracing::warn!(
+            id = %owner_id,
+            project = %project_id,
+            script = %script_path,
+            "Script not found in project checkout, keeping the configured path"
+        );
+    }
 }
 
 pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
@@ -180,6 +280,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
     let config = AppConfig {
         server: server_file.server,
         cache: server_file.cache,
+        projects_config: server_file.projects,
         credentials,
         sources,
         enrichers,
@@ -357,6 +458,96 @@ mod tests {
 
         let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(cfg.projects.len(), 1);
+    }
+
+    #[test]
+    fn resolve_script_paths_points_into_existing_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"fetch.py\"\n  ttl_seconds: 60\n",
+        ).unwrap();
+
+        let mut cfg = load_config(dir.path().to_str().unwrap()).unwrap();
+
+        // Simulate the checkout the git adapter would have produced
+        let projects_dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(projects_dir.path().join("prj-test")).unwrap();
+        fs::write(projects_dir.path().join("prj-test/fetch.py"), "#!/bin/sh\n").unwrap();
+
+        cfg.resolve_script_paths(projects_dir.path());
+
+        let resolved = &cfg.sources["src-test"].script_path;
+        assert!(resolved.ends_with("prj-test/fetch.py"));
+        assert!(
+            Path::new(resolved).is_absolute()
+                || resolved.starts_with(projects_dir.path().to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn resolve_script_paths_keeps_path_when_script_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"local/fetch.py\"\n  ttl_seconds: 60\n",
+        ).unwrap();
+
+        let mut cfg = load_config(dir.path().to_str().unwrap()).unwrap();
+
+        // No checkout at all (clone failed / never ran): path must not change,
+        // so scripts baked into the image keep working
+        let projects_dir = tempfile::tempdir().unwrap();
+        cfg.resolve_script_paths(projects_dir.path());
+
+        assert_eq!(cfg.sources["src-test"].script_path, "local/fetch.py");
+    }
+
+    #[test]
+    fn validate_catches_enricher_with_unknown_project() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+        ).unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("enrichers.yaml"),
+            "enrich-test:\n  name: \"Test\"\n  source_id: \"src-test\"\n  script_path: \"e.py\"\n  project_id: \"prj-ghost\"\n",
+        ).unwrap();
+
+        let result = load_config(dir.path().to_str().unwrap());
+        let err = result.err().expect("expected validation error").to_string();
+        assert!(err.contains("prj-ghost"));
     }
 
     #[test]

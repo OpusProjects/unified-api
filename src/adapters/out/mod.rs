@@ -3,5 +3,6 @@
 pub mod cache;
 pub mod connectors;
 pub mod enrichers;
+pub mod git;
 pub mod output;
 pub mod secrets;

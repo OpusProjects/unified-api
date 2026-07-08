@@ -132,11 +132,38 @@ prj-connectors-infra:
   sync_interval: "0 */30 * * *"
 ```
 
+## api_keys.yaml
+
+API keys with per-consumer permissions. The secret is NEVER here — `env` names
+the environment variable that holds it, so this file can live in git and
+rotation stays an external process (swap the env var, restart).
+
+```yaml
+key-awx:
+  name: "AWX"
+  env: "UNIFIED_API_KEY_AWX"
+  role: "admin"                    # everything
+
+key-forms:
+  name: "AnsibleForms"
+  env: "UNIFIED_API_KEY_FORMS"
+  # role defaults to "restricted": only what is listed below
+  sources: ["src-ssh-linux"]       # may list/read/sync these sources
+  endpoints: ["ep-ansible-full"]   # may list/run these endpoints
+```
+
+A declared key whose env var is missing or empty fails startup (a typo must
+not silently lock a consumer out at request time). Restricted keys referencing
+unknown source/endpoint ids also fail startup. No file and no
+`UNIFIED_API_KEY` = open API (with a loud warning). See
+[API → Authentication](api.md#authentication) for the exact route semantics.
+
 ## Environment variables
 
 | Variable | Effect |
 |---|---|
 | `CONFIG_DIR` | Config directory (default `config`) |
-| `UNIFIED_API_KEY` | When set, all `/api/v1/*` routes require this key (see [API](api.md)); health probes and Swagger stay public |
+| `UNIFIED_API_KEY` | Legacy single admin key: when set, it authenticates like an `api_keys.yaml` admin entry (see [API](api.md)); health probes and Swagger stay public |
+| per `api_keys.yaml` | Each key definition names the env var holding its secret |
 | `RUST_LOG` | Log filter, e.g. `debug` or `unified_api=debug` (default `info`) |
 | `<PREFIX>_<SUFFIX>` | Secret values referenced by `credentials.yaml` `env_prefix`/`secret_keys` |

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::domain::api_key::{ApiKeyDef, ApiKeyRole};
 use crate::domain::credential::Credential;
 use crate::domain::endpoint::OutputEndpoint;
 use crate::domain::enricher::Enricher;
@@ -17,6 +18,7 @@ pub struct AppConfig {
     pub enrichers: HashMap<String, Enricher>,
     pub projects: HashMap<String, GitProject>,
     pub endpoints: HashMap<String, OutputEndpoint>,
+    pub api_keys: HashMap<String, ApiKeyDef>,
 }
 
 // HTTP server configuration — config.yaml
@@ -116,6 +118,31 @@ impl AppConfig {
             }
         }
 
+        // Restricted API keys must reference existing sources and endpoints —
+        // a typo'd id would otherwise just deny access with no explanation.
+        // (Admin keys ignore the lists, so referencing anything is pointless
+        // but harmless; only restricted keys are validated.)
+        for (id, key) in &self.api_keys {
+            if key.role == ApiKeyRole::Restricted {
+                for source_id in &key.sources {
+                    if !self.sources.contains_key(source_id) {
+                        errors.push(format!(
+                            "API key '{}' references unknown source '{}'",
+                            id, source_id
+                        ));
+                    }
+                }
+                for endpoint_id in &key.endpoints {
+                    if !self.endpoints.contains_key(endpoint_id) {
+                        errors.push(format!(
+                            "API key '{}' references unknown endpoint '{}'",
+                            id, endpoint_id
+                        ));
+                    }
+                }
+            }
+        }
+
         // Private projects must reference existing credentials
         for (id, project) in &self.projects {
             if let Some(ref cred_id) = project.credential_id
@@ -148,6 +175,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
     let enrichers = load_optional_yaml(&dir.join("enrichers.yaml"))?;
     let projects = load_optional_yaml(&dir.join("projects.yaml"))?;
     let endpoints = load_optional_yaml(&dir.join("endpoints.yaml"))?;
+    let api_keys = load_optional_yaml(&dir.join("api_keys.yaml"))?;
 
     let config = AppConfig {
         server: server_file.server,
@@ -157,6 +185,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
         enrichers,
         projects,
         endpoints,
+        api_keys,
     };
 
     config.validate()?;

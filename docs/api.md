@@ -6,8 +6,10 @@ reference; the spec is generated from the code and is always authoritative.
 
 ## Authentication
 
-If the `UNIFIED_API_KEY` environment variable is set, every `/api/v1/*` route
-requires it — either header works:
+API keys are defined in `api_keys.yaml` (see [configuration](configuration.md));
+each key's secret lives in the environment variable the definition names, never
+in the YAML. The legacy `UNIFIED_API_KEY` environment variable still works and
+acts as one extra admin key. Either header authenticates:
 
 ```
 X-API-Key: <key>
@@ -15,8 +17,27 @@ Authorization: Bearer <key>
 ```
 
 Wrong or missing key → `401`. Keys are compared in constant time. Health probes
-(`/healthz`, `/readyz`), `/metrics` and the Swagger UI remain public. If the
-variable is not set, authentication is disabled (useful for local development).
+(`/healthz`, `/readyz`), `/metrics` and the Swagger UI remain public. With no
+keys configured at all, authentication is disabled (useful for local
+development) and the app logs a warning at startup.
+
+### Authorization
+
+Each key has a role:
+
+- **`admin`** — every route, every id.
+- **`restricted`** (the default) — only the source ids in its `sources` list
+  and the endpoint ids in its `endpoints` list.
+
+For a restricted key: list routes (`GET /sources`, `GET /endpoints`) are
+*filtered* to the allowed ids; id routes on anything else return `403`.
+Running an enricher requires permission on the enricher's **source** (that is
+what it writes to). Running an output endpoint requires the **endpoint** id
+only — granting an endpoint grants its rendered output even if the key cannot
+read the underlying sources raw.
+
+Rotation is external by design: swap the secret in the env var (Secret, Vault,
+…) and restart — no config change involved.
 
 **CORS** is off by default (no CORS headers; server-to-server consumers are
 unaffected). Browser-based consumers need their origins listed in

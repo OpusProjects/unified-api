@@ -14,14 +14,14 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::AppState;
 use crate::adapters::r#in::http;
-use crate::adapters::r#in::http::auth::ApiKey;
+use crate::adapters::r#in::http::auth::{ApiKeys, ResolvedApiKey};
 use crate::adapters::r#in::http::openapi::ApiDoc;
 
-// Build the complete router: API routes (protected by API key if
+// Build the complete router: API routes (protected by API keys if
 // configured), public health probes, and Swagger UI.
 pub fn create_router(
     state: Arc<AppState>,
-    api_key: Option<String>,
+    api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
 ) -> Router<()> {
     let api_routes = Router::new()
@@ -49,7 +49,7 @@ pub fn create_router(
             post(http::endpoints::run_endpoint),
         )
         .layer(middleware::from_fn(http::auth::require_api_key))
-        .layer(axum::Extension(ApiKey(api_key)));
+        .layer(axum::Extension(ApiKeys(api_keys.into())));
 
     let router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))

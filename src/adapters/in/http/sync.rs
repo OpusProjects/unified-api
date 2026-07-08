@@ -8,6 +8,7 @@ use utoipa::{IntoParams, ToSchema};
 // Rename the use case on import because the HTTP handler wrapping
 // it has the same name (sync_source)
 use crate::AppState;
+use crate::adapters::r#in::http::auth::AuthContext;
 use crate::application::sync::{SyncScope, sync_source as application_sync_source};
 
 // IntoParams = utoipa generates documentation for query params
@@ -42,14 +43,19 @@ pub struct SyncResult {
     ),
     responses(
         (status = 200, description = "Sync result with host/group counts", body = SyncResult),
+        (status = 403, description = "API key not allowed to sync this source"),
         (status = 404, description = "Source not configured")
     )
 )]
 pub async fn sync_source(
     State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<SyncParams>,
 ) -> Result<Json<SyncResult>, StatusCode> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let source = state.sources.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
     let scope = if let Some(host) = params.host {

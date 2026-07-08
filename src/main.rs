@@ -23,13 +23,22 @@ async fn main() {
         }
     };
 
-    // The API key is read here, at the boundary: the rest of the app receives it
-    // as a parameter and does not touch environment variables
-    let api_key = std::env::var("UNIFIED_API_KEY").ok();
+    // Secrets are read here, at the boundary: the rest of the app receives
+    // resolved keys as parameters and does not touch environment variables.
+    let api_keys = match resolve_api_keys(&cfg) {
+        Ok(keys) => keys,
+        Err(e) => {
+            error!("Failed to resolve API keys: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Make an unauthenticated deployment loud, not a buried auth=false field
-    if api_key.is_none() {
-        warn!("UNIFIED_API_KEY is not set: the /api/v1 API is running WITHOUT authentication");
+    if api_keys.is_empty() {
+        warn!(
+            "No API keys configured (api_keys.yaml or UNIFIED_API_KEY): \
+             the /api/v1 API is running WITHOUT authentication"
+        );
     }
 
     info!(
@@ -38,7 +47,7 @@ async fn main() {
         enrichers = cfg.enrichers.len(),
         endpoints = cfg.endpoints.len(),
         projects = cfg.projects.len(),
-        auth = api_key.is_some(),
+        api_keys = api_keys.len(),
         "Configuration loaded"
     );
 
@@ -47,7 +56,7 @@ async fn main() {
         .enrichers(cfg.enrichers)
         .endpoints(cfg.endpoints)
         .secrets(std::sync::Arc::new(EnvSecrets::new(cfg.credentials)))
-        .api_key(api_key)
+        .api_keys(api_keys)
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .build_with_state();
 
@@ -98,6 +107,66 @@ async fn main() {
     }
 
     info!("Shutdown complete");
+}
+
+// Turn the api_keys.yaml definitions into runtime keys by reading each
+// declared env var. A declared-but-missing env var is a hard startup error:
+// the alternative (skip the key with a warn) means a typo silently locks a
+// consumer out. The legacy UNIFIED_API_KEY, if set, joins as an admin key —
+// existing deployments keep working unchanged.
+fn resolve_api_keys(
+    cfg: &unified_api::config::AppConfig,
+) -> Result<Vec<unified_api::adapters::r#in::http::auth::ResolvedApiKey>, String> {
+    use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
+    use unified_api::domain::api_key::ApiKeyRole;
+
+    let mut keys = Vec::new();
+
+    // BTreeMap-like deterministic order helps tests and logs
+    let mut ids: Vec<&String> = cfg.api_keys.keys().collect();
+    ids.sort();
+
+    for id in ids {
+        let def = &cfg.api_keys[id];
+        let secret = std::env::var(&def.env).map_err(|_| {
+            format!(
+                "API key '{}' expects the secret in env var '{}', which is not set",
+                id, def.env
+            )
+        })?;
+        if secret.is_empty() {
+            return Err(format!(
+                "API key '{}': env var '{}' is set but empty",
+                id, def.env
+            ));
+        }
+
+        let permissions = match def.role {
+            ApiKeyRole::Admin => Permissions::Admin,
+            ApiKeyRole::Restricted => Permissions::Scoped {
+                sources: def.sources.iter().cloned().collect(),
+                endpoints: def.endpoints.iter().cloned().collect(),
+            },
+        };
+
+        keys.push(ResolvedApiKey {
+            name: def.name.clone(),
+            secret,
+            permissions,
+        });
+    }
+
+    if let Ok(secret) = std::env::var("UNIFIED_API_KEY")
+        && !secret.is_empty()
+    {
+        keys.push(ResolvedApiKey {
+            name: "default".to_string(),
+            secret,
+            permissions: Permissions::Admin,
+        });
+    }
+
+    Ok(keys)
 }
 
 async fn shutdown_signal() {

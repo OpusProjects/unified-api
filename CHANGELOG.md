@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Dataset pagination and filtering: `GET /sources/{id}/dataset` accepts
+  `limit`, `offset`, `host` and `group` query parameters and answers with a
+  paginated envelope (`total_hosts`/`offset`/`limit`/`returned` + the sliced
+  hostvars, sorted by hostname for stable pages). Without parameters the raw
+  Dataset shape is returned unchanged, so existing consumers are unaffected —
+  the envelope exists because a 1000-host dataset (~10MB of JSON) hangs
+  browser UIs like Swagger when rendered whole.
+
 ## [0.3.3] - 2026-07-11
 
 ### Fixed

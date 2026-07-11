@@ -56,7 +56,7 @@ unaffected). Browser-based consumers need their origins listed in
 | Route | Meaning |
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness and host counts |
-| `GET /api/v1/sources/{id}/dataset` | The full cached dataset (hostvars + groups) |
+| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); paginate/filter with `?limit=&offset=&host=&group=` |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=` |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
@@ -78,6 +78,36 @@ connector or credential error rather than mapping it to an HTTP status:
 ```
 
 `404` means the source id itself isn't configured.
+
+### Dataset pagination
+
+Without query parameters, `/dataset` returns the **raw Dataset** — the exact
+shape consumers parse, unchanged. But a large inventory (1000 hosts ≈ 8-10MB
+of JSON) will hang a browser UI like Swagger if rendered whole; add any of
+`limit`, `offset`, `host` or `group` and the response becomes a paginated
+envelope instead:
+
+```
+GET /api/v1/sources/src-d42/dataset?limit=50&offset=100
+GET /api/v1/sources/src-d42/dataset?group=linux&limit=50
+```
+
+```json
+{
+  "source_id": "src-d42",
+  "total_hosts": 987,
+  "offset": 100,
+  "limit": 50,
+  "returned": 50,
+  "hostvars": { "...50 hosts, sorted by name for stable pages..." : {} },
+  "groups": { "...all groups (or just the filtered one with ?group=)..." : {} }
+}
+```
+
+`host=` returns a single host, `group=` restricts to that group's members
+(and returns only that group); unknown names are `404`. Group membership
+lists are always included — they're tiny next to the hostvars, which carry
+the facts.
 
 ## Enrichers
 

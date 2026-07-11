@@ -82,7 +82,7 @@ impl ConnectorPort for StaticInventoryConnector {
                 warn!(inventory = %inventory_path, "{}", warning);
             }
 
-            Ok(dataset)
+            Ok(dataset.into())
         })
     }
 }

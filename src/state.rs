@@ -19,6 +19,7 @@ pub struct AppState {
     pub connector: Arc<dyn ports::connector::ConnectorPort>,
     pub ssh_connector: Arc<dyn ports::connector::ConnectorPort>,
     pub static_connector: Arc<dyn ports::connector::ConnectorPort>,
+    pub remote_connector: Arc<dyn ports::connector::ConnectorPort>,
     pub enricher: Arc<dyn ports::enricher::EnricherPort>,
     pub output: Arc<dyn ports::output::OutputPort>,
     pub secrets: Arc<dyn ports::secrets::SecretsPort>,
@@ -40,6 +41,7 @@ impl AppState {
             ConnectorType::Script => &self.connector,
             ConnectorType::Ssh => &self.ssh_connector,
             ConnectorType::StaticInventory => &self.static_connector,
+            ConnectorType::Remote => &self.remote_connector,
         }
     }
 }

@@ -4,7 +4,35 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-pub type ConnectorResult = Result<Dataset, ConnectorError>;
+pub type ConnectorResult = Result<ConnectorOutput, ConnectorError>;
+
+// What a connector produces: the dataset, plus — when the connector actually
+// knows it — how old the data already was when fetched. Local connectors
+// (process, ssh, static) gather fresh data, so their age is "now" (None);
+// the remote connector federates another instance's CACHE, and pretending
+// that data was born now would make freshness reporting lie by the transfer
+// lag. `From<Dataset>` keeps the common case a one-word `.into()`.
+#[derive(Debug)]
+pub struct ConnectorOutput {
+    pub dataset: Dataset,
+    pub ages: Option<DatasetAges>,
+}
+
+#[derive(Debug)]
+pub struct DatasetAges {
+    pub dataset_age_seconds: u64,
+    // hostname → seconds since that host was last refreshed at the origin
+    pub host_ages: HashMap<String, u64>,
+}
+
+impl From<Dataset> for ConnectorOutput {
+    fn from(dataset: Dataset) -> Self {
+        Self {
+            dataset,
+            ages: None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ConnectorError {

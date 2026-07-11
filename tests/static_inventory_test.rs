@@ -63,7 +63,7 @@ async fn reads_a_full_inventory_layout_from_disk() {
         )
         .await;
 
-    let dataset = result.expect("static inventory must parse");
+    let dataset = result.expect("static inventory must parse").dataset;
 
     assert_eq!(dataset.hostvars.len(), 4);
     // group_vars/all reaches every host
@@ -103,7 +103,8 @@ async fn inventory_without_vars_dirs_still_works() {
             &HashMap::new(),
         )
         .await
-        .expect("no group_vars/host_vars is a valid layout");
+        .expect("no group_vars/host_vars is a valid layout")
+        .dataset;
 
     assert_eq!(dataset.hostvars.len(), 1);
 }

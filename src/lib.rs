@@ -16,6 +16,7 @@ use axum::Router;
 use adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
 use adapters::out::cache::memory::MemoryCache;
 use adapters::out::connectors::process::ProcessConnector;
+use adapters::out::connectors::remote::RemoteConnector;
 use adapters::out::connectors::ssh::SshConnector;
 use adapters::out::connectors::static_inventory::StaticInventoryConnector;
 use adapters::out::enrichers::process::ProcessEnricher;
@@ -128,6 +129,7 @@ impl AppBuilder {
             connector: Arc::new(ProcessConnector::new()),
             ssh_connector: Arc::new(SshConnector::new()),
             static_connector: Arc::new(StaticInventoryConnector::new()),
+            remote_connector: Arc::new(RemoteConnector::new()),
             enricher: Arc::new(ProcessEnricher::new()),
             output: Arc::new(ProcessOutput::new()),
             secrets: self.secrets,

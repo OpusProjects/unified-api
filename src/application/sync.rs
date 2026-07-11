@@ -4,11 +4,10 @@ use tokio::time::timeout;
 
 use crate::application::credentials::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
-use crate::domain::dataset::Dataset;
 use crate::domain::source::Source;
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
-use crate::ports::connector::ConnectorPort;
+use crate::ports::connector::{ConnectorOutput, ConnectorPort};
 use crate::ports::secrets::SecretsPort;
 
 // Scope of a sync: the complete inventory, a single host, or a group
@@ -201,11 +200,11 @@ async fn run_sync(
     let duration_ms = start.elapsed().as_millis();
 
     match result {
-        Ok(dataset) => {
-            let total_hosts = dataset.hostvars.len();
-            let total_groups = dataset.groups.len();
+        Ok(output) => {
+            let total_hosts = output.dataset.hostvars.len();
+            let total_groups = output.dataset.groups.len();
 
-            apply_to_cache(cache, source_id, source, &scope, dataset);
+            apply_to_cache(cache, source_id, source, &scope, output);
 
             SyncOutcome {
                 scope: scope_label,
@@ -227,8 +226,9 @@ fn apply_to_cache(
     source_id: &str,
     source: &Source,
     scope: &SyncScope,
-    dataset: Dataset,
+    output: ConnectorOutput,
 ) {
+    let ConnectorOutput { dataset, ages } = output;
     match scope {
         SyncScope::Host(host) => {
             // Only cache if the connector returned the requested host
@@ -249,7 +249,19 @@ fn apply_to_cache(
         }
         SyncScope::Full => match source.sync_mode {
             SyncMode::Replace => {
-                cache.set(source_id, CacheEntry::new(dataset, source.ttl_seconds));
+                // A connector that reports how old its data already is (the
+                // remote/federation one) gets an entry with truthful ages;
+                // everything else gathered fresh and starts at age zero.
+                let entry = match ages {
+                    Some(a) => CacheEntry::restore(
+                        dataset,
+                        source.ttl_seconds,
+                        a.dataset_age_seconds,
+                        a.host_ages,
+                    ),
+                    None => CacheEntry::new(dataset, source.ttl_seconds),
+                };
+                cache.set(source_id, entry);
             }
             SyncMode::Merge => {
                 cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {

@@ -1002,7 +1002,8 @@ mod hosts_from_source {
                     hostvars: HashMap::new(),
                     groups: HashMap::new(),
                     remove_hosts: vec![],
-                })
+                }
+                .into())
             })
         }
     }

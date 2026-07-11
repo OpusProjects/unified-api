@@ -97,7 +97,7 @@ impl ConnectorPort for ProcessConnector {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let dataset = parse_dataset(&stdout, output_format, &script_path, stderr)?;
 
-            Ok(dataset)
+            Ok(dataset.into())
         }) // closes async move
     } // closes fn execute
 } // closes impl ConnectorPort

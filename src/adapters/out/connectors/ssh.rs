@@ -245,7 +245,8 @@ impl ConnectorPort for SshConnector {
                 hostvars,
                 groups,
                 remove_hosts: Vec::new(),
-            })
+            }
+            .into())
         })
     }
 }

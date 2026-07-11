@@ -35,7 +35,7 @@ async fn execute_default_inventory() {
     // Verify it did not fail
     assert!(result.is_ok(), "Connector failed: {:?}", result.err());
 
-    let dataset = result.unwrap();
+    let dataset = result.unwrap().dataset;
 
     // 6 hosts in default inventory: 3 in Section 9, 3 MAGI in SEELE
     assert_eq!(dataset.hostvars.len(), 6);
@@ -72,7 +72,7 @@ async fn execute_empty_inventory() {
 
     assert!(result.is_ok());
 
-    let dataset = result.unwrap();
+    let dataset = result.unwrap().dataset;
     assert_eq!(dataset.hostvars.len(), 0);
     assert_eq!(dataset.groups.len(), 0);
 }
@@ -96,7 +96,7 @@ async fn execute_large_inventory() {
 
     assert!(result.is_ok());
 
-    let dataset = result.unwrap();
+    let dataset = result.unwrap().dataset;
     assert_eq!(dataset.hostvars.len(), 50);
     assert!(dataset.groups.contains_key("production"));
     assert!(dataset.groups.contains_key("staging"));
@@ -281,7 +281,7 @@ async fn execute_passes_script_args_verbatim() {
         )
         .await;
 
-    let dataset = result.expect("connector must succeed with --list");
+    let dataset = result.expect("connector must succeed with --list").dataset;
     // The fixture echoes back the argv it received as a hostvar
     let received = &dataset.hostvars["argshost.section9.net"]["received_args"];
     assert_eq!(received, &serde_json::json!(["--list", "--refresh"]));
@@ -305,7 +305,9 @@ async fn ansible_format_output_is_converted_to_dataset() {
         )
         .await;
 
-    let dataset = result.expect("ansible-format connector must succeed");
+    let dataset = result
+        .expect("ansible-format connector must succeed")
+        .dataset;
 
     // hostvars extracted from _meta.hostvars
     assert_eq!(dataset.hostvars.len(), 2);
@@ -340,7 +342,9 @@ async fn ansible_output_parsed_as_native_yields_empty_dataset() {
         )
         .await;
 
-    let dataset = result.expect("parse succeeds — that is precisely the trap");
+    let dataset = result
+        .expect("parse succeeds — that is precisely the trap")
+        .dataset;
     assert!(dataset.hostvars.is_empty());
     assert!(dataset.groups.is_empty());
 }

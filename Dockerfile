@@ -13,8 +13,18 @@ RUN touch src/main.rs && cargo build --release
 # Stage 2: runtime
 FROM debian:trixie-slim
 
-# git: the app clones connector-script projects at boot (projects.yaml)
-RUN apt-get update && apt-get install -y ca-certificates python3 git && rm -rf /var/lib/apt/lists/*
+# git: the app clones connector-script projects at boot (projects.yaml).
+# Python libraries commonly imported by connector scripts (requests, yaml,
+# jinja2) come from apt on purpose: they track the distro's security updates
+# with every image rebuild, unlike a pip install frozen at build time (which
+# would also need --break-system-packages on trixie). python-is-python3
+# provides the /usr/bin/python symlink for scripts with a bare
+# `#!/usr/bin/env python` shebang.
+RUN apt-get update && apt-get install -y \
+    ca-certificates git \
+    python3 python-is-python3 \
+    python3-requests python3-yaml python3-jinja2 \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r unified && useradd -r -g unified -s /sbin/nologin unified
 

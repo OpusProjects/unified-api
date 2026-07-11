@@ -515,3 +515,100 @@ async fn legacy_single_api_key_is_admin() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("src-any"));
 }
+
+// =========================================================================
+// Tests: dataset pagination and filtering
+// =========================================================================
+
+#[tokio::test]
+async fn dataset_without_params_is_the_raw_shape() {
+    let (status, body) = get(app_with_demo_data(), "/api/v1/sources/src-demo/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    // raw Dataset: hostvars/groups at the top, no pagination envelope
+    assert!(json.get("hostvars").is_some());
+    assert!(json.get("total_hosts").is_none());
+    assert_eq!(json["hostvars"].as_object().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn dataset_with_limit_pages_sorted_hosts() {
+    // page 1: hosts sorted by name → melchior.seele.net comes first
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?limit=1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 2);
+    assert_eq!(json["returned"], 1);
+    assert_eq!(json["offset"], 0);
+    assert!(json["hostvars"].get("melchior.seele.net").is_some());
+
+    // page 2
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?limit=1&offset=1",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(json["hostvars"].get("motoko.section9.net").is_some());
+    assert_eq!(json["returned"], 1);
+}
+
+#[tokio::test]
+async fn dataset_group_filter_returns_only_that_group() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?group=section9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 1);
+    assert!(json["hostvars"].get("motoko.section9.net").is_some());
+    assert!(json["hostvars"].get("melchior.seele.net").is_none());
+    // only the filtered group comes back
+    assert_eq!(json["groups"].as_object().unwrap().len(), 1);
+    assert!(json["groups"].get("section9").is_some());
+}
+
+#[tokio::test]
+async fn dataset_host_filter_and_not_found_cases() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=motoko.section9.net",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 1);
+
+    let (status, _) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=ghost.example.com",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?group=ghosts",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dataset_offset_beyond_total_returns_empty_page() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?limit=10&offset=99",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 2);
+    assert_eq!(json["returned"], 0);
+}

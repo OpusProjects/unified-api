@@ -3,6 +3,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
@@ -64,35 +65,121 @@ pub async fn list_cached_sources(
     Json(sources)
 }
 
+// Query parameters for the dataset endpoint. All optional — without any of
+// them the response is the raw Dataset, exactly as before (consumers depend
+// on that shape). With any of them, the response becomes a paginated
+// envelope; large inventories (a 1000-host dataset is ~10MB of JSON) hang
+// browser UIs like Swagger when rendered whole.
+#[derive(Deserialize, IntoParams)]
+pub struct DatasetParams {
+    /// Return only this host
+    pub host: Option<String>,
+    /// Return only the hosts of this group
+    pub group: Option<String>,
+    /// Max hosts to return (hosts are sorted by name for stable pages)
+    pub limit: Option<usize>,
+    /// How many hosts to skip (use with limit to page)
+    pub offset: Option<usize>,
+}
+
+impl DatasetParams {
+    fn is_plain(&self) -> bool {
+        self.host.is_none() && self.group.is_none() && self.limit.is_none() && self.offset.is_none()
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/sources/{id}/dataset",
     tag = "Sources",
     params(
-        ("id" = String, Path, description = "Source identifier (e.g. src-section9)")
+        ("id" = String, Path, description = "Source identifier (e.g. src-section9)"),
+        DatasetParams
     ),
     responses(
-        (status = 200, description = "Full cached dataset with hostvars and groups"),
+        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups). With host/group/limit/offset: a paginated envelope with total_hosts, offset, limit, hostvars and groups"),
         (status = 403, description = "API key not allowed to read this source"),
-        (status = 404, description = "Source not found in cache")
+        (status = 404, description = "Source not in cache, or host/group not found")
     )
 )]
 pub async fn get_source_dataset(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
+    Query(params): Query<DatasetParams>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if !auth.permissions.allows_source(&id) {
         return Err(StatusCode::FORBIDDEN);
     }
-    match state.cache.get(&id) {
-        Some(entry) => {
-            let json = serde_json::to_value(&entry.dataset)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            Ok(Json(json))
-        }
-        None => Err(StatusCode::NOT_FOUND),
+    let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+
+    // No params = the raw Dataset, byte-compatible with what consumers
+    // (AWX inventory scripts, the remote-federation pattern) already parse
+    if params.is_plain() {
+        let json =
+            serde_json::to_value(&entry.dataset).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(Json(json));
     }
+
+    // Which hosts survive the filter, sorted so limit/offset pages are stable
+    let mut hostnames: Vec<&String> = if let Some(ref host) = params.host {
+        if !entry.dataset.hostvars.contains_key(host) {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        vec![
+            entry
+                .dataset
+                .hostvars
+                .get_key_value(host)
+                .map(|(k, _)| k)
+                .unwrap(),
+        ]
+    } else if let Some(ref group) = params.group {
+        match entry.dataset.groups.get(group) {
+            Some(g) => g.hosts.iter().collect(),
+            None => return Err(StatusCode::NOT_FOUND),
+        }
+    } else {
+        entry.dataset.hostvars.keys().collect()
+    };
+    hostnames.sort();
+    hostnames.dedup();
+
+    let total_hosts = hostnames.len();
+    let offset = params.offset.unwrap_or(0);
+    let page: Vec<&String> = hostnames
+        .into_iter()
+        .skip(offset)
+        .take(params.limit.unwrap_or(usize::MAX))
+        .collect();
+
+    let hostvars: HashMap<&String, &crate::domain::dataset::HostVars> = page
+        .iter()
+        .filter_map(|host| entry.dataset.hostvars.get_key_value(*host))
+        .collect();
+
+    // With a group filter only that group is returned; otherwise all groups
+    // (membership lists are tiny next to hostvars, which carry the facts)
+    let groups: HashMap<&String, &crate::domain::dataset::Group> = match params.group {
+        Some(ref group) => entry
+            .dataset
+            .groups
+            .get_key_value(group)
+            .into_iter()
+            .collect(),
+        None => entry.dataset.groups.iter().collect(),
+    };
+
+    let json = serde_json::json!({
+        "source_id": id,
+        "total_hosts": total_hosts,
+        "offset": offset,
+        "limit": params.limit,
+        "returned": hostvars.len(),
+        "hostvars": hostvars,
+        "groups": groups,
+    });
+    Ok(Json(json))
 }
 
 // IntoParams = utoipa generates documentation for query params

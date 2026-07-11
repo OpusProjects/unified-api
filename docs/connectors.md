@@ -239,6 +239,54 @@ credentials and `SOURCE_CONFIG` don't apply to this connector.
   (templating belongs to the consumer, e.g. Ansible itself)
 - `group_vars`/`host_vars` files that match nothing log a warning
 
+## Remote sources — federation (`connector_type: remote`)
+
+Another unified-api instance is the source. This is how multi-datacenter
+setups compose: one instance per DC does the local work (SSH with LAN
+latency, local credentials, local firewall rules), and a central instance
+aggregates them — consumers only ever talk to the central.
+
+```yaml
+# on the central
+src-madrid:
+  name: "DC Madrid"
+  connector_type: "remote"
+  project_id: "prj-unused"          # required by schema; unused here
+  script_path: "src-ssh"            # the source id ON THE REMOTE instance
+  credential_ids: ["cred-edge-mad"] # token credential = the remote API key
+  sync_interval_seconds: 120
+  ttl_seconds: 600
+  config:
+    url: "https://unified-api-mad.example.com"
+    # http_timeout_seconds: "30"    # default 30
+    # insecure_tls: "true"          # self-signed remotes; opt-in, never default
+```
+
+On the edge, give the central a **restricted API key** (least privilege):
+
+```yaml
+# api_keys.yaml on the edge
+key-central:
+  name: "Central aggregator"
+  env: "UNIFIED_API_KEY_CENTRAL"
+  sources: ["src-ssh"]
+```
+
+**How it works:** `GET /dataset` on the remote returns exactly the Dataset a
+connector must produce — the API itself is the federation protocol. A second
+call to `/status` recovers the data's real age at the origin (dataset-level
+and per-host), and the local cache entry is built with those ages: freshness
+reporting stays truthful across hops instead of resetting to zero on every
+transfer. If the `/status` call fails, the data still lands (with a warning)
+and is treated as fresh — data beats metadata.
+
+Failure semantics follow the house rules: `401`/`403`/`404` produce errors
+that say what to check; a WAN cut fails the sync loudly while the central
+keeps serving the last good dataset from its cache (stale beats nothing).
+Centrals can themselves be federated by another instance — regions → global
+with no extra machinery. Combine with an output endpoint listing all the DC
+sources to serve one merged world view.
+
 ## Enrichers
 
 An enricher post-processes a dataset already in the cache: resolve DNS, probe

@@ -61,7 +61,7 @@ src-section9:
 | `script_path` | Executable run by the script connector, or remote command/facts selector for SSH |
 | `script_args` | CLI arguments passed verbatim (no shell). `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. For SSH sources they are appended to the remote command in `script` gather mode |
 | `output_format` | What the script prints: `native` (the Dataset shape) or `ansible` (standard dynamic inventory JSON with `_meta` — converted on the fly, see [connectors](connectors.md)) |
-| `connector_type` | `script` runs a local process; `ssh` fans out over hosts; `static_inventory` parses an Ansible YAML inventory (+ `group_vars/`/`host_vars/`) from disk natively (see [connectors](connectors.md)) |
+| `connector_type` | `script` runs a local process; `ssh` fans out over hosts; `static_inventory` parses an Ansible YAML inventory (+ `group_vars/`/`host_vars/`) from disk natively; `remote` federates another unified-api instance (see [connectors](connectors.md)) |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
 | `ttl_*` | See [caching](caching.md) for the freshness model |
 | `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |

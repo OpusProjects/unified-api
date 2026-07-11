@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Federation: `connector_type: "remote"` makes another unified-api instance
+  a source — the natural multi-datacenter topology (one instance per DC
+  doing the local SSH/scripts, a central aggregating them for consumers).
+  `script_path` names the source on the remote, `config.url` the remote base
+  URL, and a `token` credential carries the remote API key (pair it with a
+  restricted key on the edge). The origin's freshness travels along: the
+  central reads the remote `/status` and builds its cache entry with the
+  real dataset and per-host ages instead of resetting them on transfer.
+  Clear 401/403/404 errors; a failed age lookup degrades to "fresh" with a
+  warning. Centrals can be federated in turn (regions → global).
+
 ## [0.3.4] - 2026-07-11
 
 ### Added

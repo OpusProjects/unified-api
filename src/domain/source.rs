@@ -13,6 +13,10 @@ pub enum ConnectorType {
     // Ansible static YAML inventory read from disk (script_path = path to
     // the inventory file, typically inside a git project checkout)
     StaticInventory,
+    // Federation: fetch another unified-api instance's cached dataset over
+    // HTTP (script_path = the source id ON THE REMOTE instance; config.url =
+    // the remote base URL). Ages are propagated so freshness stays truthful.
+    Remote,
 }
 
 // What the connector script prints on stdout.

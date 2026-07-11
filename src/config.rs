@@ -170,6 +170,18 @@ impl AppConfig {
             }
         }
 
+        // Remote (federation) sources need the remote base URL
+        for (id, source) in &self.sources {
+            if source.connector_type == crate::domain::source::ConnectorType::Remote
+                && !source.config.contains_key("url")
+            {
+                errors.push(format!(
+                    "Source '{}' is a remote source but has no 'url' in config",
+                    id
+                ));
+            }
+        }
+
         // Enrichers and endpoints with a project must reference an existing one
         for (id, enricher) in &self.enrichers {
             if let Some(ref project_id) = enricher.project_id

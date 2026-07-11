@@ -5,9 +5,14 @@
 CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main` (tagged
 `latest` and with the commit SHA) and on every `vX.Y.Z` git tag (tagged `X.Y.Z`).
 Production deployments should pin a version tag; `latest` tracks `main`. The image is a two-stage build (Rust builder →
-`debian:bookworm-slim`), runs as a non-root `unified` user, ships `python3` for
-script connectors, declares a `HEALTHCHECK` (via python3) hitting `/healthz`, and
-bakes in the repo's `config/` and the sample scripts under `tests/` as defaults.
+`debian:trixie-slim`), runs as a non-root `unified` user, declares a
+`HEALTHCHECK` (via python3) hitting `/healthz`, and bakes in the repo's
+`config/` and the sample scripts under `tests/` as defaults. For connector
+scripts it ships `python3` (plus a `python` symlink) with the commonly
+imported libraries preinstalled from apt — `requests`, `PyYAML`, `jinja2` —
+and `git` for project checkouts. Scripts needing anything beyond that still
+require baking a derived image (a per-project `requirements.txt` venv is on
+the roadmap).
 
 ```bash
 docker run -p 8182:8182 \

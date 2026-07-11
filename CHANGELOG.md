@@ -13,6 +13,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   standard Ansible dynamic inventory interface (`--list`) work unmodified —
   no more wrapper scripts. SSH sources append them to the remote command in
   `script` gather mode.
+- The Docker image now ships the Python libraries connector scripts most
+  commonly import — `requests`, `PyYAML`, `jinja2` (via apt, so they track
+  distro security updates) — plus a `python` → `python3` symlink
+  (`python-is-python3`). Removes the need for init containers installing
+  pip packages at pod start.
 - New `connector_type: "static_inventory"`: parses classic Ansible static
   YAML inventories (`inventory.yaml` + `group_vars/` + `host_vars/`) natively
   from disk — no process, no `ansible-core` in the image. Host variables are

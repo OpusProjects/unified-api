@@ -13,6 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   standard Ansible dynamic inventory interface (`--list`) work unmodified —
   no more wrapper scripts. SSH sources append them to the remote command in
   `script` gather mode.
+- New `connector_type: "static_inventory"`: parses classic Ansible static
+  YAML inventories (`inventory.yaml` + `group_vars/` + `host_vars/`) natively
+  from disk — no process, no `ansible-core` in the image. Host variables are
+  flattened with documented precedence; groups keep hosts/children/vars.
+  Pairs with a git project so the inventory repo's pull cycle refreshes the
+  data. Vaulted files, host ranges and malformed YAML fail the sync with the
+  file/group named.
 - `output_format: "ansible"` on sources: converts standard Ansible dynamic
   inventory JSON (`_meta.hostvars` + top-level groups, including the legacy
   list form) into the internal Dataset, so existing inventory scripts plug in

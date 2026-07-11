@@ -47,10 +47,12 @@ impl ConnectorPort for SshConnector {
     fn execute(
         &self,
         script_path: &str,
+        args: &[String],
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
         let script_path = script_path.to_string();
+        let args = args.to_vec();
         let config = config.clone();
         let credentials = credentials.clone();
 
@@ -114,7 +116,7 @@ impl ConnectorPort for SshConnector {
                     exit_code: None,
                 })?;
 
-            let command = build_command(&gather_mode, &fact_path, &script_path);
+            let command = build_command(&gather_mode, &fact_path, &script_path, &args);
 
             info!(
                 hosts = hosts.len(),
@@ -228,16 +230,24 @@ fn parse_hosts(config: &HashMap<String, String>) -> Result<Vec<String>, Connecto
     Ok(hosts)
 }
 
-fn build_command(gather_mode: &str, fact_path: &str, script_path: &str) -> String {
+fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[String]) -> String {
     match gather_mode {
+        // In facts mode the command is fixed — script_args don't apply
         "facts" => {
             format!(
                 r#"echo '{{'; first=1; for f in {}/*.fact {}/*.json; do [ -f "$f" ] || continue; name=$(basename "$f" | sed 's/\.[^.]*$//'); if [ -x "$f" ]; then content=$("$f" 2>/dev/null); else content=$(cat "$f"); fi; if [ "$first" = "1" ]; then first=0; else echo ','; fi; printf '"%s": %s' "$name" "$content"; done; echo '}}'"#,
                 fact_path, fact_path
             )
         }
-        "script" => script_path.to_string(),
-        _ => script_path.to_string(),
+        // script (and unknown modes): the script_path is a remote command;
+        // script_args are appended to it, space-separated
+        _ => {
+            if args.is_empty() {
+                script_path.to_string()
+            } else {
+                format!("{} {}", script_path, args.join(" "))
+            }
+        }
     }
 }
 
@@ -351,7 +361,7 @@ mod tests {
     #[test]
     fn build_command_script_mode_uses_script_path() {
         assert_eq!(
-            build_command("script", "/facts", "/opt/gather.sh"),
+            build_command("script", "/facts", "/opt/gather.sh", &[]),
             "/opt/gather.sh"
         );
     }
@@ -359,14 +369,30 @@ mod tests {
     #[test]
     fn build_command_unknown_mode_falls_back_to_script() {
         assert_eq!(
-            build_command("bogus", "/facts", "/opt/gather.sh"),
+            build_command("bogus", "/facts", "/opt/gather.sh", &[]),
             "/opt/gather.sh"
         );
     }
 
     #[test]
+    fn build_command_script_mode_appends_args() {
+        let args = vec!["--list".to_string(), "-v".to_string()];
+        assert_eq!(
+            build_command("script", "/facts", "/opt/gather.sh", &args),
+            "/opt/gather.sh --list -v"
+        );
+    }
+
+    #[test]
+    fn build_command_facts_mode_ignores_args() {
+        let args = vec!["--list".to_string()];
+        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused", &args);
+        assert!(!cmd.contains("--list"));
+    }
+
+    #[test]
     fn build_command_facts_mode_references_fact_path() {
-        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused");
+        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused", &[]);
         assert!(cmd.contains("/etc/ansible/facts.d"));
         assert!(cmd.contains("basename"));
     }

@@ -16,6 +16,8 @@ pub trait EnricherPort: Send + Sync {
     fn execute(
         &self,
         script_path: &str,
+        // CLI arguments for the script (empty slice = none)
+        args: &[String],
         config: &HashMap<String, String>,
         current_dataset: &Dataset,
     ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>>;

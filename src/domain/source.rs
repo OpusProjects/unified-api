@@ -17,6 +17,12 @@ pub struct Source {
     pub project_id: String,
     pub script_path: String,
 
+    // CLI arguments passed to the script, e.g. ["--list"] for scripts that
+    // implement the Ansible dynamic inventory interface. For SSH sources in
+    // `script` gather mode they are appended to the remote command.
+    #[serde(default)]
+    pub script_args: Vec<String>,
+
     #[serde(default)]
     pub connector_type: ConnectorType,
 

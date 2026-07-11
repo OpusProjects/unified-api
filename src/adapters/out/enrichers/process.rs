@@ -25,10 +25,12 @@ impl EnricherPort for ProcessEnricher {
     fn execute(
         &self,
         script_path: &str,
+        args: &[String],
         config: &HashMap<String, String>,
         current_dataset: &Dataset,
     ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>> {
         let script_path = script_path.to_string();
+        let args = args.to_vec();
         let config = config.clone();
         let current_dataset = current_dataset.clone();
 
@@ -48,6 +50,7 @@ impl EnricherPort for ProcessEnricher {
             // - SOURCE_CONFIG as env var (same as the connector)
             // - The current dataset via stdin (JSON)
             let mut cmd = Command::new(&script_path);
+            cmd.args(&args);
             cmd.env("SOURCE_CONFIG", &config_json);
             cmd.stdin(std::process::Stdio::piped());
             cmd.stdout(std::process::Stdio::piped());

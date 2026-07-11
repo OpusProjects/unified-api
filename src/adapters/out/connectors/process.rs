@@ -28,12 +28,14 @@ impl ConnectorPort for ProcessConnector {
     fn execute(
         &self,
         script_path: &str,
+        args: &[String],
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
         // We clone the data so the async block owns it
         // (the async block can live longer than the input references)
         let script_path = script_path.to_string();
+        let args = args.to_vec();
         let config = config.clone();
         let credentials = credentials.clone();
 
@@ -46,10 +48,13 @@ impl ConnectorPort for ProcessConnector {
             })?;
 
             // We build the command:
-            // - The script as executable
+            // - The script as executable, with its CLI arguments (e.g. --list)
             // - SOURCE_CONFIG with the configuration as JSON
             // - CREDENTIAL_* with each credential field
+            // Command::args never goes through a shell, so the arguments are
+            // passed verbatim — no quoting or injection concerns.
             let mut cmd = Command::new(&script_path);
+            cmd.args(&args);
             cmd.env("SOURCE_CONFIG", &config_json);
 
             // We inject each credential as CREDENTIAL_<KEY>=<VALUE>

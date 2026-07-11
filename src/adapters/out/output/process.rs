@@ -25,11 +25,13 @@ impl OutputPort for ProcessOutput {
     fn execute(
         &self,
         script_path: &str,
+        args: &[String],
         config: &HashMap<String, String>,
         params: &serde_json::Value,
         datasets: &HashMap<String, Dataset>,
     ) -> Pin<Box<dyn Future<Output = OutputResult> + Send + '_>> {
         let script_path = script_path.to_string();
+        let args = args.to_vec();
         let config = config.clone();
         let params = params.clone();
         let datasets = datasets.clone();
@@ -50,6 +52,7 @@ impl OutputPort for ProcessOutput {
             })?;
 
             let mut cmd = Command::new(&script_path);
+            cmd.args(&args);
             cmd.env("ENDPOINT_CONFIG", &config_json);
             cmd.env("ENDPOINT_PARAMS", &params_json);
             cmd.stdin(std::process::Stdio::piped());

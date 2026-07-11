@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `script_args` on sources, enrichers and output endpoints: CLI arguments
+  passed verbatim to the script (no shell), so scripts implementing the
+  standard Ansible dynamic inventory interface (`--list`) work unmodified —
+  no more wrapper scripts. SSH sources append them to the remote command in
+  `script` gather mode.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added

@@ -119,9 +119,13 @@ pub async fn run_endpoint(
     // A hung transformer must not hang the HTTP request forever
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(endpoint.timeout_seconds),
-        state
-            .output
-            .execute(&endpoint.script_path, &endpoint.config, &params, &datasets),
+        state.output.execute(
+            &endpoint.script_path,
+            &endpoint.script_args,
+            &endpoint.config,
+            &params,
+            &datasets,
+        ),
     )
     .await
     {

@@ -24,6 +24,7 @@ async fn execute_default_inventory() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/inventory.py",
+            &[],
             &config_with_scenario("default"),
             &empty_credentials(),
         )
@@ -60,6 +61,7 @@ async fn execute_empty_inventory() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/inventory.py",
+            &[],
             &config_with_scenario("empty"),
             &empty_credentials(),
         )
@@ -82,6 +84,7 @@ async fn execute_large_inventory() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/inventory.py",
+            &[],
             &config_with_scenario("large"),
             &empty_credentials(),
         )
@@ -109,6 +112,7 @@ async fn execute_error_scenario() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/inventory.py",
+            &[],
             &config_with_scenario("error"),
             &empty_credentials(),
         )
@@ -132,6 +136,7 @@ async fn execute_nonexistent_script() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/this_does_not_exist.py",
+            &[],
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -158,6 +163,7 @@ async fn credentials_are_passed_as_env_vars() {
     let result = connector
         .execute(
             "tests/adapters/out/connectors/inventory.py",
+            &[],
             &config_with_scenario("default"),
             &credentials,
         )
@@ -200,6 +206,7 @@ mod output {
         let result = output
             .execute(
                 "tests/adapters/out/output/ansible_inventory.py",
+                &[],
                 &HashMap::new(),
                 &serde_json::json!({}),
                 &datasets,
@@ -218,6 +225,7 @@ mod output {
         let result = output
             .execute(
                 "tests/adapters/out/connectors/does_not_exist.py",
+                &[],
                 &HashMap::new(),
                 &serde_json::json!({}),
                 &HashMap::new(),
@@ -225,4 +233,47 @@ mod output {
             .await;
         assert!(result.is_err());
     }
+}
+
+// =========================================================================
+// Test: script_args — the Ansible dynamic inventory CLI convention
+// =========================================================================
+
+// args_list.py mimics an argparse-based inventory script: it demands --list.
+// Without args it must fail with exit code 2, like real-world scripts do.
+#[tokio::test]
+async fn execute_without_required_args_fails() {
+    let connector = ProcessConnector::new();
+
+    let result = connector
+        .execute(
+            "tests/adapters/out/connectors/args_list.py",
+            &[],
+            &HashMap::new(),
+            &empty_credentials(),
+        )
+        .await;
+
+    let err = result.expect_err("script requires --list, must fail without it");
+    assert_eq!(err.exit_code, Some(2));
+}
+
+#[tokio::test]
+async fn execute_passes_script_args_verbatim() {
+    let connector = ProcessConnector::new();
+
+    let args = vec!["--list".to_string(), "--refresh".to_string()];
+    let result = connector
+        .execute(
+            "tests/adapters/out/connectors/args_list.py",
+            &args,
+            &HashMap::new(),
+            &empty_credentials(),
+        )
+        .await;
+
+    let dataset = result.expect("connector must succeed with --list");
+    // The fixture echoes back the argv it received as a hostvar
+    let received = &dataset.hostvars["argshost.section9.net"]["received_args"];
+    assert_eq!(received, &serde_json::json!(["--list", "--refresh"]));
 }

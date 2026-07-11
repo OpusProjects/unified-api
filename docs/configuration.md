@@ -39,6 +39,8 @@ src-section9:
   name: "Section 9 Inventory"
   project_id: "prj-connectors-infra"   # must exist in projects.yaml
   script_path: "tests/adapters/out/connectors/inventory.py"
+  script_args: []                      # CLI args for the script, e.g. ["--list"]
+  output_format: "native"              # "native" (default) or "ansible"
   connector_type: "script"             # "script" (default) or "ssh"
   sync_mode: "replace"                 # "replace" (default) or "merge"
   credential_ids: ["cred-section9-api"] # must exist in credentials.yaml
@@ -57,6 +59,8 @@ src-section9:
 | Field | Notes |
 |---|---|
 | `script_path` | Executable run by the script connector, or remote command/facts selector for SSH |
+| `script_args` | CLI arguments passed verbatim (no shell). `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. For SSH sources they are appended to the remote command in `script` gather mode |
+| `output_format` | What the script prints: `native` (the Dataset shape) or `ansible` (standard dynamic inventory JSON with `_meta` — converted on the fly, see [connectors](connectors.md)) |
 | `connector_type` | `script` runs a local process; `ssh` fans out over hosts (see [connectors](connectors.md)) |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
 | `ttl_*` | See [caching](caching.md) for the freshness model |
@@ -101,6 +105,7 @@ enrich-resolve-ssh:
   name: "Resolve SSH reachability"
   source_id: "src-section9"        # whose cached dataset to enrich
   script_path: "enrichers/resolve.py"
+  script_args: []                  # optional CLI args for the script
   sync_interval_seconds: 300       # scheduled run; 0/absent = manual only
   timeout_seconds: 300             # abort a run that takes longer (default 300)
   config: {}
@@ -115,6 +120,7 @@ ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
   script_path: "tests/adapters/out/output/ansible_inventory.py"
+  script_args: []                   # optional CLI args for the script
   timeout_seconds: 300              # abort a transform that takes longer (default 300)
   config:
     filter_datacenter: "section9"   # free-form, script-specific

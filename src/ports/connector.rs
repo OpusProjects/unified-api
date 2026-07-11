@@ -22,6 +22,9 @@ pub trait ConnectorPort: Send + Sync {
     fn execute(
         &self,
         script_path: &str,
+        // CLI arguments for the script — many inventory scripts follow the
+        // Ansible dynamic inventory convention and require e.g. `--list`
+        args: &[String],
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>>;

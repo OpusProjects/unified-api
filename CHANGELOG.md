@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- SSH connector with RSA keys against modern servers: the publickey signature
+  was hardcoded to legacy `ssh-rsa` (SHA-1), which RHEL9-era crypto policies
+  and OpenSSH ≥ 8.8 defaults reject — the same key worked with the OpenSSH
+  client but failed through the API. The signature hash is now negotiated per
+  host via the `server-sig-algs` extension; servers without the extension are
+  tried with SHA-256 and fall back to SHA-1 if rejected. ed25519/ecdsa keys
+  were never affected.
+
+### Added
+
+- `ssh_legacy_algorithms: "true"` (SSH source config): additionally offers
+  SHA-1 KEX and MAC algorithms — appended after the modern ones — for
+  OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` entirely.
+
 ## [0.3.2] - 2026-07-11
 
 ### Added

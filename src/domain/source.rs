@@ -11,6 +11,20 @@ pub enum ConnectorType {
     Ssh,
 }
 
+// What the connector script prints on stdout.
+// `Copy` because it's a tiny enum passed around by value everywhere.
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    // The Dataset shape: {"hostvars": {...}, "groups": {...}}
+    #[default]
+    Native,
+    // Standard Ansible dynamic inventory JSON: hostvars under _meta.hostvars,
+    // groups as top-level keys. Converted to a Dataset on the fly, so existing
+    // inventory scripts (--list) work unmodified. See Dataset::from_ansible_inventory.
+    Ansible,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Source {
     pub name: String,
@@ -25,6 +39,10 @@ pub struct Source {
 
     #[serde(default)]
     pub connector_type: ConnectorType,
+
+    // Format of the script's stdout (script connector only)
+    #[serde(default)]
+    pub output_format: OutputFormat,
 
     // Maximum seconds a sync may run before it is aborted — protects the
     // scheduler and API from a hung connector script (default 300)

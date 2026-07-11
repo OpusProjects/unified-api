@@ -132,6 +132,7 @@ async fn run_sync(
         connector.execute(
             &source.script_path,
             &source.script_args,
+            source.output_format,
             &config,
             &credentials,
         ),

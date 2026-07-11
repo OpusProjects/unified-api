@@ -75,6 +75,40 @@ print(json.dumps({"hostvars": inventory.hosts, "groups": inventory.groups}))
 Supporting `scope`/`target` is optional but recommended: it lets consumers refresh a
 single host or group without paying for a full inventory pull.
 
+### Ansible inventory scripts (`output_format: ansible`)
+
+Scripts written for Ansible print a different JSON shape than the Dataset:
+hostvars under `_meta.hostvars` and groups as top-level keys. With
+`output_format: "ansible"` on the source, that output is converted to a
+Dataset on the fly — any existing dynamic inventory script works unmodified
+(pair it with `script_args: ["--list"]`):
+
+```yaml
+src-d42:
+  script_path: "d42_inventory.py"
+  script_args: ["--list"]
+  output_format: "ansible"
+```
+
+Conversion rules:
+
+- `_meta.hostvars` → `hostvars`. A missing `_meta` is accepted with a warning
+  (hosts will have no variables).
+- Every other top-level key becomes a group. Both the object form
+  (`{hosts, children, vars}`) and the legacy list form (`"web": ["h1", "h2"]`)
+  are accepted.
+- The implicit meta-groups `all` and `ungrouped` are skipped; if they carried
+  `vars` or `children`, a warning says so (that information has no Dataset
+  equivalent).
+- Malformed input is an **error that fails the sync**, naming the offending
+  group — never a silent skip.
+
+**Misconfiguration safety net:** if a source left on the default
+`output_format: native` parses to 0 hosts and 0 groups but the output contains
+`_meta`, the sync logs a WARN suggesting `output_format: "ansible"`. (Both
+Dataset fields are optional in JSON, so Ansible output "parses fine" as an
+empty inventory — that silent zero is the failure mode this flag exists for.)
+
 ## Source connectors (`connector_type: ssh`)
 
 The native SSH connector needs no script on the API host — it connects to the fleet

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use unified_api::adapters::out::connectors::process::ProcessConnector;
+use unified_api::domain::source::OutputFormat;
 use unified_api::ports::connector::ConnectorPort;
 
 // Helper: builds a config with the desired scenario
@@ -25,6 +26,7 @@ async fn execute_default_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
+            OutputFormat::Native,
             &config_with_scenario("default"),
             &empty_credentials(),
         )
@@ -62,6 +64,7 @@ async fn execute_empty_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
+            OutputFormat::Native,
             &config_with_scenario("empty"),
             &empty_credentials(),
         )
@@ -85,6 +88,7 @@ async fn execute_large_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
+            OutputFormat::Native,
             &config_with_scenario("large"),
             &empty_credentials(),
         )
@@ -113,6 +117,7 @@ async fn execute_error_scenario() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
+            OutputFormat::Native,
             &config_with_scenario("error"),
             &empty_credentials(),
         )
@@ -137,6 +142,7 @@ async fn execute_nonexistent_script() {
         .execute(
             "tests/adapters/out/connectors/this_does_not_exist.py",
             &[],
+            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -164,6 +170,7 @@ async fn credentials_are_passed_as_env_vars() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
+            OutputFormat::Native,
             &config_with_scenario("default"),
             &credentials,
         )
@@ -249,6 +256,7 @@ async fn execute_without_required_args_fails() {
         .execute(
             "tests/adapters/out/connectors/args_list.py",
             &[],
+            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -267,6 +275,7 @@ async fn execute_passes_script_args_verbatim() {
         .execute(
             "tests/adapters/out/connectors/args_list.py",
             &args,
+            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -276,4 +285,62 @@ async fn execute_passes_script_args_verbatim() {
     // The fixture echoes back the argv it received as a hostvar
     let received = &dataset.hostvars["argshost.section9.net"]["received_args"];
     assert_eq!(received, &serde_json::json!(["--list", "--refresh"]));
+}
+
+// =========================================================================
+// Test: output_format ansible — standard dynamic inventory JSON conversion
+// =========================================================================
+
+#[tokio::test]
+async fn ansible_format_output_is_converted_to_dataset() {
+    let connector = ProcessConnector::new();
+
+    let result = connector
+        .execute(
+            "tests/adapters/out/connectors/ansible_inventory_source.py",
+            &["--list".to_string()],
+            OutputFormat::Ansible,
+            &HashMap::new(),
+            &empty_credentials(),
+        )
+        .await;
+
+    let dataset = result.expect("ansible-format connector must succeed");
+
+    // hostvars extracted from _meta.hostvars
+    assert_eq!(dataset.hostvars.len(), 2);
+    assert_eq!(
+        dataset.hostvars["motoko.section9.net"]["ansible_host"],
+        "10.9.1.1"
+    );
+    // groups from top-level keys — object form and legacy list form,
+    // with the implicit all/ungrouped meta-groups skipped
+    assert_eq!(dataset.groups.len(), 2);
+    assert_eq!(dataset.groups["section9"].hosts.len(), 2);
+    assert_eq!(dataset.groups["legacy"].hosts, vec!["motoko.section9.net"]);
+    assert!(!dataset.groups.contains_key("all"));
+    assert!(!dataset.groups.contains_key("ungrouped"));
+}
+
+// The bug this feature fixes: ansible JSON parsed as native format "succeeds"
+// with an empty dataset because both Dataset fields default. The connector now
+// logs a WARN suggesting output_format: ansible — the data outcome stays the
+// same (this test documents it).
+#[tokio::test]
+async fn ansible_output_parsed_as_native_yields_empty_dataset() {
+    let connector = ProcessConnector::new();
+
+    let result = connector
+        .execute(
+            "tests/adapters/out/connectors/ansible_inventory_source.py",
+            &["--list".to_string()],
+            OutputFormat::Native,
+            &HashMap::new(),
+            &empty_credentials(),
+        )
+        .await;
+
+    let dataset = result.expect("parse succeeds — that is precisely the trap");
+    assert!(dataset.hostvars.is_empty());
+    assert!(dataset.groups.is_empty());
 }

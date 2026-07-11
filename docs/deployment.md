@@ -148,7 +148,8 @@ src-netbox:
     api_url: "https://netbox.example.com"
 
 # 2. native SSH connector gathering Ansible local facts across a fleet —
-#    no script anywhere, the binary connects in parallel
+#    no script anywhere, the binary connects in parallel. The host list is
+#    DYNAMIC: whatever src-inventory currently knows (chained sources)
 src-fleet-facts:
   name: "Fleet facts over SSH"
   connector_type: "ssh"
@@ -157,15 +158,19 @@ src-fleet-facts:
   credential_ids: ["cred-fleet-ssh"]
   sync_interval_seconds: 300
   ttl_seconds: 600
+  hosts_from_source:
+    source: "src-inventory"
+    match_pattern:
+      groups: ["linux"]                    # absent = every host in the source
+    connect_via: "ansible_host_then_hostname"
   config:
-    hosts: "web01.example.com,web02.example.com,db01.example.com"
     concurrency: "50"
     ssh_connect_timeout_seconds: "30"
     gather_mode: "facts"
     fact_path: "/etc/ansible/facts.d"
 
-# 2b. same connector in script mode: run a remote command per host and store
-#     its JSON output as that host's vars (script_args are appended)
+# 2b. same connector in script mode with a STATIC host list: run a remote
+#     command per host and store its JSON output as that host's vars
 src-fleet-disks:
   name: "Fleet disk report"
   connector_type: "ssh"

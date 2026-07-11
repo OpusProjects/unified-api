@@ -106,6 +106,55 @@ async fn run_sync(
 
     // The scope travels to the connector script via its config
     let mut config = source.config.clone();
+
+    // Dynamic host list: resolve against the other source's CACHED dataset
+    // and hand the result to the SSH connector as a hosts_spec JSON (its
+    // internal contract). Resolution happens here — the connector must not
+    // depend on the cache.
+    if let Some(hfs) = &source.hosts_from_source {
+        let entry = match cache.get(&hfs.source) {
+            Some(entry) => entry,
+            None => {
+                return SyncOutcome::failed(
+                    scope_label,
+                    0,
+                    format!(
+                        "hosts_from_source '{}' is not in the cache yet — sync it first",
+                        hfs.source
+                    ),
+                );
+            }
+        };
+
+        let (specs, warnings) = hfs.resolve(&entry.dataset);
+        for warning in warnings {
+            tracing::warn!(source = %source_id, "{}", warning);
+        }
+        if specs.is_empty() {
+            return SyncOutcome::failed(
+                scope_label,
+                0,
+                format!(
+                    "hosts_from_source '{}' resolved to zero hosts (pattern too narrow, or empty source?)",
+                    hfs.source
+                ),
+            );
+        }
+
+        let spec_json = match serde_json::to_string(&specs) {
+            Ok(json) => json,
+            Err(e) => {
+                return SyncOutcome::failed(
+                    scope_label,
+                    0,
+                    format!("failed to serialize hosts_spec: {}", e),
+                );
+            }
+        };
+        tracing::debug!(source = %source_id, hosts = specs.len(), from = %hfs.source, "Resolved dynamic host list");
+        config.insert("hosts_spec".to_string(), spec_json);
+    }
+
     match &scope {
         SyncScope::Host(host) => {
             config.insert("scope".to_string(), "host".to_string());

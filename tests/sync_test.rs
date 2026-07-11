@@ -54,6 +54,7 @@ fn test_source(scenario: &str) -> Source {
         script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
         script_args: vec![],
         output_format: Default::default(),
+        hosts_from_source: None,
         connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
@@ -559,6 +560,7 @@ async fn sync_infra_source() {
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
             output_format: Default::default(),
+            hosts_from_source: None,
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -648,6 +650,7 @@ async fn endpoint_combines_sources() {
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
             output_format: Default::default(),
+            hosts_from_source: None,
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -959,4 +962,135 @@ async fn sync_times_out_on_slow_connector() {
     );
     // Nothing gets cached on a timed-out sync
     assert_eq!(result["total_hosts"], 0);
+}
+
+// =========================================================================
+// Tests: hosts_from_source — dynamic SSH host lists resolved from the cache
+// =========================================================================
+
+mod hosts_from_source {
+    use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use unified_api::adapters::out::cache::memory::MemoryCache;
+    use unified_api::adapters::out::secrets::mock::MockSecrets;
+    use unified_api::application::sync::{SyncScope, sync_source};
+    use unified_api::domain::dataset::Dataset;
+    use unified_api::domain::source::OutputFormat;
+    use unified_api::ports::cache::CachePort;
+    use unified_api::ports::connector::{ConnectorPort, ConnectorResult};
+
+    // Connector double that records the config it received and returns an
+    // empty dataset — we test the APPLICATION resolution, not SSH itself
+    struct CaptureConnector {
+        seen_config: Mutex<Option<HashMap<String, String>>>,
+    }
+
+    impl ConnectorPort for CaptureConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _output_format: OutputFormat,
+            config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            *self.seen_config.lock().unwrap() = Some(config.clone());
+            Box::pin(async {
+                Ok(Dataset {
+                    hostvars: HashMap::new(),
+                    groups: HashMap::new(),
+                    remove_hosts: vec![],
+                })
+            })
+        }
+    }
+
+    fn ssh_source_from(origin: &str) -> Source {
+        let mut source = test_source("default");
+        source.connector_type = ConnectorType::Ssh;
+        source.script_path = "gather_facts".to_string();
+        source.config = HashMap::new();
+        source.hosts_from_source = Some(
+            serde_yaml_ng::from_str(&format!(
+                "source: \"{}\"\nconnect_via: ansible_host_then_hostname\n",
+                origin
+            ))
+            .unwrap(),
+        );
+        source
+    }
+
+    fn origin_dataset() -> Dataset {
+        serde_json::from_value(serde_json::json!({
+            "hostvars": {
+                "web01.example.com": {"ansible_host": "10.0.0.1"},
+                "web02.example.com": {}
+            },
+            "groups": {"web": {"hosts": ["web01.example.com", "web02.example.com"]}}
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn injects_hosts_spec_resolved_from_the_cached_origin() {
+        let cache = MemoryCache::new();
+        cache.set(
+            "src-origin",
+            unified_api::domain::cache_entry::CacheEntry::new(origin_dataset(), 3600),
+        );
+        let connector = CaptureConnector {
+            seen_config: Mutex::new(None),
+        };
+
+        let outcome = sync_source(
+            &cache,
+            &connector,
+            &MockSecrets::new(),
+            "src-ssh",
+            &ssh_source_from("src-origin"),
+            SyncScope::Full,
+        )
+        .await;
+
+        assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+        let config = connector.seen_config.lock().unwrap().clone().unwrap();
+        let spec: serde_json::Value =
+            serde_json::from_str(config.get("hosts_spec").expect("hosts_spec injected")).unwrap();
+        // web01 has ansible_host → [ip, hostname]; web02 → [hostname]
+        assert_eq!(spec[0]["name"], "web01.example.com");
+        assert_eq!(
+            spec[0]["addresses"],
+            serde_json::json!(["10.0.0.1", "web01.example.com"])
+        );
+        assert_eq!(
+            spec[1]["addresses"],
+            serde_json::json!(["web02.example.com"])
+        );
+    }
+
+    #[tokio::test]
+    async fn origin_not_in_cache_fails_with_a_clear_error() {
+        let cache = MemoryCache::new();
+        let connector = CaptureConnector {
+            seen_config: Mutex::new(None),
+        };
+
+        let outcome = sync_source(
+            &cache,
+            &connector,
+            &MockSecrets::new(),
+            "src-ssh",
+            &ssh_source_from("src-missing"),
+            SyncScope::Full,
+        )
+        .await;
+
+        let error = outcome.error.expect("must fail");
+        assert!(error.contains("src-missing"), "error was: {}", error);
+        assert!(error.contains("not in the cache"));
+        // the connector never ran
+        assert!(connector.seen_config.lock().unwrap().is_none());
+    }
 }

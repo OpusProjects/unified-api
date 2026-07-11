@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Dynamic host lists for SSH sources: `hosts_from_source` takes the hosts
+  from another source's cached dataset (`source` + `match_pattern` as the
+  union of groups and hosts + `connect_via`), chaining "the inventory source
+  says what exists, SSH says how it is doing" with no glue scripts.
+  `connect_via` picks the dial address per host — `hostname`, `ansible_host`,
+  or fallback combos where a connection failure tries the next candidate
+  (auth failures don't); results stay keyed by the inventory hostname.
+- SSH observability: per-attempt WARNs with host/address/attempt, per-host
+  duration at DEBUG, and an end-of-sync summary listing every unreachable
+  host — the slow ones never delay the rest (continuous semaphore pipeline,
+  not batches).
+
 ## [0.3.1] - 2026-07-11
 
 ### Added

@@ -139,6 +139,37 @@ impl AppConfig {
             }
         }
 
+        // hosts_from_source: only meaningful on SSH sources, must reference
+        // an existing source (not itself), and conflicts with a static
+        // config.hosts (which list would win?)
+        for (id, source) in &self.sources {
+            if let Some(ref hfs) = source.hosts_from_source {
+                if source.connector_type != crate::domain::source::ConnectorType::Ssh {
+                    errors.push(format!(
+                        "Source '{}' sets hosts_from_source but is not an ssh source",
+                        id
+                    ));
+                }
+                if hfs.source == *id {
+                    errors.push(format!(
+                        "Source '{}' cannot use itself as hosts_from_source",
+                        id
+                    ));
+                } else if !self.sources.contains_key(&hfs.source) {
+                    errors.push(format!(
+                        "Source '{}' references unknown source '{}' in hosts_from_source",
+                        id, hfs.source
+                    ));
+                }
+                if source.config.contains_key("hosts") {
+                    errors.push(format!(
+                        "Source '{}' sets both config.hosts and hosts_from_source — pick one",
+                        id
+                    ));
+                }
+            }
+        }
+
         // Enrichers and endpoints with a project must reference an existing one
         for (id, enricher) in &self.enrichers {
             if let Some(ref project_id) = enricher.project_id
@@ -548,6 +579,73 @@ mod tests {
         let result = load_config(dir.path().to_str().unwrap());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("prj-ghost"));
+    }
+
+    #[test]
+    fn validate_hosts_from_source_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        // three violations at once: not an ssh source, self-reference is
+        // checked on the ssh one, and both hosts + hosts_from_source
+        fs::write(
+            dir.path().join("sources.yaml"),
+            concat!(
+                "src-script:\n  name: \"S\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+                "  hosts_from_source:\n    source: \"src-ssh\"\n",
+                "src-ssh:\n  name: \"T\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
+                "  connector_type: \"ssh\"\n",
+                "  hosts_from_source:\n    source: \"src-ssh\"\n",
+                "  config:\n    hosts: \"a.example.com\"\n",
+            ),
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("expected validation errors")
+            .to_string();
+        assert!(err.contains("not an ssh source"), "missing rule: {}", err);
+        assert!(err.contains("cannot use itself"), "missing rule: {}", err);
+        assert!(err.contains("pick one"), "missing rule: {}", err);
+    }
+
+    #[test]
+    fn validate_hosts_from_source_unknown_source() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            concat!(
+                "src-ssh:\n  name: \"T\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
+                "  connector_type: \"ssh\"\n",
+                "  hosts_from_source:\n    source: \"src-ghost\"\n",
+            ),
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("expected validation error")
+            .to_string();
+        assert!(err.contains("src-ghost"), "error was: {}", err);
     }
 
     #[test]

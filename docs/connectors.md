@@ -129,6 +129,54 @@ In `script` mode, `script_args` are appended to the remote command
 (`script_path arg1 arg2 ...`); in `facts` mode they are ignored (the remote
 command is fixed).
 
+### Dynamic host lists (`hosts_from_source`)
+
+Instead of a static `config.hosts`, an SSH source can take its hosts from
+**another source's cached dataset** — the natural chain of "the inventory
+source says WHAT exists, SSH says HOW it is doing":
+
+```yaml
+src-fleet-facts:
+  connector_type: "ssh"
+  credential_ids: ["cred-fleet-ssh"]
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+  hosts_from_source:
+    source: "src-netbox"              # any source: script, static, even ssh
+    match_pattern:                    # absent = every host in the dataset
+      groups: ["linux", "proxmox_vms"]
+      hosts: ["extra01.example.com"]
+    connect_via: "ansible_host_then_hostname"
+  config:
+    gather_mode: "facts"
+```
+
+Semantics:
+
+- `match_pattern` selects the **union** of the listed groups' members and the
+  individually listed hosts; names match exactly. A group or host that doesn't
+  exist in the origin dataset logs a warning naming it.
+- The list is resolved against the **cache** at each sync. If the origin
+  source hasn't synced yet, the SSH sync fails with a clear error and recovers
+  on the next tick once the origin is cached (with disk persistence this only
+  happens on the very first boot). `hosts_from_source` and `config.hosts` are
+  mutually exclusive (startup validation).
+- `connect_via` picks the address to dial per host: `hostname` (default, the
+  inventory name via DNS), `ansible_host` (the variable; hosts without it are
+  skipped with a warning), or the fallback combos `ansible_host_then_hostname`
+  / `hostname_then_ansible_host`. With a fallback, candidates are tried in
+  order and a **connection** failure (timeout, refused, DNS) moves to the next
+  one — an authentication failure does not (it's the same server answering).
+  Results are always keyed under the inventory hostname, whichever address
+  connected.
+
+**Finding the troublemakers:** every failed attempt logs a WARN with the host,
+the address tried and the attempt number; successful hosts log their duration
+at DEBUG; and the sync ends with a single summary line listing every
+unreachable host (`failed_hosts=[...]`). A slow or dead host never delays the
+others — it just occupies one of the `concurrency` slots until its timeout
+(up to 2× `ssh_connect_timeout_seconds` with a fallback strategy).
+
 > `ssh_connect_timeout_seconds` bounds a **single host** connection; the
 > source-level `timeout_seconds` (default 300) separately bounds the **whole
 > sync** across all hosts. They are different knobs.

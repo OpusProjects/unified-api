@@ -12,6 +12,7 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
 use crate::domain::dataset::{Dataset, Group, HostVars};
+use crate::domain::source::HostSpec;
 use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
 
 pub struct SshConnector;
@@ -132,7 +133,7 @@ impl ConnectorPort for SshConnector {
 
             let tasks: Vec<_> = hosts
                 .into_iter()
-                .map(|host| {
+                .map(|spec| {
                     let sem = Arc::clone(&semaphore);
                     let key = Arc::clone(&private_key);
                     let user = username.clone();
@@ -143,29 +144,45 @@ impl ConnectorPort for SshConnector {
                         // never happens here (it lives for the whole fan-out); skip
                         // the host rather than panic the task if that ever changes.
                         let Ok(_permit) = sem.acquire().await else {
-                            warn!(host = %host, "semaphore closed, skipping host");
-                            return None;
+                            warn!(host = %spec.name, "semaphore closed, skipping host");
+                            return (spec.name, None);
                         };
-                        let result = timeout(
-                            Duration::from_secs(timeout_secs),
-                            execute_on_host(&host, port, &user, &key, &cmd),
-                        )
-                        .await;
 
-                        match result {
-                            Ok(Ok(output)) => {
-                                debug!(host = %host, "Gathered successfully");
-                                Some((host, output))
-                            }
-                            Ok(Err(e)) => {
-                                warn!(host = %host, error = %e, "SSH execution failed");
-                                None
-                            }
-                            Err(_) => {
-                                warn!(host = %host, timeout_secs, "SSH connection timed out");
-                                None
+                        // Try each candidate address in order. A CONNECTION
+                        // failure (timeout, refused, DNS) moves to the next
+                        // candidate; anything after the TCP connect (auth,
+                        // exec) does not — it's the same server answering.
+                        let started = std::time::Instant::now();
+                        for (attempt, address) in spec.addresses.iter().enumerate() {
+                            let result = timeout(
+                                Duration::from_secs(timeout_secs),
+                                execute_on_host(address, port, &user, &key, &cmd),
+                            )
+                            .await;
+
+                            match result {
+                                Ok(Ok(output)) => {
+                                    debug!(
+                                        host = %spec.name,
+                                        address = %address,
+                                        duration_ms = started.elapsed().as_millis() as u64,
+                                        "Gathered successfully"
+                                    );
+                                    return (spec.name, Some(output));
+                                }
+                                Ok(Err(HostError::Connect(e))) => {
+                                    warn!(host = %spec.name, address = %address, attempt = attempt + 1, error = %e, "SSH connection failed");
+                                }
+                                Err(_elapsed) => {
+                                    warn!(host = %spec.name, address = %address, attempt = attempt + 1, timeout_secs, "SSH connection timed out");
+                                }
+                                Ok(Err(HostError::Other(e))) => {
+                                    warn!(host = %spec.name, address = %address, error = %e, "SSH execution failed");
+                                    return (spec.name, None);
+                                }
                             }
                         }
+                        (spec.name, None)
                     })
                 })
                 .collect();
@@ -174,15 +191,16 @@ impl ConnectorPort for SshConnector {
 
             let mut hostvars: HashMap<String, HostVars> = HashMap::new();
             let mut reachable: Vec<String> = Vec::new();
+            let mut failed: Vec<String> = Vec::new();
 
             for result in results {
                 match result {
-                    Ok(Some((host, output))) => {
+                    Ok((host, Some(output))) => {
                         let vars = parse_host_output(&output, &host);
                         reachable.push(host.clone());
                         hostvars.insert(host, vars);
                     }
-                    Ok(None) => {}
+                    Ok((host, None)) => failed.push(host),
                     Err(e) => {
                         error!(error = %e, "Task join error");
                     }
@@ -199,7 +217,19 @@ impl ConnectorPort for SshConnector {
                 },
             );
 
-            info!(gathered = reachable.len(), "SSH connector finished");
+            // The summary that names the troublemakers: one line to find the
+            // hosts that dragged (or dropped out of) the collection.
+            if failed.is_empty() {
+                info!(gathered = reachable.len(), "SSH connector finished");
+            } else {
+                failed.sort();
+                warn!(
+                    gathered = reachable.len(),
+                    failed = failed.len(),
+                    failed_hosts = ?failed,
+                    "SSH connector finished with unreachable hosts"
+                );
+            }
 
             Ok(Dataset {
                 hostvars,
@@ -210,17 +240,41 @@ impl ConnectorPort for SshConnector {
     }
 }
 
-fn parse_hosts(config: &HashMap<String, String>) -> Result<Vec<String>, ConnectorError> {
+fn parse_hosts(config: &HashMap<String, String>) -> Result<Vec<HostSpec>, ConnectorError> {
+    // hosts_spec: JSON list of {name, addresses} — injected by the
+    // application layer when the source uses hosts_from_source
+    if let Some(spec_json) = config.get("hosts_spec") {
+        let specs: Vec<HostSpec> = serde_json::from_str(spec_json).map_err(|e| ConnectorError {
+            message: format!("invalid hosts_spec JSON: {}", e),
+            stderr: String::new(),
+            exit_code: None,
+        })?;
+        if specs.is_empty() {
+            return Err(ConnectorError {
+                message: "hosts_spec resolved to zero hosts".into(),
+                stderr: String::new(),
+                exit_code: None,
+            });
+        }
+        return Ok(specs);
+    }
+
+    // Static form: comma-separated hostnames; each host's only candidate
+    // address is its own name
     let hosts_str = config.get("hosts").ok_or_else(|| ConnectorError {
         message: "SSH connector requires 'hosts' in config".into(),
         stderr: String::new(),
         exit_code: None,
     })?;
 
-    let hosts: Vec<String> = hosts_str
+    let hosts: Vec<HostSpec> = hosts_str
         .split(',')
         .map(|h| h.trim().to_string())
         .filter(|h| !h.is_empty())
+        .map(|h| HostSpec {
+            addresses: vec![h.clone()],
+            name: h,
+        })
         .collect();
 
     if hosts.is_empty() {
@@ -255,39 +309,57 @@ fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[
     }
 }
 
+// Failure classification drives the address fallback: only Connect errors
+// (nothing answered) justify trying the next candidate address.
+enum HostError {
+    Connect(String),
+    Other(String),
+}
+
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostError::Connect(e) | HostError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
 async fn execute_on_host(
     host: &str,
     port: u16,
     username: &str,
     key: &Arc<PrivateKey>,
     command: &str,
-) -> Result<String, String> {
+) -> Result<String, HostError> {
     let ssh_config = client::Config {
         ..Default::default()
     };
 
     let mut session = client::connect(Arc::new(ssh_config), (host, port), SshClientHandler)
         .await
-        .map_err(|e| format!("Connection to {} failed: {}", host, e))?;
+        .map_err(|e| HostError::Connect(format!("Connection to {} failed: {}", host, e)))?;
 
     let auth_ok = session
         .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::clone(key), None))
         .await
-        .map_err(|e| format!("Auth to {} failed: {}", host, e))?;
+        .map_err(|e| HostError::Other(format!("Auth to {} failed: {}", host, e)))?;
 
     if !auth_ok.success() {
-        return Err(format!("Public key authentication rejected by {}", host));
+        return Err(HostError::Other(format!(
+            "Public key authentication rejected by {}",
+            host
+        )));
     }
 
     let channel = session
         .channel_open_session()
         .await
-        .map_err(|e| format!("Channel open on {} failed: {}", host, e))?;
+        .map_err(|e| HostError::Other(format!("Channel open on {} failed: {}", host, e)))?;
 
     channel
         .exec(true, command)
         .await
-        .map_err(|e| format!("Exec on {} failed: {}", host, e))?;
+        .map_err(|e| HostError::Other(format!("Exec on {} failed: {}", host, e)))?;
 
     let mut output = Vec::new();
     let mut channel = channel;
@@ -299,10 +371,10 @@ async fn execute_on_host(
             }
             Some(russh::ChannelMsg::Eof) => break,
             Some(russh::ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
-                return Err(format!(
+                return Err(HostError::Other(format!(
                     "Command on {} exited with status {}",
                     host, exit_status
-                ));
+                )));
             }
             None => break,
             _ => {}
@@ -347,7 +419,39 @@ mod tests {
     fn parse_hosts_splits_trims_and_drops_empties() {
         let cfg = config(&[("hosts", " a.example , b.example ,, c.example ")]);
         let hosts = parse_hosts(&cfg).unwrap();
-        assert_eq!(hosts, vec!["a.example", "b.example", "c.example"]);
+        let names: Vec<&str> = hosts.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, vec!["a.example", "b.example", "c.example"]);
+        // static form: each host's only candidate is its own name
+        assert_eq!(hosts[0].addresses, vec!["a.example".to_string()]);
+    }
+
+    #[test]
+    fn parse_hosts_spec_json_takes_precedence() {
+        let cfg = config(&[
+            ("hosts", "ignored.example"),
+            (
+                "hosts_spec",
+                r#"[{"name": "web01.example.com", "addresses": ["10.0.0.1", "web01.example.com"]}]"#,
+            ),
+        ]);
+        let hosts = parse_hosts(&cfg).unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "web01.example.com");
+        assert_eq!(
+            hosts[0].addresses,
+            vec!["10.0.0.1".to_string(), "web01.example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_hosts_spec_invalid_json_is_an_error() {
+        let cfg = config(&[("hosts_spec", "not json")]);
+        assert!(
+            parse_hosts(&cfg)
+                .unwrap_err()
+                .message
+                .contains("hosts_spec")
+        );
     }
 
     #[test]

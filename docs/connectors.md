@@ -124,6 +124,17 @@ in parallel and builds the Dataset from what it finds.
 | `ssh_connect_timeout_seconds` | `30` | Per-host connection/exec timeout |
 | `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs `script_path` remotely |
 | `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
+| `ssh_legacy_algorithms` | `false` | `"true"` additionally offers SHA-1 KEX/MACs (appended last, modern servers still pick modern ones) for OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` |
+
+**RSA keys across mixed fleets:** the signature hash is negotiated per host
+automatically. Servers advertising `server-sig-algs` (OpenSSH ≥ 7.2) get
+their preferred `rsa-sha2-*` (or `ssh-rsa` if that's all they take); servers
+without the extension are tried with SHA-256 first and retried with the
+legacy SHA-1 signature if rejected. This covers everything from EL6 to
+current RHEL9-era hosts, whose crypto policies reject SHA-1 signatures —
+without negotiation, the same key "mysteriously" works with the OpenSSH
+client but not through the API. ed25519/ecdsa keys are unaffected (no hash
+to negotiate).
 
 In `script` mode, `script_args` are appended to the remote command
 (`script_path arg1 arg2 ...`); in `facts` mode they are ignored (the remote

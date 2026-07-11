@@ -83,6 +83,9 @@ impl ConnectorPort for SshConnector {
                 .get("fact_path")
                 .cloned()
                 .unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
+            let legacy_algorithms = config
+                .get("ssh_legacy_algorithms")
+                .is_some_and(|v| v == "true");
 
             let username = credentials
                 .get("USERNAME")
@@ -156,7 +159,14 @@ impl ConnectorPort for SshConnector {
                         for (attempt, address) in spec.addresses.iter().enumerate() {
                             let result = timeout(
                                 Duration::from_secs(timeout_secs),
-                                execute_on_host(address, port, &user, &key, &cmd),
+                                execute_on_host(
+                                    address,
+                                    port,
+                                    &user,
+                                    &key,
+                                    &cmd,
+                                    legacy_algorithms,
+                                ),
                             )
                             .await;
 
@@ -324,27 +334,92 @@ impl std::fmt::Display for HostError {
     }
 }
 
+// Build the client algorithm preferences. The default excludes every SHA-1
+// construct; `ssh_legacy_algorithms: "true"` APPENDS the legacy KEX and MAC
+// algorithms (always last, so a modern server still negotiates the modern
+// ones) for hosts of the OpenSSH 5.x era (EL6) that have no hmac-sha2.
+fn client_config(legacy_algorithms: bool) -> client::Config {
+    let mut config = client::Config::default();
+    if legacy_algorithms {
+        let mut kex = config.preferred.kex.to_vec();
+        kex.extend_from_slice(&[
+            russh::kex::DH_GEX_SHA1,
+            russh::kex::DH_G14_SHA1,
+            russh::kex::DH_G1_SHA1,
+        ]);
+        config.preferred.kex = kex.into();
+
+        let mut mac = config.preferred.mac.to_vec();
+        mac.extend_from_slice(&[russh::mac::HMAC_SHA1_ETM, russh::mac::HMAC_SHA1]);
+        config.preferred.mac = mac.into();
+    }
+    config
+}
+
+// Which RSA signature hashes to attempt, in order. `negotiated` is what
+// best_supported_rsa_hash() returned:
+// - Some(alg): the server advertised server-sig-algs — trust it (covers
+//   both modern servers wanting rsa-sha2 and old ones advertising ssh-rsa)
+// - None: no extension (pre-OpenSSH-7.2, e.g. EL6). Try SHA-256 first —
+//   most servers without the extension still accept it — and fall back to
+//   the legacy SHA-1 signature if the server rejects the auth.
+// Hardcoding None (SHA-1) here is what silently locked us out of every
+// RHEL9-era host while the same key worked with the OpenSSH client.
+fn rsa_hash_candidates(
+    negotiated: Option<Option<russh::keys::HashAlg>>,
+) -> Vec<Option<russh::keys::HashAlg>> {
+    match negotiated {
+        Some(alg) => vec![alg],
+        None => vec![Some(russh::keys::HashAlg::Sha256), None],
+    }
+}
+
 async fn execute_on_host(
     host: &str,
     port: u16,
     username: &str,
     key: &Arc<PrivateKey>,
     command: &str,
+    legacy_algorithms: bool,
 ) -> Result<String, HostError> {
-    let ssh_config = client::Config {
-        ..Default::default()
-    };
+    let ssh_config = client_config(legacy_algorithms);
 
     let mut session = client::connect(Arc::new(ssh_config), (host, port), SshClientHandler)
         .await
         .map_err(|e| HostError::Connect(format!("Connection to {} failed: {}", host, e)))?;
 
-    let auth_ok = session
-        .authenticate_publickey(username, PrivateKeyWithHashAlg::new(Arc::clone(key), None))
-        .await
-        .map_err(|e| HostError::Other(format!("Auth to {} failed: {}", host, e)))?;
+    // Non-RSA keys (ed25519, ecdsa) don't have a signature hash to negotiate;
+    // skipping the lookup also skips its up-to-1s wait for the server's
+    // EXT_INFO message.
+    let hash_candidates = if key.algorithm().is_rsa() {
+        let negotiated = session.best_supported_rsa_hash().await.map_err(|e| {
+            HostError::Other(format!(
+                "Negotiating RSA signature hash with {} failed: {}",
+                host, e
+            ))
+        })?;
+        rsa_hash_candidates(negotiated)
+    } else {
+        vec![None]
+    };
 
-    if !auth_ok.success() {
+    let mut authenticated = false;
+    for hash_alg in hash_candidates {
+        let auth_ok = session
+            .authenticate_publickey(
+                username,
+                PrivateKeyWithHashAlg::new(Arc::clone(key), hash_alg),
+            )
+            .await
+            .map_err(|e| HostError::Other(format!("Auth to {} failed: {}", host, e)))?;
+        if auth_ok.success() {
+            authenticated = true;
+            break;
+        }
+        debug!(host = %host, hash_alg = ?hash_alg, "publickey auth rejected with this signature hash");
+    }
+
+    if !authenticated {
         return Err(HostError::Other(format!(
             "Public key authentication rejected by {}",
             host
@@ -423,6 +498,38 @@ mod tests {
         assert_eq!(names, vec!["a.example", "b.example", "c.example"]);
         // static form: each host's only candidate is its own name
         assert_eq!(hosts[0].addresses, vec!["a.example".to_string()]);
+    }
+
+    #[test]
+    fn rsa_candidates_trust_the_server_advertisement() {
+        use russh::keys::HashAlg;
+        // modern server advertising rsa-sha2-512
+        assert_eq!(
+            rsa_hash_candidates(Some(Some(HashAlg::Sha512))),
+            vec![Some(HashAlg::Sha512)]
+        );
+        // old server advertising only ssh-rsa: SHA-1, and ONLY SHA-1
+        assert_eq!(rsa_hash_candidates(Some(None)), vec![None]);
+    }
+
+    #[test]
+    fn rsa_candidates_without_extension_try_sha256_then_sha1() {
+        use russh::keys::HashAlg;
+        assert_eq!(rsa_hash_candidates(None), vec![Some(HashAlg::Sha256), None]);
+    }
+
+    #[test]
+    fn legacy_algorithms_flag_appends_sha1_kex_and_macs() {
+        let modern = client_config(false);
+        assert!(!modern.preferred.kex.contains(&russh::kex::DH_G14_SHA1));
+        assert!(!modern.preferred.mac.contains(&russh::mac::HMAC_SHA1));
+
+        let legacy = client_config(true);
+        assert!(legacy.preferred.kex.contains(&russh::kex::DH_G14_SHA1));
+        assert!(legacy.preferred.mac.contains(&russh::mac::HMAC_SHA1));
+        // appended at the END: a modern server still picks the modern ones
+        assert_eq!(legacy.preferred.kex.first(), modern.preferred.kex.first());
+        assert_eq!(legacy.preferred.mac.first(), modern.preferred.mac.first());
     }
 
     #[test]

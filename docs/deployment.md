@@ -22,6 +22,315 @@ docker run -p 8182:8182 \
   ghcr.io/opusprojects/unified-api:latest
 ```
 
+That's the zero-config demo. For a realistic deployment, walk through the
+complete example below.
+
+## A complete worked example
+
+One `config/` directory exercising **every connector type, every credential
+type and every secret-delivery mechanism**. Copy it, delete what you don't
+need. The pieces reference each other by id, so the startup validation will
+tell you if you break a reference while trimming.
+
+### config.yaml — server, cache persistence, project checkouts
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8182
+  # cors_allowed_origins: ["https://forms.example.com"]  # only for browser consumers
+
+# Survive restarts: snapshot the cache to disk and reload at boot.
+# Both paths below live on one writable volume in k8s (see Running it).
+cache:
+  persistence:
+    path: "/var/lib/unified-api/cache.json"
+    interval_seconds: 60
+
+projects:
+  dir: "/var/lib/unified-api/projects"
+```
+
+### credentials.yaml — all three types, both delivery mechanisms
+
+Credentials never hold secrets; they say **where to read them**. Two
+mechanisms: environment variables (`env_prefix` + `secret_keys`) or files
+(`secret_file` for a JSON of values, `file_keys` for files a script consumes
+by path, like SSH keys).
+
+```yaml
+# username_password from env vars: reads D42_USERNAME and D42_PASSWORD,
+# the connector script receives CREDENTIAL_USERNAME / CREDENTIAL_PASSWORD
+cred-d42:
+  name: "Device42 API"
+  type: "username_password"
+  env_prefix: "D42"
+  secret_keys:
+    username: "USERNAME"
+    password: "PASSWORD"
+
+# token from env: reads NETBOX_TOKEN → script sees CREDENTIAL_TOKEN
+cred-netbox:
+  name: "NetBox API token"
+  type: "token"
+  env_prefix: "NETBOX"
+  secret_keys:
+    token: "TOKEN"
+
+# ssh_key: the username from env, the private key as a FILE the connector
+# opens by path (file_keys entries are passed as <key>_path)
+cred-fleet-ssh:
+  name: "Fleet SSH"
+  type: "ssh_key"
+  env_prefix: "FLEET_SSH"
+  secret_keys:
+    username: "USERNAME"
+  file_keys:
+    ssh_key: "/run/secrets/fleet-ssh/id_ed25519"
+
+# token from a JSON file instead of env: {"token": "glpat-..."} — handy when
+# the platform delivers secrets as mounted files rather than env vars
+cred-gitlab:
+  name: "GitLab read token"
+  type: "token"
+  secret_file: "/run/secrets/gitlab.json"
+  secret_keys:
+    token: "token"
+```
+
+### projects.yaml — the three sync styles
+
+```yaml
+# Auto: cloned at boot, re-pulled every 30 min
+prj-connectors:
+  name: "Connector scripts"
+  git_url: "https://gitlab.example.com/infra/connectors.git"
+  credential_id: "cred-gitlab"        # private repo → token over https
+  sync_interval_seconds: 1800
+
+# Manual / pipeline-driven: existing checkout used as-is at boot (pair with a
+# persistent volume); updates only via POST /api/v1/projects/prj-inventories/sync
+prj-inventories:
+  name: "Static inventories"
+  git_url: "https://gitlab.example.com/infra/inventories.git"
+  credential_id: "cred-gitlab"
+  sync_on_boot: false
+```
+
+### sources.yaml — all three connector types
+
+```yaml
+# 1a. script connector running an UNMODIFIED Ansible dynamic inventory script
+#     (the d42/VMware kind): needs --list and emits _meta-style JSON
+src-d42:
+  name: "Device42"
+  project_id: "prj-connectors"
+  script_path: "d42/d42_inventory.py"     # resolved inside the checkout
+  script_args: ["--list"]
+  output_format: "ansible"
+  credential_ids: ["cred-d42"]
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+
+# 1b. script connector with a native-format script (reads SOURCE_CONFIG,
+#     prints {"hostvars": ..., "groups": ...}) and per-group TTL overrides
+src-netbox:
+  name: "NetBox"
+  project_id: "prj-connectors"
+  script_path: "netbox/fetch.py"
+  credential_ids: ["cred-netbox"]
+  sync_interval_seconds: 600
+  ttl_seconds: 3600
+  ttl_overrides:
+    groups:
+      production: 900
+  config:                                  # free-form, script-specific
+    api_url: "https://netbox.example.com"
+
+# 2. native SSH connector gathering Ansible local facts across a fleet —
+#    no script anywhere, the binary connects in parallel
+src-fleet-facts:
+  name: "Fleet facts over SSH"
+  connector_type: "ssh"
+  project_id: "prj-connectors"             # required by schema; unused by ssh
+  script_path: "gather_facts"              # label in facts mode
+  credential_ids: ["cred-fleet-ssh"]
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+  config:
+    hosts: "web01.example.com,web02.example.com,db01.example.com"
+    concurrency: "50"
+    ssh_connect_timeout_seconds: "30"
+    gather_mode: "facts"
+    fact_path: "/etc/ansible/facts.d"
+
+# 2b. same connector in script mode: run a remote command per host and store
+#     its JSON output as that host's vars (script_args are appended)
+src-fleet-disks:
+  name: "Fleet disk report"
+  connector_type: "ssh"
+  project_id: "prj-connectors"
+  script_path: "/usr/local/bin/disk-report"
+  script_args: ["--json"]
+  credential_ids: ["cred-fleet-ssh"]
+  ttl_seconds: 3600                        # no interval: manual sync only
+  config:
+    hosts: "web01.example.com,web02.example.com"
+    gather_mode: "script"
+
+# 3. static Ansible YAML inventory parsed natively from a git checkout
+#    (inventory.yaml + group_vars/ + host_vars/) — no process, no ansible-core
+src-inventory:
+  name: "Static inventory"
+  connector_type: "static_inventory"
+  project_id: "prj-inventories"
+  script_path: "inventory.yaml"
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+```
+
+### enrichers.yaml and endpoints.yaml
+
+```yaml
+# enrichers.yaml — post-process a cached source (dataset on stdin,
+# partial dataset on stdout)
+enrich-reachability:
+  name: "Probe reachability"
+  source_id: "src-fleet-facts"
+  script_path: "enrichers/probe.py"        # resolved via project_id if set
+  project_id: "prj-connectors"
+  script_args: ["--timeout", "5"]
+  sync_interval_seconds: 900
+```
+
+```yaml
+# endpoints.yaml — merge cached sources through a transformer script;
+# consumers POST here (AWX inventory source, AnsibleForms, ...)
+ep-awx-full:
+  name: "Full AWX inventory"
+  source_ids: ["src-d42", "src-fleet-facts", "src-inventory"]
+  project_id: "prj-connectors"
+  script_path: "outputs/ansible_inventory.py"
+```
+
+### api_keys.yaml — per-consumer permissions
+
+```yaml
+key-awx:
+  name: "AWX"
+  env: "UNIFIED_API_KEY_AWX"
+  role: "admin"
+
+key-forms:
+  name: "AnsibleForms"
+  env: "UNIFIED_API_KEY_FORMS"
+  # restricted (the default): filtered lists, 403 elsewhere
+  sources: ["src-fleet-facts"]
+  endpoints: ["ep-awx-full"]
+```
+
+### What the deployment must inject
+
+Everything secret, in one table — this is the contract between the config
+above and whatever delivers secrets:
+
+| Name | Kind | Consumed by |
+|---|---|---|
+| `UNIFIED_API_KEY_AWX`, `UNIFIED_API_KEY_FORMS` | env | API authentication (`api_keys.yaml`) |
+| `D42_USERNAME`, `D42_PASSWORD` | env | `cred-d42` |
+| `NETBOX_TOKEN` | env | `cred-netbox` |
+| `FLEET_SSH_USERNAME` | env | `cred-fleet-ssh` |
+| `/run/secrets/fleet-ssh/id_ed25519` | file (mode 0400) | `cred-fleet-ssh` → SSH connector |
+| `/run/secrets/gitlab.json` | file | `cred-gitlab` → git clones |
+
+## Running the example
+
+### docker run
+
+```bash
+docker run -p 8182:8182 \
+  -v $(pwd)/config:/app/config:ro \
+  -v unified-api-state:/var/lib/unified-api \
+  -v $(pwd)/secrets/id_ed25519:/run/secrets/fleet-ssh/id_ed25519:ro \
+  -v $(pwd)/secrets/gitlab.json:/run/secrets/gitlab.json:ro \
+  -e UNIFIED_API_KEY_AWX -e UNIFIED_API_KEY_FORMS \
+  -e D42_USERNAME -e D42_PASSWORD -e NETBOX_TOKEN -e FLEET_SSH_USERNAME \
+  ghcr.io/opusprojects/unified-api:0.3.1
+```
+
+(`-e VAR` without a value forwards it from your shell — an easy way to keep
+secrets out of the command line.)
+
+### docker compose
+
+```yaml
+services:
+  unified-api:
+    image: ghcr.io/opusprojects/unified-api:0.3.1
+    ports: ["8182:8182"]
+    env_file: .env                    # the env table above; chmod 600, gitignored
+    volumes:
+      - ./config:/app/config:ro
+      - state:/var/lib/unified-api
+      - ./secrets/id_ed25519:/run/secrets/fleet-ssh/id_ed25519:ro
+      - ./secrets/gitlab.json:/run/secrets/gitlab.json:ro
+volumes:
+  state:
+```
+
+### Kubernetes
+
+The config files become a ConfigMap (mounted at `CONFIG_DIR`), the env table
+becomes a Secret, the file secrets become Secret volume mounts, and the
+writable state gets a PVC:
+
+```yaml
+# Deployment (fragments)
+env:
+  - name: CONFIG_DIR
+    value: "/etc/unified-api"
+envFrom:
+  - secretRef:
+      name: unified-api-env          # every env var from the table, in one go
+volumeMounts:
+  - {name: config, mountPath: /etc/unified-api, readOnly: true}
+  - {name: state, mountPath: /var/lib/unified-api}
+  - {name: fleet-ssh, mountPath: /run/secrets/fleet-ssh, readOnly: true}
+  - {name: gitlab, mountPath: /run/secrets/gitlab.json, subPath: gitlab.json, readOnly: true}
+volumes:
+  - {name: config, configMap: {name: unified-api-config}}
+  - {name: state, persistentVolumeClaim: {claimName: unified-api-state}}
+  - name: fleet-ssh
+    secret:
+      secretName: unified-api-secrets
+      items: [{key: ssh-private-key, path: id_ed25519, mode: 0400}]
+  - name: gitlab
+    secret: {secretName: unified-api-secrets}
+```
+
+How the `unified-api-env` / `unified-api-secrets` Secrets get their values is
+the *secret variant* decision — plain Secret, Sealed Secrets, or External
+Secrets Operator — covered with a full ESO example in
+[GitOps with ArgoCD → Secrets: three variants](#secrets-three-variants) below.
+
+### Smoke test
+
+```bash
+BASE=http://localhost:8182 ; KEY="$UNIFIED_API_KEY_AWX"
+curl -s $BASE/healthz                                    # → ok
+curl -s $BASE/readyz | jq                                # pending sources listed until first syncs
+curl -s -H "x-api-key: $KEY" -X POST $BASE/api/v1/sources/src-inventory/sync | jq
+curl -s -H "x-api-key: $KEY" $BASE/api/v1/sources | jq   # freshness per source
+curl -s -H "x-api-key: $KEY" $BASE/api/v1/sources/src-inventory/dataset | jq '.hostvars | keys'
+curl -s -H "x-api-key: $KEY" $BASE/api/v1/projects | jq  # checkout state (admin only)
+curl -s -H "x-api-key: $KEY" -X POST $BASE/api/v1/endpoints/ep-awx-full | jq
+curl -s $BASE/metrics | grep unified_api_sync_total      # public, no key
+```
+
+A failing credential fails the sync with a clear error (never a silent
+skip); a script that prints Ansible JSON while the source says `native`
+logs a WARN telling you to set `output_format: "ansible"`.
+
 ## CI/CD pipeline
 
 `.github/workflows/build.yaml`, two jobs:

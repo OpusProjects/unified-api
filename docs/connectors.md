@@ -31,6 +31,20 @@ only meaningful in enricher output.
 
 The connector script is executed on every sync and must print a Dataset to stdout.
 
+**Input (command line):** the source's `script_args` list is passed verbatim as
+CLI arguments (no shell involved, so no quoting concerns). This is how scripts
+that implement the standard Ansible dynamic inventory interface get their
+`--list`:
+
+```yaml
+src-d42:
+  script_path: "d42_inventory.py"
+  script_args: ["--list"]
+  output_format: "ansible"   # see below — such scripts emit Ansible JSON
+```
+
+Without `script_args` the script is invoked bare, exactly as before.
+
 **Input (environment variables):**
 
 | Variable | Content |
@@ -61,6 +75,40 @@ print(json.dumps({"hostvars": inventory.hosts, "groups": inventory.groups}))
 Supporting `scope`/`target` is optional but recommended: it lets consumers refresh a
 single host or group without paying for a full inventory pull.
 
+### Ansible inventory scripts (`output_format: ansible`)
+
+Scripts written for Ansible print a different JSON shape than the Dataset:
+hostvars under `_meta.hostvars` and groups as top-level keys. With
+`output_format: "ansible"` on the source, that output is converted to a
+Dataset on the fly — any existing dynamic inventory script works unmodified
+(pair it with `script_args: ["--list"]`):
+
+```yaml
+src-d42:
+  script_path: "d42_inventory.py"
+  script_args: ["--list"]
+  output_format: "ansible"
+```
+
+Conversion rules:
+
+- `_meta.hostvars` → `hostvars`. A missing `_meta` is accepted with a warning
+  (hosts will have no variables).
+- Every other top-level key becomes a group. Both the object form
+  (`{hosts, children, vars}`) and the legacy list form (`"web": ["h1", "h2"]`)
+  are accepted.
+- The implicit meta-groups `all` and `ungrouped` are skipped; if they carried
+  `vars` or `children`, a warning says so (that information has no Dataset
+  equivalent).
+- Malformed input is an **error that fails the sync**, naming the offending
+  group — never a silent skip.
+
+**Misconfiguration safety net:** if a source left on the default
+`output_format: native` parses to 0 hosts and 0 groups but the output contains
+`_meta`, the sync logs a WARN suggesting `output_format: "ansible"`. (Both
+Dataset fields are optional in JSON, so Ansible output "parses fine" as an
+empty inventory — that silent zero is the failure mode this flag exists for.)
+
 ## Source connectors (`connector_type: ssh`)
 
 The native SSH connector needs no script on the API host — it connects to the fleet
@@ -77,6 +125,10 @@ in parallel and builds the Dataset from what it finds.
 | `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs `script_path` remotely |
 | `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
 
+In `script` mode, `script_args` are appended to the remote command
+(`script_path arg1 arg2 ...`); in `facts` mode they are ignored (the remote
+command is fixed).
+
 > `ssh_connect_timeout_seconds` bounds a **single host** connection; the
 > source-level `timeout_seconds` (default 300) separately bounds the **whole
 > sync** across all hosts. They are different knobs.
@@ -89,8 +141,9 @@ in parallel and builds the Dataset from what it finds.
 An enricher post-processes a dataset already in the cache: resolve DNS, probe
 reachability, tag hosts, drop stale entries.
 
-**Input:** `SOURCE_CONFIG` env var (the enricher's `config`), and the **current
-dataset on stdin** as JSON.
+**Input:** `SOURCE_CONFIG` env var (the enricher's `config`), the enricher's
+`script_args` as CLI arguments (default: none), and the **current dataset on
+stdin** as JSON.
 
 **Output:** a *partial* Dataset on stdout — only what changed:
 
@@ -110,6 +163,7 @@ needs — the shipped example renders a merged Ansible inventory.
 
 | Channel | Content |
 |---|---|
+| CLI arguments | The endpoint's `script_args` list, verbatim (default: none) |
 | `ENDPOINT_CONFIG` env var | The endpoint's static `config` as JSON |
 | `ENDPOINT_PARAMS` env var | The JSON body of the `POST` request (`{}` if none) |
 | stdin | `{ "<source_id>": <Dataset>, ... }` for every configured source |

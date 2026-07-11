@@ -129,7 +129,13 @@ async fn run_sync(
     // script: without it, a stuck process blocks its sync task forever.
     let result = match timeout(
         Duration::from_secs(source.timeout_seconds),
-        connector.execute(&source.script_path, &config, &credentials),
+        connector.execute(
+            &source.script_path,
+            &source.script_args,
+            source.output_format,
+            &config,
+            &credentials,
+        ),
     )
     .await
     {

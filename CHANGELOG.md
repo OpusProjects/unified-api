@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `script_args` on sources, enrichers and output endpoints: CLI arguments
+  passed verbatim to the script (no shell), so scripts implementing the
+  standard Ansible dynamic inventory interface (`--list`) work unmodified —
+  no more wrapper scripts. SSH sources append them to the remote command in
+  `script` gather mode.
+- `output_format: "ansible"` on sources: converts standard Ansible dynamic
+  inventory JSON (`_meta.hostvars` + top-level groups, including the legacy
+  list form) into the internal Dataset, so existing inventory scripts plug in
+  without changes. Malformed groups fail the sync with the group named; the
+  implicit `all`/`ungrouped` meta-groups are skipped with a warning when they
+  carry information. Sources left on the default `native` format now log a
+  WARN when their output parses to 0 hosts but looks like Ansible JSON —
+  previously that misconfiguration produced a silent empty inventory.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added

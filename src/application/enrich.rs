@@ -70,6 +70,7 @@ async fn execute_enricher(
         Duration::from_secs(enricher.timeout_seconds),
         enricher_port.execute(
             &enricher.script_path,
+            &enricher.script_args,
             &enricher.config,
             &current_entry.dataset,
         ),

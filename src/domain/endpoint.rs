@@ -12,6 +12,10 @@ pub struct OutputEndpoint {
     // Script that transforms the datasets into the final format
     pub script_path: String,
 
+    // CLI arguments passed to the script (default: none)
+    #[serde(default)]
+    pub script_args: Vec<String>,
+
     // Project whose checkout contains the script (None = script_path is a
     // plain filesystem path, absolute or relative to the working directory)
     #[serde(default)]

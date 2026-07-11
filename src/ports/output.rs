@@ -17,6 +17,8 @@ pub trait OutputPort: Send + Sync {
     fn execute(
         &self,
         script_path: &str,
+        // CLI arguments for the script (empty slice = none)
+        args: &[String],
         config: &HashMap<String, String>,
         params: &serde_json::Value,
         datasets: &HashMap<String, Dataset>,

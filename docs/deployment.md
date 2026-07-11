@@ -345,12 +345,45 @@ the local work, and **one central** that federates them with
 `connector_type: "remote"` — consumers only ever talk to the central:
 
 ```
- [DC mad]  unified-api-mad ── SSH/scripts locally, caches, serves
- [DC fra]  unified-api-fra ── idem
-                 │  GET /dataset + /status (HTTPS, restricted API key)
-                 ▼
- [central] unified-api ── src-mad + src-fra (remote) ── ep-global ──> AWX
+          DC MADRID                                      DC FRANKFURT
+┌─────────────────────────────┐               ┌─────────────────────────────┐
+│      local fleet (LAN)      │               │      local fleet (LAN)      │
+│   web01 · web02 · db01 · …  │               │   app01 · app02 · db02 · …  │
+│         ▲                   │               │         ▲                   │
+│         │ parallel SSH      │               │         │ parallel SSH      │
+│         │ (russh, key that  │               │         │ (russh, key that  │
+│         │  never leaves MAD)│               │         │  never leaves FRA)│
+│  ┌──────┴───────────────┐   │               │  ┌──────┴───────────────┐   │
+│  │  unified-api-mad     │   │               │  │  unified-api-fra     │   │
+│  │  ▸ src-fleet  (ssh)  │   │               │  │  ▸ src-fleet  (ssh)  │   │
+│  │  ▸ src-d42 (script)  │   │               │  │  ▸ src-netbox        │   │
+│  │  cache ⇄ PVC         │   │               │  │  cache ⇄ PVC         │   │
+│  │  key-central ······· │◄──┼── restricted  │  │  key-central ······· │   │
+│  │   (src-fleet only)   │   │   per edge    │  │   (src-fleet only)   │   │
+│  └──────────┬───────────┘   │               │  └──────────┬───────────┘   │
+└─────────────┼───────────────┘               └─────────────┼───────────────┘
+              │                                             │
+              │        HTTPS · GET /dataset + /status       │
+              │        restricted X-API-Key                 │
+              │        the data's REAL age travels along    │
+              └──────────────────────┬──────────────────────┘
+                                     ▼
+                     ┌───────────────────────────────┐
+                     │      unified-api (CENTRAL)    │
+                     │   ▸ src-madrid    (remote) ─┐ │
+                     │   ▸ src-frankfurt (remote) ─┤ │
+                     │   cache ⇄ PVC               │ │
+                     │   ep-global ◄───────────────┘ │
+                     │   (merged world inventory)    │
+                     └───────────────┬───────────────┘
+                                     │ POST /api/v1/endpoints/ep-global
+                                     ▼
+                     AWX / Ascender · AnsibleForms · curl
 ```
+
+Arrows point in the direction the CONNECTION is initiated (the central
+pulls the edges, consumers pull the central) — the only firewall openings
+are HTTPS from the central to each edge.
 
 The wire protocol is the API itself: `GET /dataset` returns exactly the
 Dataset shape a connector must produce, and `/status` provides the data's

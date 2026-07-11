@@ -9,6 +9,9 @@ pub enum ConnectorType {
     #[default]
     Script,
     Ssh,
+    // Ansible static YAML inventory read from disk (script_path = path to
+    // the inventory file, typically inside a git project checkout)
+    StaticInventory,
 }
 
 // What the connector script prints on stdout.

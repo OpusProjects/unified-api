@@ -136,6 +136,50 @@ command is fixed).
 **Credentials:** expects `username` (or `ssh_username`) and an `ssh_key_path` /
 `key_path` from `file_keys` — see [configuration](configuration.md).
 
+## Static inventory sources (`connector_type: static_inventory`)
+
+For classic Ansible **static YAML inventories** — an `inventory.yaml` with the
+`all/children/hosts` tree plus optional `group_vars/` and `host_vars/`
+directories next to it. No process is spawned and no `ansible-core` is
+needed: the files are parsed natively.
+
+```yaml
+src-inventory-linux:
+  name: "Linux static inventory"
+  connector_type: "static_inventory"
+  project_id: "prj-inventories"        # git repo holding the inventory
+  script_path: "inventory.yaml"        # path to the file inside the checkout
+  sync_interval_seconds: 300
+  ttl_seconds: 600
+```
+
+`script_path` doubles as "path to the inventory file"; with a git project it
+resolves inside the checkout, so the project's periodic pull (or the
+on-demand `POST /api/v1/projects/{id}/sync`) is what brings in new data — the
+next source sync reads the updated files. `script_args`, `output_format`,
+credentials and `SOURCE_CONFIG` don't apply to this connector.
+
+**What lands where:**
+
+- Hosts get their **effective variables flattened** into `hostvars`, merged in
+  this precedence (lowest first): `all` inline vars → `group_vars/all` →
+  each group containing the host (parents before children, alphabetical at
+  the same depth; inline vars then `group_vars/<group>` per group) → the
+  host's inline vars → `host_vars/<host>`. This is a simplified version of
+  Ansible's own ordering; exotic overlaps may differ.
+- Groups keep their structure: direct `hosts`, `children`, and the group's
+  own (unflattened) vars. The implicit `all`/`ungrouped` are not emitted as
+  groups — `all`'s vars reach every host through the flattening.
+
+**Deliberately unsupported (loud, never silent):**
+
+- INI inventories — YAML only
+- host range patterns (`web[01:20].example.com`) → the sync fails
+- ansible-vault encrypted files or values → the sync fails naming the file
+- Jinja templating: `{{ ... }}` values pass through as literal strings
+  (templating belongs to the consumer, e.g. Ansible itself)
+- `group_vars`/`host_vars` files that match nothing log a warning
+
 ## Enrichers
 
 An enricher post-processes a dataset already in the cache: resolve DNS, probe

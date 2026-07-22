@@ -28,29 +28,6 @@ without each run hammering the upstream systems of record behind it.
 
 ---
 
-## 🚀 Quick start
-
-```bash
-cargo run                      # uses ./config; demo sources run the sample scripts under tests/
-# open http://localhost:8182/  -> redirects to Swagger UI
-```
-
-Sync a source and read it back:
-
-```bash
-curl -X POST localhost:8182/api/v1/sources/src-section9/sync
-curl localhost:8182/api/v1/sources/src-section9/dataset
-curl -X POST localhost:8182/api/v1/endpoints/ep-ansible-full   # merged Ansible inventory
-```
-
-Or with Docker:
-
-```bash
-docker run -p 8182:8182 ghcr.io/opusprojects/unified-api:latest
-```
-
----
-
 ## 📚 Documentation
 
 | Document | What it covers |
@@ -78,8 +55,6 @@ Security issues: see [SECURITY.md](SECURITY.md) for private reporting.
 
 - [Fernando Roca](https://github.com/fernandorocagonzalez)
 - [Blai Peidro](https://github.com/blaipr)
-
-Part of [OpusProjects](https://github.com/OpusProjects).
 
 ---
 

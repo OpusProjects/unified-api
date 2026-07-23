@@ -125,7 +125,13 @@ pub async fn get_source_dataset(
     let mut hostnames: Vec<&String> = if let Some(ref host) = params.host {
         let matched: Vec<&String> = host
             .split(',')
-            .filter_map(|h| entry.dataset.hostvars.get_key_value(h.trim()).map(|(k, _)| k))
+            .filter_map(|h| {
+                entry
+                    .dataset
+                    .hostvars
+                    .get_key_value(h.trim())
+                    .map(|(k, _)| k)
+            })
             .collect();
         if matched.is_empty() {
             return Err(StatusCode::NOT_FOUND);

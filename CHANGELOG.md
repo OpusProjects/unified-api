@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] - 2026-07-23
+
+### Changed
+
+- `?host=` query parameter on `/dataset` and `/status` endpoints now accepts
+  comma-separated hostnames (e.g. `?host=host1,host2`). Unmatched names are
+  silently skipped; 404 only when none match. Single-host queries are unchanged.
+
 ## [0.3.6] - 2026-07-22
 
 ### Added

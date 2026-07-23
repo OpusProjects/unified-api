@@ -72,7 +72,7 @@ pub async fn list_cached_sources(
 // browser UIs like Swagger when rendered whole.
 #[derive(Deserialize, IntoParams)]
 pub struct DatasetParams {
-    /// Return only this host
+    /// Return only these hosts (comma-separated)
     pub host: Option<String>,
     /// Return only the hosts of this group
     pub group: Option<String>,
@@ -123,17 +123,20 @@ pub async fn get_source_dataset(
 
     // Which hosts survive the filter, sorted so limit/offset pages are stable
     let mut hostnames: Vec<&String> = if let Some(ref host) = params.host {
-        if !entry.dataset.hostvars.contains_key(host) {
+        let matched: Vec<&String> = host
+            .split(',')
+            .filter_map(|h| {
+                entry
+                    .dataset
+                    .hostvars
+                    .get_key_value(h.trim())
+                    .map(|(k, _)| k)
+            })
+            .collect();
+        if matched.is_empty() {
             return Err(StatusCode::NOT_FOUND);
         }
-        vec![
-            entry
-                .dataset
-                .hostvars
-                .get_key_value(host)
-                .map(|(k, _)| k)
-                .unwrap(),
-        ]
+        matched
     } else if let Some(ref group) = params.group {
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.iter().collect(),
@@ -186,7 +189,7 @@ pub async fn get_source_dataset(
 // Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]
 pub struct StatusParams {
-    /// Filter by hostname (e.g. motoko.section9.net)
+    /// Filter by hostname, comma-separated (e.g. motoko.section9.net)
     pub host: Option<String>,
     /// Filter by group name (e.g. magi)
     pub group: Option<String>,
@@ -237,11 +240,16 @@ pub async fn source_status(
     let source = state.sources.get(&id);
 
     let hostnames: Vec<String> = if let Some(ref host) = params.host {
-        if entry.dataset.hostvars.contains_key(host) {
-            vec![host.clone()]
-        } else {
+        let matched: Vec<String> = host
+            .split(',')
+            .map(|h| h.trim())
+            .filter(|h| entry.dataset.hostvars.contains_key(*h))
+            .map(|h| h.to_string())
+            .collect();
+        if matched.is_empty() {
             return Err(StatusCode::NOT_FOUND);
         }
+        matched
     } else if let Some(ref group) = params.group {
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.clone(),

@@ -2,17 +2,22 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 // An Enricher post-processes data that is already in cache.
-// It receives the current dataset from a source, transforms it, and returns
-// the modified hosts (merge) and/or hosts to delete.
+//
+// Two modes:
+// - Script-based: runs a script that receives the target dataset on stdin
+//   and returns a partial dataset (modified/removed hosts).
+// - Declarative merge: copies specified fields from one source's hostvars
+//   into another — no script needed.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Enricher {
     pub name: String,
 
-    // The source whose data it enriches — ex: "src-device42"
-    pub source_id: String,
+    // The dataset being enriched — ex: "src-ssh-pq-facts"
+    pub target_id: String,
 
-    // Script that performs the enrichment
-    pub script_path: String,
+    // Script that performs the enrichment (required for script-based mode)
+    #[serde(default)]
+    pub script_path: Option<String>,
 
     // CLI arguments passed to the script (default: none)
     #[serde(default)]
@@ -22,6 +27,14 @@ pub struct Enricher {
     // plain filesystem path, absolute or relative to the working directory)
     #[serde(default)]
     pub project_id: Option<String>,
+
+    // Declarative merge: the source dataset to copy fields from
+    #[serde(default)]
+    pub source_id: Option<String>,
+
+    // Declarative merge: which top-level hostvars keys to copy from source
+    #[serde(default)]
+    pub fields: Option<Vec<String>>,
 
     // Automatic execution interval (0 or None = manual only)
     #[serde(default)]
@@ -34,4 +47,10 @@ pub struct Enricher {
     // Maximum seconds a run may take before it is aborted (default 300)
     #[serde(default = "crate::domain::default_timeout_seconds")]
     pub timeout_seconds: u64,
+}
+
+impl Enricher {
+    pub fn is_declarative(&self) -> bool {
+        self.source_id.is_some()
+    }
 }

@@ -13,7 +13,7 @@ use crate::application::enrich::run_enricher as application_run_enricher;
 
 #[derive(Serialize, ToSchema)]
 pub struct EnrichResult {
-    pub source_id: String,
+    pub target_id: String,
     pub enricher_id: String,
     pub success: bool,
     pub hosts_updated: usize,
@@ -31,8 +31,8 @@ pub struct EnrichResult {
     ),
     responses(
         (status = 200, description = "Enrichment result", body = EnrichResult),
-        (status = 403, description = "API key not allowed to write this enricher's source"),
-        (status = 404, description = "Enricher not configured or source not in cache")
+        (status = 403, description = "API key not allowed to write this enricher's target"),
+        (status = 404, description = "Enricher not configured or target not in cache")
     )
 )]
 pub async fn run_enricher(
@@ -42,19 +42,19 @@ pub async fn run_enricher(
 ) -> Result<Json<EnrichResult>, StatusCode> {
     let enricher_def = state.enrichers.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    // An enricher writes into its source's cache entry, so the permission
-    // that matters is the SOURCE one — no separate enricher grant to manage.
-    if !auth.permissions.allows_source(&enricher_def.source_id) {
+    // An enricher writes into its target's cache entry, so the permission
+    // that matters is the TARGET one — no separate enricher grant to manage.
+    if !auth.permissions.allows_source(&enricher_def.target_id) {
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // None = source not in cache → 404
+    // None = target not in cache → 404
     let outcome = application_run_enricher(&*state.cache, &*state.enricher, enricher_def)
         .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(EnrichResult {
-        source_id: enricher_def.source_id.clone(),
+        target_id: enricher_def.target_id.clone(),
         enricher_id: id,
         success: outcome.success(),
         hosts_updated: outcome.hosts_updated,

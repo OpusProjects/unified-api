@@ -201,7 +201,7 @@ src-inventory:
 # partial dataset on stdout)
 enrich-reachability:
   name: "Probe reachability"
-  source_id: "src-fleet-facts"
+  target_id: "src-fleet-facts"
   script_path: "enrichers/probe.py"        # resolved via project_id if set
   project_id: "prj-connectors"
   script_args: ["--timeout", "5"]

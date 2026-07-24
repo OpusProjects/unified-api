@@ -31,7 +31,7 @@ Each key has a role:
 
 For a restricted key: list routes (`GET /sources`, `GET /endpoints`) are
 *filtered* to the allowed ids; id routes on anything else return `403`.
-Running an enricher requires permission on the enricher's **source** (that is
+Running an enricher requires permission on the enricher's **target** (that is
 what it writes to). Running an output endpoint requires the **endpoint** id
 only — granting an endpoint grants its rendered output even if the key cannot
 read the underlying sources raw.
@@ -147,10 +147,11 @@ federation. Clients that don't advertise gzip get identity bytes, unchanged.
 
 | Route | Meaning |
 |---|---|
-| `POST /api/v1/enrichers/{id}/run` | Run an enricher against its source's cached dataset |
+| `POST /api/v1/enrichers/{id}/run` | Run an enricher against its target's cached dataset |
 
-`404` if the enricher isn't configured **or** its source has never synced.
+`404` if the enricher isn't configured **or** its target has never synced.
 The result reports `hosts_updated` / `hosts_removed` and any script error.
+For declarative merges, `404` is also returned if the source has never synced.
 
 ## Output endpoints
 

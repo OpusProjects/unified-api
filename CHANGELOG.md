@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.3.9] - 2026-07-24
+## [0.3.9] - 2026-07-25
 
 ### Added
 
@@ -13,16 +13,28 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `?group=autofs&fields=autofs` returns only the autofs data per host (~1 MB)
   instead of every fact key (~11 MB). Without `fields` the full hostvars are
   returned as before.
+- Declarative merge enrichers: a new enrichment mode that copies hostvars
+  fields from one source into another by hostname, no script needed — set
+  `source_id` and `fields` on an enricher instead of `script_path`.
+  Script-based enrichers continue to work as before.
 - SSH connector auto-groups: each top-level fact key becomes a group containing
   the hosts that have it (e.g. `?group=autofs` returns only hosts with autofs
   data). Mirrors Ansible's `keyed_groups` behaviour.
+
+### Changed
+
+- **Breaking (enrichers config):** `source_id` in `enrichers.yaml` is renamed
+  to `target_id` (it always meant "the dataset being enriched"). `source_id`
+  is now an optional field that specifies where to copy fields from in
+  declarative merge enrichers. `script_path` is also optional — required only
+  for script-based enrichers.
 
 ### Fixed
 
 - `?host=` filter on `/dataset` and `/status` now returns an empty result
   instead of `404` when no hosts match. A filter that matches nothing is an
-  empty collection, not a missing resource — consistent with AWX and standard
-  REST conventions. `404` is still returned when the source itself is not in
+  empty collection, not a missing resource — consistent with standard REST
+  conventions. `404` is still returned when the source itself is not in
   cache.
 
 ## [0.3.8] - 2026-07-24
@@ -251,7 +263,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Breaking (browser consumers only):** CORS is now disabled by default;
   the API previously sent allow-anything CORS headers. Server-to-server
-  consumers (AWX, AnsibleForms backends) are unaffected
+  consumers (AAP, AnsibleForms backends, server-to-server) are unaffected
 - **Breaking (SSH sources only):** the SSH connector's per-host timeout config
   key is renamed `timeout_seconds` → `ssh_connect_timeout_seconds` (it collided
   with the source-level `timeout_seconds`); an SSH source that set the old key

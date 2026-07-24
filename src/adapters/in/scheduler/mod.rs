@@ -119,7 +119,7 @@ fn start_enricher_tasks(state: Arc<AppState>) {
 
             info!(
                 enricher = %enricher_id,
-                source = %enricher.source_id,
+                target = %enricher.target_id,
                 interval_secs,
                 "Enricher scheduled"
             );
@@ -132,8 +132,8 @@ fn start_enricher_tasks(state: Arc<AppState>) {
                     None => {
                         warn!(
                             enricher = %enricher_id,
-                            source = %enricher.source_id,
-                            "Source not in cache, skipping"
+                            target = %enricher.target_id,
+                            "Target not in cache, skipping"
                         );
                     }
                     Some(outcome) => match outcome.error {

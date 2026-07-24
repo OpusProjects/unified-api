@@ -99,17 +99,32 @@ clear error — it is never silently skipped.
 
 ## enrichers.yaml
 
-Post-processors over data already in the cache.
+Post-processors over data already in the cache. Two modes:
+
+**Script-based** — runs a script that receives the target dataset on stdin and
+returns a partial dataset (modified/removed hosts):
 
 ```yaml
 enrich-resolve-ssh:
   name: "Resolve SSH reachability"
-  source_id: "src-section9"        # whose cached dataset to enrich
+  target_id: "src-section9"        # dataset being enriched
   script_path: "enrichers/resolve.py"
   script_args: []                  # optional CLI args for the script
   sync_interval_seconds: 300       # scheduled run; 0/absent = manual only
   timeout_seconds: 300             # abort a run that takes longer (default 300)
   config: {}
+```
+
+**Declarative merge** — copies specified hostvars fields from one source into
+another, matched by hostname. No script needed:
+
+```yaml
+enrich-business-unit:
+  name: "Add business_unit from D42"
+  target_id: "src-ssh-pq-facts"   # dataset being enriched
+  source_id: "src-d42-proquest"   # dataset to copy fields from
+  fields: ["business_unit"]       # top-level hostvars keys to copy
+  sync_interval_seconds: 3600
 ```
 
 ## endpoints.yaml

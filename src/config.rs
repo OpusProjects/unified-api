@@ -96,10 +96,24 @@ impl AppConfig {
 
         // Enrichers must reference existing sources
         for (id, enricher) in &self.enrichers {
-            if !self.sources.contains_key(&enricher.source_id) {
+            if !self.sources.contains_key(&enricher.target_id) {
+                errors.push(format!(
+                    "Enricher '{}' references unknown target '{}'",
+                    id, enricher.target_id
+                ));
+            }
+            if let Some(ref source_id) = enricher.source_id
+                && !self.sources.contains_key(source_id)
+            {
                 errors.push(format!(
                     "Enricher '{}' references unknown source '{}'",
-                    id, enricher.source_id
+                    id, source_id
+                ));
+            }
+            if enricher.source_id.is_none() && enricher.script_path.is_none() {
+                errors.push(format!(
+                    "Enricher '{}' needs either source_id (declarative) or script_path (script)",
+                    id
                 ));
             }
         }
@@ -273,8 +287,10 @@ impl AppConfig {
             );
         }
         for (id, enricher) in self.enrichers.iter_mut() {
-            if let Some(project_id) = enricher.project_id.clone() {
-                resolve_one(projects_dir, id, &project_id, &mut enricher.script_path);
+            if let Some(project_id) = enricher.project_id.clone()
+                && let Some(ref mut sp) = enricher.script_path
+            {
+                resolve_one(projects_dir, id, &project_id, sp);
             }
         }
         for (id, endpoint) in self.endpoints.iter_mut() {
@@ -414,7 +430,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "enrich-test:\n  name: \"Test\"\n  source_id: \"src-nonexistent\"\n  script_path: \"test.py\"\n",
+            "enrich-test:\n  name: \"Test\"\n  target_id: \"src-nonexistent\"\n  script_path: \"test.py\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -585,7 +601,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "enrich-test:\n  name: \"Test\"\n  source_id: \"src-test\"\n  script_path: \"e.py\"\n  project_id: \"prj-ghost\"\n",
+            "enrich-test:\n  name: \"Test\"\n  target_id: \"src-test\"\n  script_path: \"e.py\"\n  project_id: \"prj-ghost\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());

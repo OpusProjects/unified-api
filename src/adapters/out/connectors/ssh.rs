@@ -227,6 +227,29 @@ impl ConnectorPort for SshConnector {
                 },
             );
 
+            // Auto-groups from fact keys (like Ansible keyed_groups):
+            // a group per top-level key containing hosts that have it.
+            let mut key_groups: HashMap<String, Vec<String>> = HashMap::new();
+            for (host, vars) in &hostvars {
+                for key in vars.keys() {
+                    key_groups
+                        .entry(key.clone())
+                        .or_default()
+                        .push(host.clone());
+                }
+            }
+            for (name, mut hosts) in key_groups {
+                hosts.sort();
+                groups.insert(
+                    name,
+                    Group {
+                        hosts,
+                        children: Vec::new(),
+                        vars: None,
+                    },
+                );
+            }
+
             // The summary that names the troublemakers: one line to find the
             // hosts that dragged (or dropped out of) the collection.
             if failed.is_empty() {

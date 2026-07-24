@@ -352,20 +352,22 @@ async fn status_filter_by_group() {
 // Test: status of host that does not exist → 404
 // =========================================================================
 #[tokio::test]
-async fn status_unknown_host_returns_404() {
+async fn status_unknown_host_returns_empty() {
     let mut sources = HashMap::new();
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
 
-    let (status, _) = request(
+    let (status, body) = request(
         app,
         "GET",
         "/api/v1/sources/src-test/status?host=togusa.section9.net",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 0);
 }
 
 // =========================================================================

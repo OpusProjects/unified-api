@@ -591,12 +591,15 @@ async fn dataset_host_filter_and_not_found_cases() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["total_hosts"], 1);
 
-    let (status, _) = get(
+    let (status, body) = get(
         app_with_demo_data(),
         "/api/v1/sources/src-demo/dataset?host=ghost.example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 0);
+    assert_eq!(json["returned"], 0);
 
     let (status, _) = get(
         app_with_demo_data(),
@@ -617,6 +620,46 @@ async fn dataset_offset_beyond_total_returns_empty_page() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["total_hosts"], 2);
     assert_eq!(json["returned"], 0);
+}
+
+#[tokio::test]
+async fn dataset_fields_filter_limits_hostvars_keys() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?fields=role",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 2);
+    assert_eq!(json["returned"], 2);
+
+    let motoko = &json["hostvars"]["motoko.section9.net"];
+    assert_eq!(motoko["role"], "commander");
+    assert!(motoko.get("ansible_host").is_none());
+    assert!(motoko.get("os").is_none());
+
+    let melchior = &json["hostvars"]["melchior.seele.net"];
+    assert_eq!(melchior["role"], "magi-system");
+    assert!(melchior.get("ansible_host").is_none());
+}
+
+#[tokio::test]
+async fn dataset_fields_with_group_filter() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?group=section9&fields=role,os",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 1);
+
+    let motoko = &json["hostvars"]["motoko.section9.net"];
+    assert_eq!(motoko["role"], "commander");
+    assert_eq!(motoko["os"], "OracleLinux");
+    assert!(motoko.get("ansible_host").is_none());
+    assert!(motoko.get("datacenter").is_none());
 }
 
 // =========================================================================

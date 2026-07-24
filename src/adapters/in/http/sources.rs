@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
+use std::borrow::Cow;
+
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::domain::dataset::{Group, HostVars};
@@ -82,11 +84,17 @@ pub struct DatasetParams {
     pub limit: Option<usize>,
     /// How many hosts to skip (use with limit to page)
     pub offset: Option<usize>,
+    /// Return only these top-level hostvars keys (comma-separated)
+    pub fields: Option<String>,
 }
 
 impl DatasetParams {
     fn is_plain(&self) -> bool {
-        self.host.is_none() && self.group.is_none() && self.limit.is_none() && self.offset.is_none()
+        self.host.is_none()
+            && self.group.is_none()
+            && self.limit.is_none()
+            && self.offset.is_none()
+            && self.fields.is_none()
     }
 }
 
@@ -99,7 +107,7 @@ impl DatasetParams {
         DatasetParams
     ),
     responses(
-        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset: a paginated envelope with total_hosts, offset, limit, hostvars and groups"),
+        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys."),
         (status = 304, description = "If-None-Match matched the current ETag — dataset unchanged, no body (plain queries only)"),
         (status = 403, description = "API key not allowed to read this source"),
         (status = 404, description = "Source not in cache, or host/group not found")
@@ -152,8 +160,7 @@ pub async fn get_source_dataset(
 
     // Which hosts survive the filter, sorted so limit/offset pages are stable
     let mut hostnames: Vec<&String> = if let Some(ref host) = params.host {
-        let matched: Vec<&String> = host
-            .split(',')
+        host.split(',')
             .filter_map(|h| {
                 entry
                     .dataset
@@ -161,11 +168,7 @@ pub async fn get_source_dataset(
                     .get_key_value(h.trim())
                     .map(|(k, _)| k)
             })
-            .collect();
-        if matched.is_empty() {
-            return Err(StatusCode::NOT_FOUND);
-        }
-        matched
+            .collect()
     } else if let Some(ref group) = params.group {
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.iter().collect(),
@@ -185,9 +188,26 @@ pub async fn get_source_dataset(
         .take(params.limit.unwrap_or(usize::MAX))
         .collect();
 
-    let hostvars: HashMap<&String, &HostVars> = page
+    let field_set: Option<std::collections::HashSet<&str>> = params
+        .fields
+        .as_ref()
+        .map(|f| f.split(',').map(|s| s.trim()).collect());
+
+    let hostvars: HashMap<&String, Cow<HostVars>> = page
         .iter()
-        .filter_map(|host| entry.dataset.hostvars.get_key_value(*host))
+        .filter_map(|host| {
+            let (k, v) = entry.dataset.hostvars.get_key_value(*host)?;
+            let vars = match &field_set {
+                Some(fields) => Cow::Owned(
+                    v.iter()
+                        .filter(|(key, _)| fields.contains(key.as_str()))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                ),
+                None => Cow::Borrowed(v),
+            };
+            Some((k, vars))
+        })
         .collect();
 
     // With a group filter only that group is returned; otherwise all groups
@@ -212,7 +232,7 @@ pub async fn get_source_dataset(
         offset: usize,
         limit: Option<usize>,
         returned: usize,
-        hostvars: HashMap<&'a String, &'a HostVars>,
+        hostvars: HashMap<&'a String, Cow<'a, HostVars>>,
         groups: HashMap<&'a String, &'a Group>,
     }
 
@@ -288,16 +308,11 @@ pub async fn source_status(
     let source = state.sources.get(&id);
 
     let hostnames: Vec<String> = if let Some(ref host) = params.host {
-        let matched: Vec<String> = host
-            .split(',')
+        host.split(',')
             .map(|h| h.trim())
             .filter(|h| entry.dataset.hostvars.contains_key(*h))
             .map(|h| h.to_string())
-            .collect();
-        if matched.is_empty() {
-            return Err(StatusCode::NOT_FOUND);
-        }
-        matched
+            .collect()
     } else if let Some(ref group) = params.group {
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.clone(),

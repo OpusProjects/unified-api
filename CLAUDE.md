@@ -129,6 +129,23 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   `/healthz`, `/readyz`, `/metrics` and Swagger stay public.
 - **OpenAPI version** comes from `CARGO_PKG_VERSION` — bump only `Cargo.toml`.
 
+## Releasing a new version
+
+When bumping the version, update all of these:
+
+1. `Cargo.toml` — `version = "x.y.z"` (source of truth)
+2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"` (must match Cargo.toml)
+3. `CHANGELOG.md` — add a `## [x.y.z] - YYYY-MM-DD` section above the previous release
+
+To release: push the commit to `main`, then push a `v<version>` tag. CI
+(`.github/workflows/build.yaml`) handles the rest:
+
+- Runs tests, clippy, fmt check
+- Builds and pushes the Docker image to `ghcr.io/opusprojects/unified-api:<version>`
+- Creates a GitHub Release with notes extracted from the CHANGELOG section
+
+Do not manually create GitHub releases — the workflow does it from the tag.
+
 ## Conventions
 
 - Private by default, `pub` only what needs to be exposed

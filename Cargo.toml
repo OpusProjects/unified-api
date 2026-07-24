@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 axum = "0.8"
+bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
 base64 = "0.22"          # Basic auth header for git-over-https credentials
 dashmap = "6"
 futures = "0.3"
@@ -25,7 +26,7 @@ serde_json = "1"
 serde_yaml_ng = "0.10"   # maintained drop-in fork of the deprecated serde_yaml
 subtle = "2"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "5", features = ["axum_extras"] }

@@ -1,8 +1,22 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
+
 use super::dataset::{Dataset, HostVars};
+
+// The dataset serialized to JSON once, shared by every response that serves
+// it. `Bytes` is a reference-counted byte buffer: cloning it (which every
+// HTTP response does) shares the allocation instead of copying it.
+#[derive(Debug)]
+pub struct SerializedJson {
+    pub bytes: Bytes,
+    // Strong ETag derived from the bytes — lets clients poll with
+    // If-None-Match and get an empty 304 while the dataset is unchanged
+    pub etag: String,
+}
 
 // CacheEntry wraps a Dataset with cache metadata at three levels:
 // - dataset level: when was the last full sync performed
@@ -20,8 +34,17 @@ pub struct CacheEntry {
     pub fetched_at: Instant,
     pub ttl: Duration,
     // Individual timestamp per host — allows knowing when each one was refreshed
-    // If a host is not here, fetched_at from the dataset is used
-    pub host_timestamps: HashMap<String, Instant>,
+    // If a host is not here, fetched_at from the dataset is used.
+    // Also behind Arc for the same reason as dataset: get() clones the entry
+    // on every read, and cloning one String per host on a large source is
+    // real allocation work the read path doesn't need.
+    pub host_timestamps: Arc<HashMap<String, Instant>>,
+    // Lazily-built JSON of the dataset, shared through the Arc<OnceLock> by
+    // every clone of this entry: the first reader serializes, later readers
+    // (and clones taken before a mutation) reuse the same bytes. OnceLock is
+    // a thread-safe "write once, read many" cell. Mutators drop the whole
+    // cell (fresh Arc) so the next reader re-serializes the new dataset.
+    serialized: Arc<OnceLock<SerializedJson>>,
 }
 
 impl CacheEntry {
@@ -44,7 +67,8 @@ impl CacheEntry {
             dataset,
             fetched_at: now,
             ttl: Duration::from_secs(ttl_seconds),
-            host_timestamps,
+            host_timestamps: Arc::new(host_timestamps),
+            serialized: Arc::new(OnceLock::new()),
         }
     }
 
@@ -82,8 +106,40 @@ impl CacheEntry {
             dataset: dataset.into(),
             fetched_at,
             ttl,
-            host_timestamps,
+            host_timestamps: Arc::new(host_timestamps),
+            serialized: Arc::new(OnceLock::new()),
         }
+    }
+
+    // The dataset as JSON bytes + ETag, serialized at most once per dataset
+    // version no matter how many requests ask for it. Errors are practically
+    // impossible for our types (string keys, JSON-compatible values) but are
+    // propagated rather than swallowed.
+    pub fn serialized_json(&self) -> Result<&SerializedJson, String> {
+        if let Some(cached) = self.serialized.get() {
+            return Ok(cached);
+        }
+        let bytes = serde_json::to_vec(&*self.dataset).map_err(|e| e.to_string())?;
+        // DefaultHasher::new() uses fixed keys, so the same bytes produce the
+        // same ETag across processes and restarts (unlike HashMap's hasher,
+        // which is randomly seeded per process).
+        let mut hasher = std::hash::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let etag = format!("\"{:016x}-{}\"", hasher.finish(), bytes.len());
+        // set() fails if another thread won the race — either way get() below
+        // returns the one value that ended up in the cell
+        let _ = self.serialized.set(SerializedJson {
+            bytes: Bytes::from(bytes),
+            etag,
+        });
+        Ok(self.serialized.get().expect("just initialized"))
+    }
+
+    // Every mutation replaces the OnceLock with a fresh, empty one: clones
+    // taken BEFORE the mutation keep serving the bytes they already share,
+    // the entry in the cache re-serializes on its next read.
+    fn invalidate_serialized(&mut self) {
+        self.serialized = Arc::new(OnceLock::new());
     }
 
     // Is the complete dataset fresh?
@@ -126,21 +182,24 @@ impl CacheEntry {
     // keeps seeing an immutable snapshot. Either way mutation is safe and
     // readers are never blocked or torn.
     pub fn update_host(&mut self, hostname: String, vars: HostVars) {
+        self.invalidate_serialized();
         let dataset = Arc::make_mut(&mut self.dataset);
         dataset.hostvars.insert(hostname.clone(), vars);
-        self.host_timestamps.insert(hostname, Instant::now());
+        Arc::make_mut(&mut self.host_timestamps).insert(hostname, Instant::now());
     }
 
     // Merge: patches the hosts that come, the rest is left alone.
     // Also processes remove_hosts if they come.
     pub fn merge_dataset(&mut self, partial: Dataset) {
+        self.invalidate_serialized();
         let now = Instant::now();
         let dataset = Arc::make_mut(&mut self.dataset);
+        let timestamps = Arc::make_mut(&mut self.host_timestamps);
 
         // Merge hostvars
         for (hostname, vars) in partial.hostvars {
             dataset.hostvars.insert(hostname.clone(), vars);
-            self.host_timestamps.insert(hostname, now);
+            timestamps.insert(hostname, now);
         }
 
         // Merge groups
@@ -151,7 +210,7 @@ impl CacheEntry {
         // Remove hosts
         for hostname in &partial.remove_hosts {
             dataset.hostvars.remove(hostname);
-            self.host_timestamps.remove(hostname);
+            timestamps.remove(hostname);
             // Remove the host from all groups
             for group in dataset.groups.values_mut() {
                 group.hosts.retain(|h| h != hostname);
@@ -161,16 +220,19 @@ impl CacheEntry {
 
     // Deletes a host from the cache
     pub fn remove_host(&mut self, hostname: &str) {
+        self.invalidate_serialized();
         let dataset = Arc::make_mut(&mut self.dataset);
         dataset.hostvars.remove(hostname);
-        self.host_timestamps.remove(hostname);
+        Arc::make_mut(&mut self.host_timestamps).remove(hostname);
         for group in dataset.groups.values_mut() {
             group.hosts.retain(|h| h != hostname);
         }
     }
 
     pub fn update_group(&mut self, group_name: &str, partial_dataset: Dataset) {
+        self.invalidate_serialized();
         let dataset = Arc::make_mut(&mut self.dataset);
+        let timestamps = Arc::make_mut(&mut self.host_timestamps);
 
         // Only update the hosts that belong to the group
         if let Some(group) = dataset.groups.get(group_name) {
@@ -178,7 +240,7 @@ impl CacheEntry {
             for hostname in &group.hosts {
                 if let Some(vars) = partial_dataset.hostvars.get(hostname) {
                     dataset.hostvars.insert(hostname.clone(), vars.clone());
-                    self.host_timestamps.insert(hostname.clone(), now);
+                    timestamps.insert(hostname.clone(), now);
                 }
             }
         }
@@ -371,6 +433,31 @@ mod tests {
         assert_eq!(entry.dataset.hostvars.len(), 1);
         assert!(!entry.dataset.hostvars.contains_key("batou.section9.net"));
         assert!(!entry.host_timestamps.contains_key("batou.section9.net"));
+    }
+
+    #[test]
+    fn serialized_json_reuses_the_same_buffer() {
+        let entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let first_ptr = entry.serialized_json().unwrap().bytes.as_ptr();
+        // Second call and a clone of the entry both share the same buffer
+        assert_eq!(entry.serialized_json().unwrap().bytes.as_ptr(), first_ptr);
+        let clone = entry.clone();
+        assert_eq!(clone.serialized_json().unwrap().bytes.as_ptr(), first_ptr);
+    }
+
+    #[test]
+    fn serialized_json_invalidated_by_mutation() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let before = entry.serialized_json().unwrap().etag.clone();
+
+        entry.update_host("togusa.section9.net".to_string(), HashMap::new());
+
+        let after = entry.serialized_json().unwrap().etag.clone();
+        assert_ne!(before, after, "a mutation must produce a new ETag");
+        // And the new bytes actually contain the new host
+        let json: serde_json::Value =
+            serde_json::from_slice(&entry.serialized_json().unwrap().bytes).unwrap();
+        assert!(json["hostvars"]["togusa.section9.net"].is_object());
     }
 
     #[test]

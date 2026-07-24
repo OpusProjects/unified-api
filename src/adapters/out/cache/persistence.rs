@@ -149,6 +149,14 @@ pub async fn load_or_warn(cache: &dyn CachePort, path: &Path) {
 // immediately, so we skip it — there is nothing worth saving at boot beyond
 // what was just loaded.
 pub fn start_snapshot_task(cache: Arc<dyn CachePort>, path: PathBuf, interval_seconds: u64) {
+    // Only write when something actually changed since the last successful
+    // save. The generation is read BEFORE saving: writes that land mid-save
+    // bump it past `saved_generation`, so the next tick saves again — an
+    // unchanged cache is skipped, a change is never lost. Captured here,
+    // synchronously, right after the boot snapshot was loaded: what is in the
+    // cache at this moment is exactly what is on disk, so it counts as saved.
+    let mut saved_generation = cache.generation();
+
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(interval_seconds));
         ticker.tick().await;
@@ -157,8 +165,14 @@ pub fn start_snapshot_task(cache: Arc<dyn CachePort>, path: PathBuf, interval_se
 
         loop {
             ticker.tick().await;
+            let generation = cache.generation();
+            if generation == saved_generation {
+                tracing::debug!(path = %path.display(), "Cache unchanged, snapshot skipped");
+                continue;
+            }
             match save(&*cache, &path).await {
                 Ok(count) => {
+                    saved_generation = generation;
                     tracing::debug!(path = %path.display(), entries = count, "Cache snapshot saved");
                 }
                 Err(e) => error!(path = %path.display(), error = %e, "Cache snapshot failed"),

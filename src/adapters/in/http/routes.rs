@@ -6,6 +6,7 @@ use axum::{
     response::Redirect,
     routing::{get, post, put},
 };
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::{Level, warn};
@@ -72,6 +73,13 @@ pub fn create_router(
         Some(cors) => router.layer(cors),
         None => router,
     };
+
+    // Gzip responses when the client sends Accept-Encoding: gzip (clients
+    // that don't are served identity bytes, unchanged). Inventory JSON
+    // repeats the same var names for every host, so it compresses ~10x —
+    // for WAN consumers (remote federation) transfer time dominates, and
+    // this trades a little CPU for most of that.
+    let router = router.layer(CompressionLayer::new());
 
     // Outermost layer: one span + response log per request (method, path,
     // status, latency) at INFO, so there are access logs, not just business

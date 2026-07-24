@@ -20,6 +20,7 @@ without each run hammering the upstream systems of record behind it.
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
 - **SSH connector**: gathers Ansible facts from whole fleets in parallel
 - **In-memory cache with TTLs**: per-dataset, per-host and per-group freshness, no database
+- **Gzip responses**: inventory JSON compresses ~10× for clients sending `Accept-Encoding: gzip`
 - **Enrichers**: post-process cached data on a schedule or on demand
 - **Output endpoints**: turn cached datasets into the format each consumer needs
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API

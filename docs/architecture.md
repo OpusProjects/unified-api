@@ -71,8 +71,11 @@ Enrichers with an interval get the same treatment via `application::enrich::run_
 ## Concurrency model
 
 Handlers and scheduler tasks run concurrently on the tokio runtime and share the
-cache. Reads take a cloned snapshot (`CachePort::get`). **All mutations go through
-the atomic operations** — `CachePort::update(key, f)` and
+cache. Reads take a cloned snapshot (`CachePort::get`) — cheap, because the entry
+holds its dataset behind `Arc`: the clone shares the data, and a writer that
+catches up later copy-on-writes (`Arc::make_mut`) instead of disturbing readers
+(see [caching.md](caching.md#the-read-path-shared-data-serialize-once-json)).
+**All mutations go through the atomic operations** — `CachePort::update(key, f)` and
 `merge_or_insert(key, dataset, ttl, f)` — which run the caller's closure under the
 cache's own lock, so read-modify-write cycles cannot lose concurrent writes.
 The get → modify → set pattern is forbidden (it operates on a clone and silently

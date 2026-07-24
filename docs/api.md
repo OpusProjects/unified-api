@@ -56,7 +56,7 @@ unaffected). Browser-based consumers need their origins listed in
 | Route | Meaning |
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness and host counts |
-| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); paginate/filter with `?limit=&offset=&host=&group=` |
+| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=` |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=` |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
@@ -108,6 +108,40 @@ GET /api/v1/sources/src-d42/dataset?group=linux&limit=50
 (and returns only that group); unknown names are `404`. Group membership
 lists are always included — they're tiny next to the hostvars, which carry
 the facts.
+
+### Conditional requests and compression
+
+Most consumers poll: AWX pulls the same inventory on a schedule, federation
+peers re-fetch sources that usually haven't changed. Two standard HTTP
+mechanisms keep that cheap, and both are transparent to clients that ignore
+them:
+
+**ETag / If-None-Match.** Every plain `/dataset` response (no query
+parameters) carries a strong `ETag` derived from the dataset's serialized
+bytes. Send it back on the next poll and the server answers `304 Not
+Modified` with an empty body while the dataset is unchanged — no
+serialization, no transfer, just a header comparison:
+
+```bash
+$ curl -sD- localhost:8182/api/v1/sources/src-d42/dataset -o inventory.json | grep -i etag
+etag: "cafe1234deadbeef-524288"
+
+# Later polls: full body only when something actually changed
+$ curl -s -H 'If-None-Match: "cafe1234deadbeef-524288"' \
+       -w '%{http_code}\n' localhost:8182/api/v1/sources/src-d42/dataset
+304
+```
+
+The ETag changes whenever the dataset does (sync, enricher, host PUT/DELETE)
+and is stable across restarts for identical data. Filtered/paginated queries
+don't carry one — their responses are parameterized, and the interesting
+saving is on the full pulls anyway.
+
+**Gzip.** Responses are compressed when the client sends
+`Accept-Encoding: gzip` (`curl --compressed`, and most HTTP libraries, do by
+default). Inventory JSON repeats the same variable names for every host, so
+it typically shrinks ~10×, which matters for WAN consumers like remote
+federation. Clients that don't advertise gzip get identity bytes, unchanged.
 
 ## Enrichers
 

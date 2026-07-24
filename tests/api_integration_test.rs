@@ -32,6 +32,12 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
 // (build_app_with_demo_data), but test data has no place in the library —
 // it's a fixture of these tests.
 fn app_with_demo_data() -> axum::Router {
+    app_with_demo_data_and_state().0
+}
+
+// Same fixture, but also handing back the AppState for tests that need to
+// mutate the cache mid-test (e.g. to observe an ETag change)
+fn app_with_demo_data_and_state() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
     let (app, state) = unified_api::AppBuilder::new().build_with_state();
 
     let demo_dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(
@@ -69,7 +75,7 @@ fn app_with_demo_data() -> axum::Router {
         unified_api::domain::cache_entry::CacheEntry::new(demo_dataset, 3600),
     );
 
-    app
+    (app, state)
 }
 
 // =========================================================================
@@ -611,4 +617,122 @@ async fn dataset_offset_beyond_total_returns_empty_page() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["total_hosts"], 2);
     assert_eq!(json["returned"], 0);
+}
+
+// =========================================================================
+// Tests: ETag / If-None-Match and compression on the dataset endpoint
+// =========================================================================
+
+#[tokio::test]
+async fn dataset_etag_flow() {
+    let (app, _state) = app_with_demo_data_and_state();
+
+    // First request: 200 with an ETag header
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sources/src-demo/dataset")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get("etag")
+        .expect("plain dataset response must carry an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Same ETag in If-None-Match: 304 with an empty body
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sources/src-demo/dataset")
+                .header("if-none-match", &etag)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(body.is_empty());
+
+    // A stale ETag: full 200 again
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sources/src-demo/dataset")
+                .header("if-none-match", "\"deadbeef-0\"")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn dataset_etag_changes_when_data_changes() {
+    let (app, state) = app_with_demo_data_and_state();
+
+    let etag_of = |app: axum::Router| async move {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/sources/src-demo/dataset")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response
+            .headers()
+            .get("etag")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let before = etag_of(app.clone()).await;
+
+    state.cache.update("src-demo", &mut |entry| {
+        entry.update_host(
+            "togusa.section9.net".to_string(),
+            std::collections::HashMap::new(),
+        );
+    });
+
+    let after = etag_of(app).await;
+    assert_ne!(before, after, "mutating the dataset must change the ETag");
+}
+
+#[tokio::test]
+async fn dataset_compresses_when_client_accepts_gzip() {
+    let (app, _state) = app_with_demo_data_and_state();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sources/src-demo/dataset")
+                .header("accept-encoding", "gzip")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-encoding")
+            .map(|v| v.to_str().unwrap()),
+        Some("gzip")
+    );
 }

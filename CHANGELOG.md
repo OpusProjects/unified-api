@@ -6,24 +6,45 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.8] - 2026-07-24
 
+### Added
+
+- `ETag` / `If-None-Match` support on plain `GET /dataset`: responses carry a
+  strong ETag derived from the serialized dataset; a matching `If-None-Match`
+  answers `304 Not Modified` with no body. The ETag is stable across restarts
+  for identical data and changes on any mutation (sync, enricher, host
+  PUT/DELETE).
+- Gzip response compression (tower-http `CompressionLayer`) when the client
+  sends `Accept-Encoding: gzip`; clients that don't are unaffected.
+
 ### Fixed
 
 - Reduced peak memory of full-dataset queries on large sources (e.g. SSH
   facts). The plain `/dataset` path built an intermediate `serde_json::Value`
   tree and then serialized it, holding up to three copies of the dataset at
-  once; it now serializes directly to bytes.
-- `CacheEntry` now holds its dataset behind `Arc`, so cache reads share the
-  cached dataset instead of deep-copying it. Concurrent full-dataset pulls,
-  output endpoint renders and disk snapshots no longer multiply memory by the
-  dataset size; writers copy-on-write (`Arc::make_mut`), so readers keep an
-  immutable snapshot while a sync mutates the entry.
+  once; it now serializes directly to bytes. The paginated/filtered path got
+  the same treatment (a borrowing serializer instead of a `Value` envelope).
+- `CacheEntry` now holds its dataset and host timestamps behind `Arc`, so
+  cache reads share the cached data instead of deep-copying it. Concurrent
+  full-dataset pulls, output endpoint renders and disk snapshots no longer
+  multiply memory by the dataset size; writers copy-on-write
+  (`Arc::make_mut`), so readers keep an immutable snapshot while a sync
+  mutates the entry.
+- `GET /status` no longer scans every group's member list for every host when
+  resolving group TTL overrides (quadratic on large sources) — overrides are
+  resolved into a per-host map once per request.
 
 ### Changed
 
+- Plain `/dataset` responses are served from a serialize-once cache: the JSON
+  is built the first time a changed dataset is read and shared by every
+  response until the next mutation.
 - Plain `/dataset` responses are semantically identical JSON but no longer
   byte-identical: object keys are no longer sorted alphabetically (a side
   effect of the removed `Value` tree), so byte-level diffing/checksums of the
-  response will see changes.
+  response will see changes (use the new ETag instead).
+- The periodic cache snapshot is skipped when nothing changed since the last
+  save (tracked by a new `CachePort::generation` counter) — an idle instance
+  no longer rewrites an identical file every interval.
 
 ## [0.3.7] - 2026-07-23
 

@@ -40,10 +40,36 @@ all yet, the full returned dataset seeds the entry.
 **Enrichers** merge their partial output; their `remove_hosts` deletes hosts from
 `hostvars`, the per-host timestamps, and every group's member list.
 
+## The read path: shared data, serialize-once JSON
+
+Serving a dataset used to mean copying it — once out of the cache, once into
+JSON. Neither copy survives today, which is worth understanding because it
+shapes both memory behavior and the HTTP features built on top:
+
+- **Reads share, they don't copy.** A `CacheEntry` holds its `Dataset` (and its
+  per-host timestamps) behind `Arc` — a reference-counted pointer. `CachePort::get`
+  still returns a snapshot, but taking it just bumps a counter; fifty concurrent
+  full-dataset requests hold fifty references to *one* dataset, not fifty copies.
+- **Writers copy-on-write.** A mutation goes through `Arc::make_mut`: if no
+  reader currently shares the data it mutates in place (no copy at all); if one
+  does, the dataset is cloned once and the reader keeps its consistent snapshot.
+  Readers are never blocked and never observe a half-applied merge.
+- **JSON is serialized at most once per change.** Each entry lazily caches its
+  serialized bytes plus a strong ETag derived from them. The first
+  `GET /dataset` after a change pays for serialization; every request after
+  that gets the same shared buffer until the next write invalidates it. This
+  is what makes the API's `ETag`/`If-None-Match` support (see
+  [api.md](api.md#conditional-requests-and-compression)) essentially free.
+
+The practical consequence: worst-case memory for a source is roughly *two*
+copies of its dataset (a sync landing while old readers still hold the previous
+version), no longer `1 + number of concurrent readers`.
+
 ## Atomicity guarantees
 
-`CachePort::get` returns a **clone** — a read snapshot. All mutations therefore go
-through two atomic operations implemented on DashMap's entry API:
+`CachePort::get` returns a **clone** — a read snapshot (cheap, per the section
+above). All mutations therefore go through two atomic operations implemented on
+DashMap's entry API:
 
 - `update(key, f)` — run `f` against the *live* entry under the cache lock;
   returns `false` if the key is absent
@@ -80,9 +106,14 @@ Behavior:
   syncs run. A missing file just means "start empty"; a corrupt or
   version-mismatched file is logged and ignored — persistence never blocks
   startup.
-- **Runtime:** every `interval_seconds` the whole cache is serialized and
-  written atomically (temp file + rename), so a crash mid-write leaves the
-  previous snapshot intact. A final snapshot is written on graceful shutdown.
+- **Runtime:** every `interval_seconds` the cache is serialized and written
+  atomically (temp file + rename), so a crash mid-write leaves the previous
+  snapshot intact. A final snapshot is written on graceful shutdown.
+- **Unchanged means untouched:** the cache keeps a generation counter that
+  every write bumps (`CachePort::generation`). The snapshot task compares it
+  to the generation of the last successful save and skips the tick when
+  nothing changed — an idle instance does zero serialization and zero disk
+  writes, instead of rewriting an identical file every interval.
 - **Freshness survives:** snapshots store per-entry and per-host *ages*, not
   timestamps, and loading reconstructs them — an entry that was 40s old with a
   60s TTL comes back 40s old (plus the downtime), and anything past its TTL is

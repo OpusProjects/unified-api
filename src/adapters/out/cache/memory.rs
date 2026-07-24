@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 
@@ -11,6 +13,10 @@ use crate::ports::cache::CachePort;
 pub struct MemoryCache {
     // DashMap<String, CacheEntry> = HashMap<String, CacheEntry> but thread-safe
     store: DashMap<String, CacheEntry>,
+    // AtomicU64 = a u64 that threads can increment without a lock.
+    // Relaxed ordering is enough: the counter only answers "did anything
+    // change?", it never synchronizes access to other data.
+    generation: AtomicU64,
 }
 
 impl Default for MemoryCache {
@@ -23,7 +29,12 @@ impl MemoryCache {
     pub fn new() -> Self {
         Self {
             store: DashMap::new(),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    fn bump_generation(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -34,6 +45,7 @@ impl CachePort for MemoryCache {
     fn set(&self, key: &str, entry: CacheEntry) {
         // .insert() adds or overwrites — like dict[key] = value in Python
         self.store.insert(key.to_string(), entry);
+        self.bump_generation();
     }
 
     fn get(&self, key: &str) -> Option<CacheEntry> {
@@ -44,7 +56,9 @@ impl CachePort for MemoryCache {
     }
 
     fn remove(&self, key: &str) {
-        self.store.remove(key);
+        if self.store.remove(key).is_some() {
+            self.bump_generation();
+        }
     }
 
     fn keys(&self) -> Vec<String> {
@@ -69,10 +83,15 @@ impl CachePort for MemoryCache {
         match self.store.get_mut(key) {
             Some(mut guard) => {
                 f(guard.value_mut());
+                self.bump_generation();
                 true
             }
             None => false,
         }
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
     }
 
     fn merge_or_insert(
@@ -90,6 +109,7 @@ impl CachePort for MemoryCache {
                 vacant.insert(CacheEntry::new(dataset, ttl_seconds));
             }
         }
+        self.bump_generation();
     }
 }
 
@@ -116,6 +136,29 @@ mod tests {
 
         let result = cache.get("src-1");
         assert!(result.is_some()); // is_some() = the Option has a value (not None)
+    }
+
+    #[test]
+    fn generation_bumps_on_writes_only() {
+        let cache = MemoryCache::new();
+        let g0 = cache.generation();
+
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+        let g1 = cache.generation();
+        assert!(g1 > g0);
+
+        // Reads don't bump
+        let _ = cache.get("src-1");
+        let _ = cache.keys();
+        let _ = cache.export();
+        assert_eq!(cache.generation(), g1);
+
+        // Removing a key that doesn't exist doesn't bump
+        cache.remove("ghost");
+        assert_eq!(cache.generation(), g1);
+
+        cache.remove("src-1");
+        assert!(cache.generation() > g1);
     }
 
     #[test]

@@ -27,6 +27,13 @@ pub trait CachePort: Send + Sync {
     // caller can serialize them without holding any cache lock.
     fn export(&self) -> Vec<(String, CacheEntry)>;
 
+    // A counter that increases on every write (set/remove/update/merge).
+    // "Has anything changed since I last looked?" becomes comparing two
+    // numbers — the disk persistence uses it to skip snapshots of an
+    // unchanged cache. It says nothing about WHAT changed, only THAT
+    // something did.
+    fn generation(&self) -> u64;
+
     // Modify an existing cache entry atomically.
     //
     // Why? get() returns a COPY: the pattern get → modify → set

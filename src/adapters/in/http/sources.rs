@@ -1,8 +1,8 @@
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,6 +10,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::domain::dataset::{Group, HostVars};
 
 // Read from the sources cache: list, full dataset, and per-host status.
 // Write operations live in sync.rs, enrichers.rs, and hosts.rs.
@@ -98,7 +99,8 @@ impl DatasetParams {
         DatasetParams
     ),
     responses(
-        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups). With host/group/limit/offset: a paginated envelope with total_hosts, offset, limit, hostvars and groups"),
+        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset: a paginated envelope with total_hosts, offset, limit, hostvars and groups"),
+        (status = 304, description = "If-None-Match matched the current ETag — dataset unchanged, no body (plain queries only)"),
         (status = 403, description = "API key not allowed to read this source"),
         (status = 404, description = "Source not in cache, or host/group not found")
     )
@@ -108,25 +110,43 @@ pub async fn get_source_dataset(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<DatasetParams>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
     if !auth.permissions.allows_source(&id) {
         return Err(StatusCode::FORBIDDEN);
     }
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    // No params = the raw Dataset, semantically identical to what consumers
-    // (AWX inventory scripts, the remote-federation pattern) already parse —
-    // but not byte-identical: serializing the struct directly skips the
-    // intermediate Value tree (whose BTreeMap sorted object keys), so key
-    // order now follows HashMap iteration. Serializing straight to bytes
-    // avoids holding dataset + Value tree + output buffer at once, which on
-    // large datasets can triple peak memory.
+    // No params = the raw Dataset, as consumers (AWX inventory scripts, the
+    // remote-federation pattern) already parse it. The bytes come from the
+    // entry's serialize-once cache: polls of an unchanged dataset share one
+    // buffer instead of re-serializing on every request, and the ETag lets a
+    // client that sends If-None-Match skip even the transfer.
     if params.is_plain() {
-        let body =
-            serde_json::to_vec(&entry.dataset).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let cached = entry
+            .serialized_json()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if let Some(if_none_match) = headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|v| v.to_str().ok())
+            && if_none_match.split(',').any(|candidate| {
+                let candidate = candidate.trim();
+                candidate == cached.etag || candidate == "*"
+            })
+        {
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, &cached.etag)
+                .body(axum::body::Body::empty())
+                .unwrap());
+        }
+
         return Ok(Response::builder()
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(body))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ETAG, &cached.etag)
+            // Bytes clone = shared buffer, not a copy
+            .body(axum::body::Body::from(cached.bytes.clone()))
             .unwrap());
     }
 
@@ -165,14 +185,14 @@ pub async fn get_source_dataset(
         .take(params.limit.unwrap_or(usize::MAX))
         .collect();
 
-    let hostvars: HashMap<&String, &crate::domain::dataset::HostVars> = page
+    let hostvars: HashMap<&String, &HostVars> = page
         .iter()
         .filter_map(|host| entry.dataset.hostvars.get_key_value(*host))
         .collect();
 
     // With a group filter only that group is returned; otherwise all groups
     // (membership lists are tiny next to hostvars, which carry the facts)
-    let groups: HashMap<&String, &crate::domain::dataset::Group> = match params.group {
+    let groups: HashMap<&String, &Group> = match params.group {
         Some(ref group) => entry
             .dataset
             .groups
@@ -182,16 +202,35 @@ pub async fn get_source_dataset(
         None => entry.dataset.groups.iter().collect(),
     };
 
-    let json = serde_json::json!({
-        "source_id": id,
-        "total_hosts": total_hosts,
-        "offset": offset,
-        "limit": params.limit,
-        "returned": hostvars.len(),
-        "hostvars": hostvars,
-        "groups": groups,
-    });
-    Ok(Json(json).into_response())
+    // A borrowing struct serialized straight to bytes: no intermediate Value
+    // tree (same reasoning as the plain path — a group filter can select most
+    // of a large source) and no clone of the selected hostvars.
+    #[derive(Serialize)]
+    struct DatasetPage<'a> {
+        source_id: &'a str,
+        total_hosts: usize,
+        offset: usize,
+        limit: Option<usize>,
+        returned: usize,
+        hostvars: HashMap<&'a String, &'a HostVars>,
+        groups: HashMap<&'a String, &'a Group>,
+    }
+
+    let body = serde_json::to_vec(&DatasetPage {
+        source_id: &id,
+        total_hosts,
+        offset,
+        limit: params.limit,
+        returned: hostvars.len(),
+        hostvars,
+        groups,
+    })
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap())
 }
 
 // IntoParams = utoipa generates documentation for query params
@@ -268,23 +307,34 @@ pub async fn source_status(
         entry.dataset.hostvars.keys().cloned().collect()
     };
 
+    // Resolve group TTL overrides into a per-host map ONCE, instead of
+    // scanning every group's member list for every host — that scan made a
+    // full status quadratic on large sources. Host-level overrides still win
+    // (checked first below). When a host sits in several groups that carry
+    // an override the winner is arbitrary, exactly as before, when it
+    // depended on group iteration order.
+    let group_ttl_by_host: HashMap<&str, u64> = source
+        .map(|s| {
+            let mut by_host: HashMap<&str, u64> = HashMap::new();
+            for (group_name, ttl) in &s.ttl_overrides.groups {
+                if let Some(group) = entry.dataset.groups.get(group_name) {
+                    for hostname in &group.hosts {
+                        by_host.entry(hostname.as_str()).or_insert(*ttl);
+                    }
+                }
+            }
+            by_host
+        })
+        .unwrap_or_default();
+
     let mut hosts: Vec<HostStatus> = hostnames
         .iter()
         .filter_map(|hostname| {
             let age = entry.host_age_seconds(hostname)?;
 
             let effective_ttl = source
-                .and_then(|s| {
-                    s.ttl_overrides.hosts.get(hostname).copied().or_else(|| {
-                        entry.dataset.groups.iter().find_map(|(group_name, group)| {
-                            if group.hosts.contains(hostname) {
-                                s.ttl_overrides.groups.get(group_name).copied()
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                })
+                .and_then(|s| s.ttl_overrides.hosts.get(hostname).copied())
+                .or_else(|| group_ttl_by_host.get(hostname.as_str()).copied())
                 .unwrap_or(entry.ttl.as_secs());
 
             Some(HostStatus {

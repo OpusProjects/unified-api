@@ -114,6 +114,15 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
 - **Metrics:** `GET /metrics` (Prometheus, public like the health probes) — sync,
   enrich and endpoint counters + duration histograms. The recorder is a process
   global installed once via `OnceLock`, so tests building many apps share it.
+- **Read path is shared, not copied:** `CacheEntry` holds its dataset (and
+  host timestamps) behind `Arc`; reads bump a refcount, writers go through
+  `Arc::make_mut` (copy-on-write). The entry also caches its serialized JSON +
+  ETag (invalidated by every mutator), so plain `/dataset` responses reuse one
+  buffer and support `If-None-Match` → `304`.
+- **Responses gzip** when the client sends `Accept-Encoding: gzip`
+  (tower-http `CompressionLayer`).
+- **Snapshots skip when idle:** `CachePort::generation()` (bumped on every
+  write) lets the persistence task skip disk writes when nothing changed.
 - **CORS is off by default:** opt in with `server.cors_allowed_origins` (`["*"]`
   = any). No configured origins = no CORS layer at all.
 - **Auth:** optional static key (`UNIFIED_API_KEY`); constant-time compare;

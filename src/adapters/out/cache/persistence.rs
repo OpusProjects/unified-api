@@ -32,7 +32,10 @@ struct SnapshotFile {
 
 #[derive(Serialize, Deserialize)]
 struct SnapshotEntry {
-    dataset: Dataset,
+    // Arc<Dataset> serializes exactly like a plain Dataset (serde "rc"
+    // feature); holding the Arc means building a snapshot shares the cached
+    // dataset instead of deep-copying it
+    dataset: Arc<Dataset>,
     ttl_seconds: u64,
     age_seconds: u64,
     host_ages: HashMap<String, u64>,

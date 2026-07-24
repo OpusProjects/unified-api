@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -28,12 +29,14 @@ impl OutputPort for ProcessOutput {
         args: &[String],
         config: &HashMap<String, String>,
         params: &serde_json::Value,
-        datasets: &HashMap<String, Dataset>,
+        datasets: &HashMap<String, Arc<Dataset>>,
     ) -> Pin<Box<dyn Future<Output = OutputResult> + Send + '_>> {
         let script_path = script_path.to_string();
         let args = args.to_vec();
         let config = config.clone();
         let params = params.clone();
+        // Cloning a map of Arcs only bumps reference counts — the datasets
+        // themselves are shared with the cache, not copied
         let datasets = datasets.clone();
 
         Box::pin(async move {

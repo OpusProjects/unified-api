@@ -20,7 +20,7 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # instances. rustls instead of openssl to keep the build self-contained.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 russh = "0.62.1"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }   # rc: Serialize/Deserialize for Arc<T>
 serde_json = "1"
 serde_yaml_ng = "0.10"   # maintained drop-in fork of the deprecated serde_yaml
 subtle = "2"

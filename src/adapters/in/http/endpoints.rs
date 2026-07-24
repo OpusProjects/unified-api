@@ -91,8 +91,9 @@ pub async fn run_endpoint(
     let endpoint = state.endpoints.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
 
-    // Collect datasets from configured sources
-    let mut datasets: HashMap<String, Dataset> = HashMap::new();
+    // Collect datasets from configured sources (Arc clones — shared with the
+    // cache, not deep copies)
+    let mut datasets: HashMap<String, Arc<Dataset>> = HashMap::new();
     let mut missing: Vec<String> = Vec::new();
 
     for source_id in &endpoint.source_ids {

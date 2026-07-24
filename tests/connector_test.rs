@@ -207,7 +207,7 @@ mod output {
         let mut datasets = HashMap::new();
         datasets.insert(
             "src-a".to_string(),
-            dataset_with_host("motoko.section9.net"),
+            std::sync::Arc::new(dataset_with_host("motoko.section9.net")),
         );
 
         let result = output

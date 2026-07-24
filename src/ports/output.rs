@@ -2,6 +2,7 @@ use crate::domain::dataset::Dataset;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub type OutputResult = Result<String, OutputError>;
 
@@ -21,6 +22,9 @@ pub trait OutputPort: Send + Sync {
         args: &[String],
         config: &HashMap<String, String>,
         params: &serde_json::Value,
-        datasets: &HashMap<String, Dataset>,
+        // Arc<Dataset> so handing datasets to an output run shares the cached
+        // data instead of deep-copying it (serde's "rc" feature serializes an
+        // Arc<T> exactly like a plain T)
+        datasets: &HashMap<String, Arc<Dataset>>,
     ) -> Pin<Box<dyn Future<Output = OutputResult> + Send + '_>>;
 }

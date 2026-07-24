@@ -11,8 +11,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Reduced peak memory of full-dataset queries on large sources (e.g. SSH
   facts). The plain `/dataset` path built an intermediate `serde_json::Value`
   tree and then serialized it, holding up to three copies of the dataset at
-  once; it now serializes directly to bytes. Note: each request still clones
-  the cached dataset, so concurrent full pulls remain proportionally expensive.
+  once; it now serializes directly to bytes.
+- `CacheEntry` now holds its dataset behind `Arc`, so cache reads share the
+  cached dataset instead of deep-copying it. Concurrent full-dataset pulls,
+  output endpoint renders and disk snapshots no longer multiply memory by the
+  dataset size; writers copy-on-write (`Arc::make_mut`), so readers keep an
+  immutable snapshot while a sync mutates the entry.
 
 ### Changed
 

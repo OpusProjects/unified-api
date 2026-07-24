@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::dataset::{Dataset, HostVars};
@@ -9,7 +10,13 @@ use super::dataset::{Dataset, HostVars};
 // - group level: resolved by querying the group's hosts
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
-    pub dataset: Dataset,
+    // Arc<Dataset> = shared, reference-counted pointer (like a shared_ptr in
+    // C++). Cloning a CacheEntry — which CachePort::get does on EVERY read —
+    // only bumps a counter instead of deep-copying the whole dataset, so
+    // concurrent full-dataset requests no longer multiply memory usage.
+    // Reads are transparent thanks to Deref (entry.dataset.hostvars just
+    // works); writers go through Arc::make_mut below.
+    pub dataset: Arc<Dataset>,
     pub fetched_at: Instant,
     pub ttl: Duration,
     // Individual timestamp per host — allows knowing when each one was refreshed
@@ -18,7 +25,12 @@ pub struct CacheEntry {
 }
 
 impl CacheEntry {
-    pub fn new(dataset: Dataset, ttl_seconds: u64) -> Self {
+    // `impl Into<Arc<Dataset>>` accepts BOTH a plain Dataset and an already
+    // shared Arc<Dataset> (Into<Arc<T>> exists for both), so callers that
+    // just built a dataset and callers restoring a snapshot don't need to
+    // wrap or unwrap anything.
+    pub fn new(dataset: impl Into<Arc<Dataset>>, ttl_seconds: u64) -> Self {
+        let dataset: Arc<Dataset> = dataset.into();
         let now = Instant::now();
 
         // When creating, all hosts have the same timestamp
@@ -46,7 +58,7 @@ impl CacheEntry {
     // reasonable TTL: we keep the data but with a zero TTL, making it served
     // as stale until the next sync refreshes it.
     pub fn restore(
-        dataset: Dataset,
+        dataset: impl Into<Arc<Dataset>>,
         ttl_seconds: u64,
         age_seconds: u64,
         host_ages: HashMap<String, u64>,
@@ -67,7 +79,7 @@ impl CacheEntry {
             .collect();
 
         Self {
-            dataset,
+            dataset: dataset.into(),
             fetched_at,
             ttl,
             host_timestamps,
@@ -107,8 +119,15 @@ impl CacheEntry {
     // Updates a single host: its vars and its timestamp
     // &mut self = MUTABLE reference — we can modify the instance
     // This is the first time we see &mut: until now everything was &self (read-only)
+    //
+    // Arc::make_mut = clone-on-write: if nobody else holds this Arc, it hands
+    // out a &mut to the existing Dataset (no copy at all); if a concurrent
+    // reader still holds a clone, it copies the Dataset first so the reader
+    // keeps seeing an immutable snapshot. Either way mutation is safe and
+    // readers are never blocked or torn.
     pub fn update_host(&mut self, hostname: String, vars: HostVars) {
-        self.dataset.hostvars.insert(hostname.clone(), vars);
+        let dataset = Arc::make_mut(&mut self.dataset);
+        dataset.hostvars.insert(hostname.clone(), vars);
         self.host_timestamps.insert(hostname, Instant::now());
     }
 
@@ -116,24 +135,25 @@ impl CacheEntry {
     // Also processes remove_hosts if they come.
     pub fn merge_dataset(&mut self, partial: Dataset) {
         let now = Instant::now();
+        let dataset = Arc::make_mut(&mut self.dataset);
 
         // Merge hostvars
         for (hostname, vars) in partial.hostvars {
-            self.dataset.hostvars.insert(hostname.clone(), vars);
+            dataset.hostvars.insert(hostname.clone(), vars);
             self.host_timestamps.insert(hostname, now);
         }
 
         // Merge groups
         for (group_name, group) in partial.groups {
-            self.dataset.groups.insert(group_name, group);
+            dataset.groups.insert(group_name, group);
         }
 
         // Remove hosts
         for hostname in &partial.remove_hosts {
-            self.dataset.hostvars.remove(hostname);
+            dataset.hostvars.remove(hostname);
             self.host_timestamps.remove(hostname);
             // Remove the host from all groups
-            for group in self.dataset.groups.values_mut() {
+            for group in dataset.groups.values_mut() {
                 group.hosts.retain(|h| h != hostname);
             }
         }
@@ -141,20 +161,23 @@ impl CacheEntry {
 
     // Deletes a host from the cache
     pub fn remove_host(&mut self, hostname: &str) {
-        self.dataset.hostvars.remove(hostname);
+        let dataset = Arc::make_mut(&mut self.dataset);
+        dataset.hostvars.remove(hostname);
         self.host_timestamps.remove(hostname);
-        for group in self.dataset.groups.values_mut() {
+        for group in dataset.groups.values_mut() {
             group.hosts.retain(|h| h != hostname);
         }
     }
 
     pub fn update_group(&mut self, group_name: &str, partial_dataset: Dataset) {
+        let dataset = Arc::make_mut(&mut self.dataset);
+
         // Only update the hosts that belong to the group
-        if let Some(group) = self.dataset.groups.get(group_name) {
+        if let Some(group) = dataset.groups.get(group_name) {
             let now = Instant::now();
             for hostname in &group.hosts {
                 if let Some(vars) = partial_dataset.hostvars.get(hostname) {
-                    self.dataset.hostvars.insert(hostname.clone(), vars.clone());
+                    dataset.hostvars.insert(hostname.clone(), vars.clone());
                     self.host_timestamps.insert(hostname.clone(), now);
                 }
             }
@@ -162,7 +185,7 @@ impl CacheEntry {
 
         // Update the group's vars if they come
         if let Some(new_group) = partial_dataset.groups.get(group_name)
-            && let Some(existing_group) = self.dataset.groups.get_mut(group_name)
+            && let Some(existing_group) = dataset.groups.get_mut(group_name)
         {
             existing_group.vars = new_group.vars.clone();
         }

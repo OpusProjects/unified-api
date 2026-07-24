@@ -2,6 +2,7 @@ use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -107,18 +108,26 @@ pub async fn get_source_dataset(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<DatasetParams>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Response, StatusCode> {
     if !auth.permissions.allows_source(&id) {
         return Err(StatusCode::FORBIDDEN);
     }
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
-    // No params = the raw Dataset, byte-compatible with what consumers
-    // (AWX inventory scripts, the remote-federation pattern) already parse
+    // No params = the raw Dataset, semantically identical to what consumers
+    // (AWX inventory scripts, the remote-federation pattern) already parse —
+    // but not byte-identical: serializing the struct directly skips the
+    // intermediate Value tree (whose BTreeMap sorted object keys), so key
+    // order now follows HashMap iteration. Serializing straight to bytes
+    // avoids holding dataset + Value tree + output buffer at once, which on
+    // large datasets can triple peak memory.
     if params.is_plain() {
-        let json =
-            serde_json::to_value(&entry.dataset).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        return Ok(Json(json));
+        let body =
+            serde_json::to_vec(&entry.dataset).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        return Ok(Response::builder()
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap());
     }
 
     // Which hosts survive the filter, sorted so limit/offset pages are stable
@@ -182,7 +191,7 @@ pub async fn get_source_dataset(
         "hostvars": hostvars,
         "groups": groups,
     });
-    Ok(Json(json))
+    Ok(Json(json).into_response())
 }
 
 // IntoParams = utoipa generates documentation for query params

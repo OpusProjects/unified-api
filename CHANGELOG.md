@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.8] - 2026-07-24
+
+### Fixed
+
+- Reduced peak memory of full-dataset queries on large sources (e.g. SSH
+  facts). The plain `/dataset` path built an intermediate `serde_json::Value`
+  tree and then serialized it, holding up to three copies of the dataset at
+  once; it now serializes directly to bytes. Note: each request still clones
+  the cached dataset, so concurrent full pulls remain proportionally expensive.
+
+### Changed
+
+- Plain `/dataset` responses are semantically identical JSON but no longer
+  byte-identical: object keys are no longer sorted alphabetically (a side
+  effect of the removed `Value` tree), so byte-level diffing/checksums of the
+  response will see changes.
+
 ## [0.3.7] - 2026-07-23
 
 ### Changed

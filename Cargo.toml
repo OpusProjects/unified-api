@@ -12,7 +12,10 @@ publish = false
 [dependencies]
 axum = "0.8"
 bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
-base64 = "0.23"          # Basic auth header for git-over-https credentials
+# Basic auth header for git-over-https credentials. default-features = false
+# drops base64's default `simd-unsafe` feature: we encode one short header per
+# git operation, so the SIMD engines' unsafe code buys nothing here.
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 dashmap = "6"
 futures = "0.3"
 metrics = "0.24.6"

@@ -186,6 +186,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0] - 2026-07-08
 
+### Security
+
+- Update `crossbeam-epoch` 0.9.18 → 0.9.20, fixing RUSTSEC-2026-0204: an
+  invalid pointer dereference in the `fmt::Pointer` impl for `Atomic`/`Shared`
+  when the underlying pointer is invalid. Transitive via
+  `metrics-exporter-prometheus` → `metrics-util`.
+
 ### Added
 
 - On-demand project sync: `POST /api/v1/projects/{id}/sync` (admin keys only)
@@ -223,6 +230,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   shutdown, and reload it at boot — restarts serve the pre-restart data
   immediately (`/readyz` green from second zero) while the first syncs run.
   Without the block the cache stays purely in-memory as before.
+
+- YAML config parsing moved from the deprecated `serde_yaml` (archived by its
+  author in March 2024) to `serde_yaml_ng`, a maintained drop-in fork with the
+  same API. No config format change.
 
 ## [0.2.1] - 2026-07-05
 

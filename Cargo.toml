@@ -12,7 +12,7 @@ publish = false
 [dependencies]
 axum = "0.8"
 bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
-base64 = "0.22"          # Basic auth header for git-over-https credentials
+base64 = "0.23"          # Basic auth header for git-over-https credentials
 dashmap = "6"
 futures = "0.3"
 metrics = "0.24.6"

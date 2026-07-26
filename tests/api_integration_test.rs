@@ -211,6 +211,50 @@ async fn forbidden_body_names_the_source() {
 }
 
 // =========================================================================
+// Tests: discovery routes (groups / hosts)
+// =========================================================================
+
+#[tokio::test]
+async fn list_source_groups_returns_names_and_counts() {
+    let (status, body) = get(app_with_demo_data(), "/api/v1/sources/src-demo/groups").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let groups: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    assert_eq!(groups.len(), 2);
+    // Sorted by name
+    assert_eq!(groups[0]["name"], "section9");
+    assert_eq!(groups[0]["host_count"], 1);
+    assert_eq!(groups[0]["has_vars"], true);
+    assert_eq!(groups[0]["children"].as_array().unwrap().len(), 0);
+    assert_eq!(groups[1]["name"], "seele");
+    // The facts themselves are not in this response
+    assert!(groups[0].get("hosts").is_none());
+}
+
+#[tokio::test]
+async fn list_source_hosts_returns_sorted_names_only() {
+    let (status, body) = get(app_with_demo_data(), "/api/v1/sources/src-demo/hosts").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["source_id"], "src-demo");
+    assert_eq!(json["total_hosts"], 2);
+    let hosts = json["hosts"].as_array().unwrap();
+    assert_eq!(hosts[0], "melchior.seele.net");
+    assert_eq!(hosts[1], "motoko.section9.net");
+}
+
+#[tokio::test]
+async fn discovery_routes_404_when_source_not_cached() {
+    let app = unified_api::AppBuilder::new().build();
+    let (status, _) = get(app.clone(), "/api/v1/sources/src-nope/groups").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = get(app, "/api/v1/sources/src-nope/hosts").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// =========================================================================
 // Tests: health checks
 // =========================================================================
 

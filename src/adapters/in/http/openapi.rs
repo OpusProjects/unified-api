@@ -31,6 +31,8 @@ impl Modify for SecurityAddon {
         http::health::readyz,
         http::sources::list_cached_sources,
         http::sources::get_source_dataset,
+        http::sources::list_source_groups,
+        http::sources::list_source_hosts,
         http::sources::source_status,
         http::sync::sync_source,
         http::enrichers::run_enricher,
@@ -44,6 +46,8 @@ impl Modify for SecurityAddon {
     components(schemas(
         http::error::ErrorBody,
         http::sources::CachedSourceInfo,
+        http::sources::GroupInfo,
+        http::sources::HostList,
         http::sources::HostStatus,
         http::sources::SourceStatus,
         http::sources::SyncHealthInfo,

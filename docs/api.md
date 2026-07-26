@@ -57,6 +57,8 @@ unaffected). Browser-based consumers need their origins listed in
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health |
 | `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=` |
+| `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
+| `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=`. `total_hosts` counts the whole source, `returned` this response |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
@@ -123,6 +125,20 @@ The message distinguishes cases that share a status code — `404` from
 `sources.yaml`", and a `404` from `DELETE .../hosts/{hostname}` names whichever
 of the two is missing. Treat the text as loggable, not matchable: branch on the
 status code, read the message.
+
+### Discovery
+
+Two cheap routes answer "what's in this source" without transferring the
+facts, which matters because auto-groups take their names from fact keys —
+the group set is data-dependent and can't be read off the config:
+
+```bash
+curl localhost:8182/api/v1/sources/src-d42/groups   # [{"name":"linux","host_count":412,...}]
+curl localhost:8182/api/v1/sources/src-d42/hosts    # {"total_hosts":987,"hosts":["..."]}
+```
+
+Both are served from the cache and answer `404` only when the source isn't
+cached. `host_count` counts unique members.
 
 ### Dataset pagination
 

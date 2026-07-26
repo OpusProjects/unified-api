@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/v1/sources/{id}/groups`: group names with host counts, children
+  and whether they carry group vars — no hostvars. Auto-groups derive their
+  names from fact keys, so the group set is data-dependent and cannot be read
+  off the config; discovering it previously meant fetching the whole dataset
+  (~11 MB on an SSH source).
+- `GET /api/v1/sources/{id}/hosts`: the hostnames only, sorted. The cheap
+  answer to "what is in this source" for UIs and operators, which previously
+  required the full dataset or passing a deliberately non-existent `?fields=`
+  value to empty out the vars.
+
 ## [0.5.0] - 2026-07-27
 
 ### Added

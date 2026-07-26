@@ -313,6 +313,112 @@ pub async fn get_source_dataset(
         .unwrap())
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct GroupInfo {
+    pub name: String,
+    pub host_count: usize,
+    pub children: Vec<String>,
+    /// Whether the group carries group vars (the values are in the dataset)
+    pub has_vars: bool,
+}
+
+// Discovery: what is in this source, without pulling the facts.
+//
+// Auto-groups derive their names from fact keys, so the group set is data
+// dependent and cannot be read off the config. Before this route the only way
+// to learn it was fetching the whole dataset (~11MB on an SSH source) or
+// knowing that `?limit=0` returns all groups with no hosts.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{id}/groups",
+    tag = "Sources",
+    params(("id" = String, Path, description = "Source identifier")),
+    responses(
+        (status = 200, description = "Groups in the cached dataset, sorted by name", body = Vec<GroupInfo>),
+        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 404, description = "Source not in cache", body = ErrorBody)
+    )
+)]
+pub async fn list_source_groups(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<GroupInfo>>, ApiError> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(ApiError::source_forbidden(&id));
+    }
+    let entry = state
+        .cache
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_cached(&id))?;
+
+    let mut groups: Vec<GroupInfo> = entry
+        .dataset
+        .groups
+        .iter()
+        .map(|(name, group)| GroupInfo {
+            name: name.clone(),
+            // Unique members: a member list can repeat a host (a connector
+            // emitting it under two nested groups), and a count that included
+            // the duplicate would not match what ?group= returns.
+            host_count: group
+                .hosts
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            children: group.children.clone(),
+            has_vars: group.vars.is_some(),
+        })
+        .collect();
+
+    groups.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(groups))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct HostList {
+    pub source_id: String,
+    pub total_hosts: usize,
+    pub hosts: Vec<String>,
+}
+
+// The hostnames only — the cheap answer to "what is in this source", for a UI
+// picker or an operator. Without it, the alternatives were the full dataset or
+// passing a deliberately non-existent ?fields= value to empty out the vars.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{id}/hosts",
+    tag = "Sources",
+    params(("id" = String, Path, description = "Source identifier")),
+    responses(
+        (status = 200, description = "Hostnames in the cached dataset, sorted", body = HostList),
+        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 404, description = "Source not in cache", body = ErrorBody)
+    )
+)]
+pub async fn list_source_hosts(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Result<Json<HostList>, ApiError> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(ApiError::source_forbidden(&id));
+    }
+    let entry = state
+        .cache
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_cached(&id))?;
+
+    let mut hosts: Vec<String> = entry.dataset.hostvars.keys().cloned().collect();
+    hosts.sort();
+
+    Ok(Json(HostList {
+        source_id: id,
+        total_hosts: hosts.len(),
+        hosts,
+    }))
+}
+
 // IntoParams = utoipa generates documentation for query params
 // Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]

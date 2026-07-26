@@ -21,6 +21,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   fact keys: `?group=autofs` used to `404` until some host reported autofs
   data, then start working, with no change to the request. `404` is still
   returned when the source itself is not in cache.
+- Both handlers now resolve the `?host=`/`?group=` filter through one shared
+  helper, so `/dataset` and `/status` cannot answer the same filter
+  differently again. They had already drifted twice: only the dataset path
+  deduplicated its selection, and only after the change above do both treat
+  an unmatched group the same way.
 
 ## [0.3.9] - 2026-07-25
 

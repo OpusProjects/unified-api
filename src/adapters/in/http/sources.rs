@@ -12,6 +12,7 @@ use std::borrow::Cow;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
 
 // Read from the sources cache: list, full dataset, and per-host status.
@@ -22,6 +23,53 @@ use crate::domain::dataset::{Group, HostVars};
 // each handler checks whether that identity may touch THIS id and answers
 // 403 Forbidden if not. List endpoints filter instead of failing: a scoped
 // key sees its slice of the world, not an error.
+
+// Resolve the ?host= / ?group= filter into the hostnames it selects, sorted
+// and deduplicated.
+//
+// Shared by /dataset and /status because the two must answer the same filter
+// the same way, and twice they had not: only the dataset path deduplicated its
+// selection, and until recently both refused an unmatched group with 404 while
+// an unmatched host returned an empty result. One implementation removes the
+// room for a third divergence.
+//
+// Neither input is unique: a group's member list can name a host twice (a
+// connector emitting it under two nested groups that get merged), and
+// ?host=a,a is a query a caller can build. Sorting also gives the callers
+// their ordering for free — /status needs no separate sort, and /dataset's
+// limit/offset pages stay stable.
+//
+// A filter matching nothing yields an empty selection, never an error: 404 on
+// these routes means the SOURCE is not in the cache, which both callers check
+// before getting here.
+fn resolve_hostnames<'a>(
+    entry: &'a CacheEntry,
+    host: Option<&str>,
+    group: Option<&str>,
+) -> Vec<&'a String> {
+    let mut hostnames: Vec<&String> = if let Some(host) = host {
+        host.split(',')
+            .filter_map(|h| {
+                entry
+                    .dataset
+                    .hostvars
+                    .get_key_value(h.trim())
+                    .map(|(name, _)| name)
+            })
+            .collect()
+    } else if let Some(group) = group {
+        match entry.dataset.groups.get(group) {
+            Some(g) => g.hosts.iter().collect(),
+            None => Vec::new(),
+        }
+    } else {
+        entry.dataset.hostvars.keys().collect()
+    };
+
+    hostnames.sort();
+    hostnames.dedup();
+    hostnames
+}
 
 // ToSchema = utoipa generates the JSON Schema definition for this struct
 // It will appear in the "Schemas" section of the Swagger UI
@@ -158,34 +206,7 @@ pub async fn get_source_dataset(
             .unwrap());
     }
 
-    // Which hosts survive the filter, sorted so limit/offset pages are stable
-    let mut hostnames: Vec<&String> = if let Some(ref host) = params.host {
-        host.split(',')
-            .filter_map(|h| {
-                entry
-                    .dataset
-                    .hostvars
-                    .get_key_value(h.trim())
-                    .map(|(k, _)| k)
-            })
-            .collect()
-    } else if let Some(ref group) = params.group {
-        // An unknown group selects no hosts rather than 404: a filter that
-        // matches nothing is an empty collection, not a missing resource —
-        // the same reasoning already applied to ?host=. It matters more for
-        // groups since auto-groups derive their names from fact keys, so
-        // ?group=autofs used to 404 until some host reported autofs data and
-        // then start working on the very same request. 404 stays for the
-        // source itself not being in cache, checked above.
-        match entry.dataset.groups.get(group) {
-            Some(g) => g.hosts.iter().collect(),
-            None => Vec::new(),
-        }
-    } else {
-        entry.dataset.hostvars.keys().collect()
-    };
-    hostnames.sort();
-    hostnames.dedup();
+    let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
 
     let total_hosts = hostnames.len();
     let offset = params.offset.unwrap_or(0);
@@ -314,30 +335,7 @@ pub async fn source_status(
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let source = state.sources.get(&id);
 
-    let mut hostnames: Vec<String> = if let Some(ref host) = params.host {
-        host.split(',')
-            .map(|h| h.trim())
-            .filter(|h| entry.dataset.hostvars.contains_key(*h))
-            .map(|h| h.to_string())
-            .collect()
-    } else if let Some(ref group) = params.group {
-        // Unknown group = empty selection, not 404 (see the dataset handler)
-        match entry.dataset.groups.get(group) {
-            Some(g) => g.hosts.clone(),
-            None => Vec::new(),
-        }
-    } else {
-        entry.dataset.hostvars.keys().cloned().collect()
-    };
-    // Neither input is guaranteed unique: a group's member list can carry the
-    // same host twice (a connector emitting it in two nested groups that get
-    // merged), and ?host=a,a is a valid query. Both used to produce duplicate
-    // entries in `hosts` and inflate total_hosts. The dataset endpoint has
-    // always deduplicated its selection; this makes status agree.
-    // Sorting here also means the response comes out ordered by hostname
-    // without a second sort at the end.
-    hostnames.sort();
-    hostnames.dedup();
+    let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
 
     // Resolve group TTL overrides into a per-host map ONCE, instead of
     // scanning every group's member list for every host — that scan made a
@@ -362,15 +360,17 @@ pub async fn source_status(
     let hosts: Vec<HostStatus> = hostnames
         .iter()
         .filter_map(|hostname| {
+            // The helper borrows from the entry, so this is a &&String
+            let hostname = hostname.as_str();
             let age = entry.host_age_seconds(hostname)?;
 
             let effective_ttl = source
                 .and_then(|s| s.ttl_overrides.hosts.get(hostname).copied())
-                .or_else(|| group_ttl_by_host.get(hostname.as_str()).copied())
+                .or_else(|| group_ttl_by_host.get(hostname).copied())
                 .unwrap_or(entry.ttl.as_secs());
 
             Some(HostStatus {
-                hostname: hostname.clone(),
+                hostname: hostname.to_string(),
                 age_seconds: age,
                 is_fresh: entry.is_host_fresh(hostname, Some(effective_ttl)),
                 ttl_seconds: effective_ttl,

@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `DELETE /api/v1/sources/{id}`: drop a source's cache entry without
+  restarting, reporting how many hosts went with it. Removing a source from
+  `sources.yaml` previously left its entry served — and re-written into every
+  snapshot — until the process restarted. Cached data only: a source still in
+  config is refilled by its next sync.
+
 ## [0.5.0] - 2026-07-27
 
 ### Added

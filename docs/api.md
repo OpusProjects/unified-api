@@ -61,6 +61,7 @@ unaffected). Browser-based consumers need their origins listed in
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
 | `DELETE /api/v1/sources/{id}/hosts/{hostname}` | Remove a host from the cached dataset |
+| `DELETE /api/v1/sources/{id}` | Drop the whole cache entry (the configuration is untouched) |
 
 A sync always answers `200` with a result body — `success: false` carries the
 connector or credential error rather than mapping it to an HTTP status:
@@ -78,6 +79,13 @@ connector or credential error rather than mapping it to an HTTP status:
 ```
 
 `404` means the source id itself isn't configured.
+
+`DELETE /api/v1/sources/{id}` drops the cached entry and reports how many
+hosts went with it. It removes **cached data, not configuration**: a source
+still listed in `sources.yaml` will be refilled by its next scheduled sync or
+an explicit `POST .../sync`. The point is a source you have *removed* from
+config, whose entry would otherwise be served — and re-persisted in
+snapshots — until the next restart.
 
 ### Sync health
 

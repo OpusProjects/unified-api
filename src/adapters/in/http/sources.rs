@@ -12,6 +12,7 @@ use std::borrow::Cow;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
 use crate::domain::sync_health::SyncHealth;
@@ -185,8 +186,8 @@ impl DatasetParams {
     responses(
         (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys."),
         (status = 304, description = "If-None-Match matched the current ETag — dataset unchanged, no body (plain queries only)"),
-        (status = 403, description = "API key not allowed to read this source"),
-        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404")
+        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
     )
 )]
 pub async fn get_source_dataset(
@@ -195,11 +196,14 @@ pub async fn get_source_dataset(
     Path(id): Path<String>,
     Query(params): Query<DatasetParams>,
     headers: HeaderMap,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     if !auth.permissions.allows_source(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::source_forbidden(&id));
     }
-    let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let entry = state
+        .cache
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_cached(&id))?;
 
     // No params = the raw Dataset, as consumers (AWX inventory scripts, the
     // remote-federation pattern) already parse it. The bytes come from the
@@ -209,7 +213,7 @@ pub async fn get_source_dataset(
     if params.is_plain() {
         let cached = entry
             .serialized_json()
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|e| ApiError::internal(format!("failed to serialize dataset: {}", e)))?;
 
         if let Some(if_none_match) = headers
             .get(header::IF_NONE_MATCH)
@@ -301,7 +305,7 @@ pub async fn get_source_dataset(
         hostvars,
         groups,
     })
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| ApiError::internal(format!("failed to serialize dataset page: {}", e)))?;
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
@@ -353,8 +357,8 @@ pub struct SourceStatus {
     ),
     responses(
         (status = 200, description = "Cache status per host with TTL info", body = SourceStatus),
-        (status = 403, description = "API key not allowed to read this source"),
-        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404")
+        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
     )
 )]
 pub async fn source_status(
@@ -362,11 +366,14 @@ pub async fn source_status(
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<StatusParams>,
-) -> Result<Json<SourceStatus>, StatusCode> {
+) -> Result<Json<SourceStatus>, ApiError> {
     if !auth.permissions.allows_source(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::source_forbidden(&id));
     }
-    let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let entry = state
+        .cache
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_cached(&id))?;
     let source = state.sources.get(&id);
 
     let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());

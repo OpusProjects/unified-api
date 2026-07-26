@@ -1,6 +1,5 @@
 use axum::Json;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -9,6 +8,7 @@ use utoipa::ToSchema;
 // it has the same name (run_enricher)
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::enrich::run_enricher as application_run_enricher;
 
 #[derive(Serialize, ToSchema)]
@@ -31,27 +31,40 @@ pub struct EnrichResult {
     ),
     responses(
         (status = 200, description = "Enrichment result", body = EnrichResult),
-        (status = 403, description = "API key not allowed to write this enricher's target"),
-        (status = 404, description = "Enricher not configured or target not in cache")
+        (status = 403, description = "API key not allowed to write this enricher's target", body = ErrorBody),
+        (status = 404, description = "Enricher not configured or target not in cache", body = ErrorBody)
     )
 )]
 pub async fn run_enricher(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
-) -> Result<Json<EnrichResult>, StatusCode> {
-    let enricher_def = state.enrichers.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+) -> Result<Json<EnrichResult>, ApiError> {
+    let enricher_def = state
+        .enrichers
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("enricher '{}' is not configured", id)))?;
 
     // An enricher writes into its target's cache entry, so the permission
     // that matters is the TARGET one — no separate enricher grant to manage.
     if !auth.permissions.allows_source(&enricher_def.target_id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::forbidden(format!(
+            "this API key is not allowed to write source '{}', the target of enricher '{}'",
+            enricher_def.target_id, id
+        )));
     }
 
-    // None = target not in cache → 404
+    // None = target not in cache. Same status as an unknown enricher id before
+    // this change, which sent a caller looking for a config typo that wasn't
+    // there.
     let outcome = application_run_enricher(&*state.cache, &*state.enricher, enricher_def)
         .await
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "target '{}' of enricher '{}' is not in the cache — sync it first",
+                enricher_def.target_id, id
+            ))
+        })?;
 
     Ok(Json(EnrichResult {
         target_id: enricher_def.target_id.clone(),

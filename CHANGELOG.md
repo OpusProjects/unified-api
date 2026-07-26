@@ -30,6 +30,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
   count; the last success age survives failures, which is what makes "worked N
   hours ago, failing since" readable.
 
+### Changed
+
+- Error responses carry a JSON body (`{"error": "..."}`) instead of an empty
+  one. The source, sync, host, enricher and project routes answered `403`/`404`
+  with no body at all, so a consumer could not tell "source is not in the
+  cache" from "source is not configured", or a missing source from a missing
+  host on the same `DELETE`. The messages now name the id and the reason, and
+  the status codes are unchanged. Output endpoints already answered this way;
+  the rest of the API now agrees. Registered as `ErrorBody` in the OpenAPI
+  spec, so Swagger documents the shape.
+
 ## [0.4.0] - 2026-07-26
 
 ### Changed

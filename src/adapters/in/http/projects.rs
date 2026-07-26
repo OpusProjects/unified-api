@@ -8,6 +8,7 @@ use utoipa::ToSchema;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::projects::sync_project;
 
 // Operational routes for git project checkouts. Admin-only: this is deploy
@@ -33,15 +34,15 @@ pub struct ProjectInfo {
     tag = "Projects",
     responses(
         (status = 200, description = "Configured git projects and their checkout state", body = Vec<ProjectInfo>),
-        (status = 403, description = "API key is not admin")
+        (status = 403, description = "API key is not admin", body = ErrorBody)
     )
 )]
 pub async fn list_projects(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
-) -> Result<Json<Vec<ProjectInfo>>, StatusCode> {
+) -> Result<Json<Vec<ProjectInfo>>, ApiError> {
     if !auth.permissions.is_admin() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::admin_only());
     }
 
     let mut projects: Vec<ProjectInfo> = state
@@ -79,8 +80,8 @@ pub struct ProjectSyncResult {
     ),
     responses(
         (status = 200, description = "Checkout updated to the branch tip", body = ProjectSyncResult),
-        (status = 403, description = "API key is not admin"),
-        (status = 404, description = "Project not configured"),
+        (status = 403, description = "API key is not admin", body = ErrorBody),
+        (status = 404, description = "Project not configured", body = ErrorBody),
         (status = 502, description = "git clone/fetch failed", body = ProjectSyncResult)
     )
 )]
@@ -88,11 +89,14 @@ pub async fn sync_project_now(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
-) -> Result<(StatusCode, Json<ProjectSyncResult>), StatusCode> {
+) -> Result<(StatusCode, Json<ProjectSyncResult>), ApiError> {
     if !auth.permissions.is_admin() {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::admin_only());
     }
-    let project = state.projects.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let project = state
+        .projects
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("project '{}' is not configured", id)))?;
 
     let start = Instant::now();
     let result = sync_project(

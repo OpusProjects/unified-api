@@ -1,6 +1,5 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -9,6 +8,7 @@ use utoipa::{IntoParams, ToSchema};
 // it has the same name (sync_source)
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::sync::{SyncScope, sync_source as application_sync_source};
 
 // IntoParams = utoipa generates documentation for query params
@@ -43,8 +43,8 @@ pub struct SyncResult {
     ),
     responses(
         (status = 200, description = "Sync result with host/group counts", body = SyncResult),
-        (status = 403, description = "API key not allowed to sync this source"),
-        (status = 404, description = "Source not configured")
+        (status = 403, description = "API key not allowed to sync this source", body = ErrorBody),
+        (status = 404, description = "Source not configured", body = ErrorBody)
     )
 )]
 pub async fn sync_source(
@@ -52,11 +52,16 @@ pub async fn sync_source(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<SyncParams>,
-) -> Result<Json<SyncResult>, StatusCode> {
+) -> Result<Json<SyncResult>, ApiError> {
     if !auth.permissions.allows_source(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::source_forbidden(&id));
     }
-    let source = state.sources.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    // Not the same 404 as the read routes: this one means the id is absent
+    // from sources.yaml, not merely uncached
+    let source = state
+        .sources
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_configured(&id))?;
 
     let scope = if let Some(host) = params.host {
         SyncScope::Host(host)

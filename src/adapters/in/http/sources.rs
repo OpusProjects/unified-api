@@ -305,7 +305,10 @@ pub struct SourceStatus {
     pub dataset_age_seconds: u64,
     pub dataset_is_fresh: bool,
     pub ttl_seconds: u64,
+    /// Hosts in the source, whatever the filter selected
     pub total_hosts: usize,
+    /// Hosts described in this response
+    pub returned: usize,
     pub hosts: Vec<HostStatus>,
 }
 
@@ -383,7 +386,12 @@ pub async fn source_status(
         dataset_age_seconds: entry.age_seconds(),
         dataset_is_fresh: entry.is_fresh(),
         ttl_seconds: entry.ttl.as_secs(),
-        total_hosts: hosts.len(),
+        // The source's host count, not the filtered one: `?host=motoko` used
+        // to answer total_hosts: 1, which reads as "this source has one host".
+        // How many are in THIS response is `returned`, mirroring the dataset
+        // envelope's total_hosts/returned pair.
+        total_hosts: entry.dataset.hostvars.len(),
+        returned: hosts.len(),
         hosts,
     }))
 }

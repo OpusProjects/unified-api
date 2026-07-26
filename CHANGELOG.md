@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (consumers reading `total_hosts` from `/status`):** `total_hosts`
+  is now the source's full host count, and the number of entries in the
+  response is reported as the new `returned` field — mirroring the
+  `total_hosts`/`returned` pair the `/dataset` envelope already uses. It
+  previously counted hosts *after* filtering, so `?host=motoko` answered
+  `total_hosts: 1`, which reads as "this source has one host". Unfiltered
+  requests are unaffected: both fields equal the old value.
+
 ### Fixed
 
 - `GET /status` no longer returns the same host twice. A group whose member

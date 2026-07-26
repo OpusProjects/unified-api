@@ -57,7 +57,7 @@ unaffected). Browser-based consumers need their origins listed in
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness and host counts |
 | `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=` |
-| `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=` |
+| `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=`. `total_hosts` counts the whole source, `returned` this response |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
 | `DELETE /api/v1/sources/{id}/hosts/{hostname}` | Remove a host from the cached dataset |

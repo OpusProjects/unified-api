@@ -110,7 +110,7 @@ impl DatasetParams {
         (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys."),
         (status = 304, description = "If-None-Match matched the current ETag — dataset unchanged, no body (plain queries only)"),
         (status = 403, description = "API key not allowed to read this source"),
-        (status = 404, description = "Source not in cache, or host/group not found")
+        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404")
     )
 )]
 pub async fn get_source_dataset(
@@ -170,9 +170,16 @@ pub async fn get_source_dataset(
             })
             .collect()
     } else if let Some(ref group) = params.group {
+        // An unknown group selects no hosts rather than 404: a filter that
+        // matches nothing is an empty collection, not a missing resource —
+        // the same reasoning already applied to ?host=. It matters more for
+        // groups since auto-groups derive their names from fact keys, so
+        // ?group=autofs used to 404 until some host reported autofs data and
+        // then start working on the very same request. 404 stays for the
+        // source itself not being in cache, checked above.
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.iter().collect(),
-            None => return Err(StatusCode::NOT_FOUND),
+            None => Vec::new(),
         }
     } else {
         entry.dataset.hostvars.keys().collect()
@@ -292,7 +299,7 @@ pub struct SourceStatus {
     responses(
         (status = 200, description = "Cache status per host with TTL info", body = SourceStatus),
         (status = 403, description = "API key not allowed to read this source"),
-        (status = 404, description = "Source not in cache, or host/group not found")
+        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404")
     )
 )]
 pub async fn source_status(
@@ -314,9 +321,10 @@ pub async fn source_status(
             .map(|h| h.to_string())
             .collect()
     } else if let Some(ref group) = params.group {
+        // Unknown group = empty selection, not 404 (see the dataset handler)
         match entry.dataset.groups.get(group) {
             Some(g) => g.hosts.clone(),
-            None => return Err(StatusCode::NOT_FOUND),
+            None => Vec::new(),
         }
     } else {
         entry.dataset.hostvars.keys().cloned().collect()

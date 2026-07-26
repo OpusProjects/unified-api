@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-26
+
 ### Changed
 
 - **Breaking (consumers reading `total_hosts` from `/status`):** `total_hosts`
@@ -346,7 +348,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.3.9...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/OpusProjects/unified-api/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/OpusProjects/unified-api/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/OpusProjects/unified-api/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/OpusProjects/unified-api/compare/v0.3.6...v0.3.7

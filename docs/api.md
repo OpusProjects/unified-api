@@ -233,6 +233,7 @@ For declarative merges, `404` is also returned if the source has never synced.
 |---|---|
 | `GET /api/v1/endpoints` | Configured endpoints and whether their sources are cached |
 | `POST /api/v1/endpoints/{id}` | Run the transformer and return its output verbatim |
+| `GET /api/v1/endpoints/{id}` | The same, with query parameters as the dynamic parameters |
 
 The optional JSON body is passed to the script as dynamic parameters
 (`ENDPOINT_PARAMS`), overriding static `config` where the script chooses to.
@@ -242,7 +243,16 @@ The optional JSON body is passed to the script as dynamic parameters
 curl -X POST localhost:8182/api/v1/endpoints/ep-ansible-full \
      -H 'Content-Type: application/json' \
      -d '{"filter_os": "OracleLinux"}'
+
+# Same run, reachable by anything that can only fetch a URL
+curl 'localhost:8182/api/v1/endpoints/ep-ansible-full?filter_os=OracleLinux'
 ```
+
+Rendering an inventory is a read, so `GET` works too — for browsers, proxy
+caches, and tools that only take a URL. A query string carries no types, so
+every parameter arrives at the script as a **string**; the script sees the
+same `ENDPOINT_PARAMS` object either way. Use `POST` when a parameter has to
+be a real number, boolean, or nested structure.
 
 ## Projects (admin-only)
 

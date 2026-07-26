@@ -255,6 +255,47 @@ async fn discovery_routes_404_when_source_not_cached() {
 }
 
 // =========================================================================
+// Tests: cache eviction
+// =========================================================================
+
+#[tokio::test]
+async fn evict_source_drops_the_cache_entry() {
+    let app = app_with_demo_data();
+
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/sources/src-demo")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source_id"], "src-demo");
+    assert_eq!(json["hosts_dropped"], 2);
+
+    // Gone from every read path, not just the list
+    let (status, _) = get(app.clone(), "/api/v1/sources/src-demo/dataset").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (_, body) = get(app, "/api/v1/sources").await;
+    let sources: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    assert_eq!(sources.len(), 0);
+}
+
+#[tokio::test]
+async fn evict_source_not_in_cache_returns_404() {
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/sources/src-nope")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app_with_demo_data().oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// =========================================================================
 // Tests: health checks
 // =========================================================================
 

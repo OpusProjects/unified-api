@@ -4,7 +4,7 @@ use axum::http::HeaderValue;
 use axum::{
     Router, middleware,
     response::Redirect,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -31,6 +31,7 @@ pub fn create_router(
             "/api/v1/sources/{id}/dataset",
             get(http::sources::get_source_dataset),
         )
+        .route("/api/v1/sources/{id}", delete(http::cache::evict_source))
         .route(
             "/api/v1/sources/{id}/groups",
             get(http::sources::list_source_groups),

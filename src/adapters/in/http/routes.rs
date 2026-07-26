@@ -31,6 +31,14 @@ pub fn create_router(
             "/api/v1/sources/{id}/dataset",
             get(http::sources::get_source_dataset),
         )
+        .route(
+            "/api/v1/sources/{id}/groups",
+            get(http::sources::list_source_groups),
+        )
+        .route(
+            "/api/v1/sources/{id}/hosts",
+            get(http::sources::list_source_hosts),
+        )
         .route("/api/v1/sources/{id}/sync", post(http::sync::sync_source))
         .route(
             "/api/v1/sources/{id}/status",

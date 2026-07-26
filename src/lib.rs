@@ -139,6 +139,7 @@ impl AppBuilder {
             endpoints: self.endpoints,
             projects: self.projects,
             projects_dir: self.projects_dir,
+            sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
         });
         let router = adapters::r#in::http::routes::create_router(
             Arc::clone(&state),

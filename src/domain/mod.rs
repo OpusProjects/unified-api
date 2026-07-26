@@ -7,6 +7,7 @@ pub mod enricher;
 pub mod project;
 pub mod source;
 pub mod static_inventory;
+pub mod sync_health;
 pub mod sync_mode;
 
 // Default execution timeout for connector/enricher/output scripts.

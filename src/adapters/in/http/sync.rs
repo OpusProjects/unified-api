@@ -73,6 +73,7 @@ pub async fn sync_source(
         &*state.cache,
         &**connector,
         &*state.secrets,
+        &state.sync_health,
         &id,
         source,
         scope,

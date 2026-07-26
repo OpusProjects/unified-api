@@ -140,6 +140,81 @@ async fn sync_connector_error() {
 }
 
 // =========================================================================
+// Test: sync health is reported through the read endpoints
+// =========================================================================
+#[tokio::test]
+async fn sync_health_is_reported_per_source() {
+    let mut sources = HashMap::new();
+    // One healthy source and one whose connector always fails, sharing an app,
+    // so the report has to be per source rather than global
+    sources.insert("src-ok".to_string(), test_source("default"));
+    sources.insert("src-broken".to_string(), test_source("error"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-ok/sync").await;
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-broken/sync").await;
+
+    let (_, body) = request(app.clone(), "GET", "/api/v1/sources").await;
+    let listed: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    // Only the source that synced has a cache entry, and it reports healthy
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["source_id"], "src-ok");
+    assert_eq!(listed[0]["sync_health"]["consecutive_failures"], 0);
+    assert!(listed[0]["sync_health"]["last_error"].is_null());
+    assert!(listed[0]["sync_health"]["last_success_age_seconds"].is_u64());
+
+    // The broken source never entered the cache, so its health is not
+    // reachable through /status — the known limitation of hanging health off
+    // the read endpoints (see the PR description)
+    let (status, _) = request(app, "GET", "/api/v1/sources/src-broken/status").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sync_health_keeps_serving_stale_data_and_says_why() {
+    let mut sources = HashMap::new();
+    sources.insert("src-flip".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    // Succeed once, so the dataset is cached and keeps being served
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-flip/sync").await;
+
+    // Then fail twice: a host-scoped sync of a host the connector rejects
+    // (same mechanism as sync_nonexistent_host)
+    for _ in 0..2 {
+        let (_, body) = request(
+            app.clone(),
+            "POST",
+            "/api/v1/sources/src-flip/sync?host=togusa.section9.net",
+        )
+        .await;
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["success"], false);
+    }
+
+    let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-flip/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // The data is still there and still described as fresh...
+    assert_eq!(status["total_hosts"], 6);
+    // ...and the health block is the only thing saying it is no longer being
+    // refreshed. That distinction did not exist before this change.
+    let health = &status["sync_health"];
+    assert_eq!(health["consecutive_failures"], 2);
+    assert!(health["last_error"].is_string());
+    // The earlier success is kept: "worked N seconds ago, failing since"
+    assert!(health["last_success_age_seconds"].is_u64());
+
+    // A success clears it again
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-flip/sync").await;
+    let (_, body) = request(app, "GET", "/api/v1/sources/src-flip/status").await;
+    let status: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status["sync_health"]["consecutive_failures"], 0);
+    assert!(status["sync_health"]["last_error"].is_null());
+}
+
+// =========================================================================
 // Test: sync of source that does not exist in config
 // =========================================================================
 #[tokio::test]
@@ -986,6 +1061,7 @@ mod hosts_from_source {
     use unified_api::application::sync::{SyncScope, sync_source};
     use unified_api::domain::dataset::Dataset;
     use unified_api::domain::source::OutputFormat;
+    use unified_api::domain::sync_health::SyncHealthRegistry;
     use unified_api::ports::cache::CachePort;
     use unified_api::ports::connector::{ConnectorPort, ConnectorResult};
 
@@ -1057,6 +1133,7 @@ mod hosts_from_source {
             &cache,
             &connector,
             &MockSecrets::new(),
+            &SyncHealthRegistry::new(),
             "src-ssh",
             &ssh_source_from("src-origin"),
             SyncScope::Full,
@@ -1090,6 +1167,7 @@ mod hosts_from_source {
             &cache,
             &connector,
             &MockSecrets::new(),
+            &SyncHealthRegistry::new(),
             "src-ssh",
             &ssh_source_from("src-missing"),
             SyncScope::Full,

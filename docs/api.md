@@ -55,7 +55,7 @@ unaffected). Browser-based consumers need their origins listed in
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/sources` | Cached sources with freshness and host counts |
+| `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health |
 | `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=` |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=` |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
@@ -78,6 +78,37 @@ connector or credential error rather than mapping it to an HTTP status:
 ```
 
 `404` means the source id itself isn't configured.
+
+### Sync health
+
+`GET /sources` and `GET /sources/{id}/status` carry a `sync_health` block once
+a source has synced at least once in the current process:
+
+```json
+{
+  "sync_health": {
+    "last_attempt_age_seconds": 45,
+    "last_success_age_seconds": 21600,
+    "last_error": "ssh: connection refused (motoko.section9.net)",
+    "consecutive_failures": 12
+  }
+}
+```
+
+The freshness fields answer *how old is this data*; these answer *is anything
+still managing to refresh it*. The example above is the case that used to be
+invisible outside the logs: data six hours old, still being served, with a
+connector that has failed twelve times since. A long sync interval and a
+broken connector both look like a dataset slowly getting older — only
+`last_error` and `consecutive_failures` tell them apart.
+
+A successful sync clears `last_error` and resets `consecutive_failures` to 0,
+but `last_success_age_seconds` is deliberately kept across failures.
+
+The block is absent when no sync has been attempted yet, and a source that
+has **never** synced successfully has no cache entry, so it doesn't appear in
+`GET /sources` at all — watch `unified_api_source_cached` or `/readyz`'s
+`sources_pending` for that case.
 
 ### Dataset pagination
 

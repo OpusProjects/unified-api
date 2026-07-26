@@ -10,6 +10,7 @@ use unified_api::application::sync::{SyncScope, sync_source};
 use unified_api::domain::cache_entry::CacheEntry;
 use unified_api::domain::dataset::Dataset;
 use unified_api::domain::source::{ConnectorType, Source};
+use unified_api::domain::sync_health::SyncHealthRegistry;
 use unified_api::ports::cache::CachePort;
 use unified_api::ports::connector::ConnectorPort;
 
@@ -175,6 +176,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         &central_cache,
         &RemoteConnector::new(),
         &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
         "src-madrid",
         &source,
         SyncScope::Full,

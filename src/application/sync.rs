@@ -5,6 +5,7 @@ use tokio::time::timeout;
 use crate::application::credentials::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::source::Source;
+use crate::domain::sync_health::SyncHealthRegistry;
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
 use crate::ports::connector::{ConnectorOutput, ConnectorPort};
@@ -64,11 +65,21 @@ pub async fn sync_source(
     cache: &dyn CachePort,
     connector: &dyn ConnectorPort,
     secrets: &dyn SecretsPort,
+    health: &SyncHealthRegistry,
     source_id: &str,
     source: &Source,
     scope: SyncScope,
 ) -> SyncOutcome {
     let outcome = run_sync(cache, connector, secrets, source_id, source, scope).await;
+
+    // Recorded here rather than at the call sites so the scheduler and the HTTP
+    // handler cannot drift: every sync in the process goes through this
+    // function. Until now a failed scheduled sync left nothing behind but a log
+    // line, so a stale dataset could not be told apart from a slow one.
+    match &outcome.error {
+        None => health.record_success(source_id),
+        Some(error) => health.record_failure(source_id, error),
+    }
 
     // One counter per outcome and a duration histogram, labeled by source.
     // The metrics facade works like tracing: recording here is fine for the

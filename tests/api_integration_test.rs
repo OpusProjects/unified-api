@@ -601,11 +601,47 @@ async fn dataset_host_filter_and_not_found_cases() {
     assert_eq!(json["total_hosts"], 0);
     assert_eq!(json["returned"], 0);
 
-    let (status, _) = get(
+    // An unknown group is an empty selection too, not a 404 — with auto-groups
+    // the group set depends on the data, so a name can be valid one sync and
+    // absent the next
+    let (status, body) = get(
         app_with_demo_data(),
         "/api/v1/sources/src-demo/dataset?group=ghosts",
     )
     .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 0);
+    assert_eq!(json["returned"], 0);
+    assert_eq!(json["hostvars"].as_object().unwrap().len(), 0);
+    // Only the (absent) filtered group is described, so groups comes back empty
+    assert_eq!(json["groups"].as_object().unwrap().len(), 0);
+}
+
+// Same for /status: an unmatched group filter is an empty host list
+#[tokio::test]
+async fn status_unknown_group_returns_empty_result() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/status?group=ghosts",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["source_id"], "src-demo");
+    assert_eq!(json["hosts"].as_array().unwrap().len(), 0);
+}
+
+// The source itself still 404s — that is a missing resource, not a filter
+#[tokio::test]
+async fn status_unknown_source_still_returns_404() {
+    let (status, _) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-nope/status?group=ghosts",
+    )
+    .await;
+
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 

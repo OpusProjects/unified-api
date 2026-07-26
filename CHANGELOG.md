@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Breaking (consumers branching on 404):** `?group=` on `/dataset` and
+  `/status` now returns an empty result instead of `404` when the group
+  matches nothing, completing the change 0.3.9 made for `?host=`. A filter
+  that matches nothing is an empty collection, not a missing resource — and
+  it matters more for groups, because auto-groups derive their names from
+  fact keys: `?group=autofs` used to `404` until some host reported autofs
+  data, then start working, with no change to the request. `404` is still
+  returned when the source itself is not in cache.
+
 ## [0.3.9] - 2026-07-25
 
 ### Added

@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `GET /status` no longer returns the same host twice. A group whose member
+  list carries a host more than once (a connector emitting it under two
+  nested groups that get merged) produced one entry per occurrence and
+  counted each in `total_hosts`; `?host=a,a` did the same. The dataset
+  endpoint has always deduplicated its selection — status now agrees.
+
 ## [0.3.9] - 2026-07-25
 
 ### Added

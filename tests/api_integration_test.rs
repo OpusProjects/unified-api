@@ -78,6 +78,31 @@ fn app_with_demo_data_and_state() -> (axum::Router, std::sync::Arc<unified_api::
     (app, state)
 }
 
+// An app whose cached group lists the same host twice — what a connector
+// emitting a host under two nested groups produces once they are merged.
+fn app_with_duplicate_group_members() -> axum::Router {
+    let (app, state) = unified_api::AppBuilder::new().build_with_state();
+
+    let dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(
+        r#"{
+        "hostvars": {"motoko.section9.net": {"os": "OracleLinux"}, "batou.section9.net": {}},
+        "groups": {
+            "section9": {
+                "hosts": ["motoko.section9.net", "batou.section9.net", "motoko.section9.net"]
+            }
+        }
+    }"#,
+    )
+    .expect("Failed to parse dataset");
+
+    state.cache.set(
+        "src-dupes",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 3600),
+    );
+
+    app
+}
+
 // =========================================================================
 // Tests: health checks
 // =========================================================================
@@ -607,6 +632,40 @@ async fn dataset_host_filter_and_not_found_cases() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// A host listed twice in a group must appear once in /status, and count once
+#[tokio::test]
+async fn status_lists_duplicate_group_members_once() {
+    let (status, body) = get(
+        app_with_duplicate_group_members(),
+        "/api/v1/sources/src-dupes/status?group=section9",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hosts = json["hosts"].as_array().unwrap();
+    assert_eq!(hosts.len(), 2, "duplicate member returned twice: {}", body);
+    assert_eq!(json["total_hosts"], 2);
+    // Sorted by hostname, which now comes from the deduplication step
+    assert_eq!(hosts[0]["hostname"], "batou.section9.net");
+    assert_eq!(hosts[1]["hostname"], "motoko.section9.net");
+}
+
+// Same for a repeated ?host= value, which is a valid query a caller can build
+#[tokio::test]
+async fn status_lists_repeated_host_parameter_once() {
+    let (status, body) = get(
+        app_with_duplicate_group_members(),
+        "/api/v1/sources/src-dupes/status?host=motoko.section9.net,motoko.section9.net",
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(json["total_hosts"], 1);
 }
 
 #[tokio::test]

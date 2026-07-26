@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod endpoints;
 pub mod enrichers;
+pub mod error;
 pub mod health;
 pub mod hosts;
 pub mod metrics;

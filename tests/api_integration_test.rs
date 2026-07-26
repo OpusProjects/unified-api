@@ -79,6 +79,79 @@ fn app_with_demo_data_and_state() -> (axum::Router, std::sync::Arc<unified_api::
 }
 
 // =========================================================================
+// Tests: error bodies
+// =========================================================================
+
+// Every failure carries {"error": "..."}, and the message distinguishes cases
+// that share a status code
+#[tokio::test]
+async fn error_responses_carry_a_json_body() {
+    let app = app_with_demo_data();
+
+    let (status, body) = get(app.clone(), "/api/v1/sources/src-nope/dataset").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let json: serde_json::Value = serde_json::from_str(&body).expect("404 body is not JSON");
+    let message = json["error"].as_str().expect("no error field");
+    assert!(
+        message.contains("src-nope") && message.contains("cache"),
+        "unhelpful message: {}",
+        message
+    );
+
+    // Same status code, different meaning: not configured vs not cached. These
+    // were both an empty-bodied 404 before.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-nope/sync")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"].as_str().unwrap().contains("not configured"),
+        "sync 404 should say the source is not configured: {}",
+        json
+    );
+
+    // Deleting a host from a source that IS cached names the host, not the source
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/sources/src-demo/hosts/ghost.example.com")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["error"].as_str().unwrap();
+    assert!(
+        message.contains("ghost.example.com"),
+        "should name the missing host: {}",
+        message
+    );
+}
+
+// A 403 says which source was refused, not just that something was
+#[tokio::test]
+async fn forbidden_body_names_the_source() {
+    let app = app_with_scoped_keys();
+
+    // A key scoped to src-alpha asking for src-beta
+    let (status, body) =
+        get_with_key(app, "/api/v1/sources/src-beta/dataset", "alpha-secret").await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let json: serde_json::Value = serde_json::from_str(&body).expect("403 body is not JSON");
+    assert!(
+        json["error"].as_str().unwrap().contains("src-beta"),
+        "should name the refused source: {}",
+        json
+    );
+}
+
+// =========================================================================
 // Tests: health checks
 // =========================================================================
 

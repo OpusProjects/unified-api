@@ -42,6 +42,7 @@ impl Modify for SecurityAddon {
         http::projects::sync_project_now,
     ),
     components(schemas(
+        http::error::ErrorBody,
         http::sources::CachedSourceInfo,
         http::sources::HostStatus,
         http::sources::SourceStatus,

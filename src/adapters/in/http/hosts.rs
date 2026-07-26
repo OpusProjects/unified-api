@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::domain::dataset::HostVars;
 
 // Immediate host add/remove in a source's cache
@@ -20,7 +21,7 @@ use crate::domain::dataset::HostVars;
     request_body(content = Object, description = "Host variables as JSON key-value pairs"),
     responses(
         (status = 200, description = "Host added/updated"),
-        (status = 404, description = "Source not in cache")
+        (status = 404, description = "Source not in cache", body = ErrorBody)
     )
 )]
 pub async fn put_host(
@@ -28,9 +29,9 @@ pub async fn put_host(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
     Json(vars): Json<HostVars>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::source_forbidden(&id));
     }
     let mut vars = Some(vars);
     let found = state.cache.update(&id, &mut |entry| {
@@ -39,7 +40,7 @@ pub async fn put_host(
         }
     });
     if !found {
-        return Err(StatusCode::NOT_FOUND);
+        return Err(ApiError::source_not_cached(&id));
     }
     Ok(StatusCode::OK)
 }
@@ -54,16 +55,16 @@ pub async fn put_host(
     ),
     responses(
         (status = 200, description = "Host removed"),
-        (status = 404, description = "Source or host not in cache")
+        (status = 404, description = "Source or host not in cache", body = ErrorBody)
     )
 )]
 pub async fn delete_host(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::source_forbidden(&id));
     }
     // The "does host exist?" check and deletion happen in the same
     // update() — checking outside with get() would be another race window.
@@ -74,8 +75,16 @@ pub async fn delete_host(
             removed = true;
         }
     });
-    if !found || !removed {
-        return Err(StatusCode::NOT_FOUND);
+    // Both cases were one indistinguishable 404 before: "no such source" and
+    // "source is there, host isn't" need different fixes
+    if !found {
+        return Err(ApiError::source_not_cached(&id));
+    }
+    if !removed {
+        return Err(ApiError::not_found(format!(
+            "host '{}' is not in source '{}'",
+            hostname, id
+        )));
     }
     Ok(StatusCode::OK)
 }

@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Error responses carry a JSON body (`{"error": "..."}`) instead of an empty
+  one. The source, sync, host, enricher and project routes answered `403`/`404`
+  with no body at all, so a consumer could not tell "source is not in the
+  cache" from "source is not configured", or a missing source from a missing
+  host on the same `DELETE`. The messages now name the id and the reason, and
+  the status codes are unchanged. Output endpoints already answered this way;
+  the rest of the API now agrees. Registered as `ErrorBody` in the OpenAPI
+  spec, so Swagger documents the shape.
+
 ## [0.3.9] - 2026-07-25
 
 ### Added

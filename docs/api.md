@@ -79,6 +79,20 @@ connector or credential error rather than mapping it to an HTTP status:
 
 `404` means the source id itself isn't configured.
 
+### Errors
+
+Every failure carries a JSON body:
+
+```json
+{ "error": "source 'src-d42' is not in the cache (never synced, or evicted)" }
+```
+
+The message distinguishes cases that share a status code — `404` from
+`/dataset` means "not in the cache", `404` from `/sync` means "not in
+`sources.yaml`", and a `404` from `DELETE .../hosts/{hostname}` names whichever
+of the two is missing. Treat the text as loggable, not matchable: branch on the
+status code, read the message.
+
 ### Dataset pagination
 
 Without query parameters, `/dataset` returns the **raw Dataset** — the exact

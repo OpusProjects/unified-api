@@ -14,6 +14,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   caches, tools pointed at an inventory URL). A query string carries no types,
   so parameters arrive as strings; `POST` is still the way to pass numbers,
   booleans or nested structures.
+- `ETag` / `If-None-Match` on filtered and paginated `/dataset` responses, not
+  just the plain path. A consumer polling one slice (`?group=linux` every few
+  minutes) now gets `304` while nothing changes instead of re-transferring it.
+  The validator combines the cache's write counter with the query parameters,
+  so it is invalidated by any write — including a sync of an unrelated source
+  — and does not survive a restart. Never stale, occasionally redundant; the
+  plain path keeps its content-derived, restart-stable ETag.
 
 ## [0.6.0] - 2026-07-28
 

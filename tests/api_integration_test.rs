@@ -960,6 +960,59 @@ async fn status_lists_repeated_host_parameter_once() {
     assert_eq!(json["total_hosts"], 2);
 }
 
+// Filtered/paginated responses carry a validator too, so a consumer polling
+// the same slice on a schedule gets 304 while nothing changes
+#[tokio::test]
+async fn filtered_dataset_supports_if_none_match() {
+    let (app, state) = app_with_demo_data_and_state();
+    let path = "/api/v1/sources/src-demo/dataset?group=section9&limit=10";
+
+    let request = Request::builder()
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get("etag")
+        .expect("filtered response carries no ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Same query, validator sent back: nothing changed
+    let request = Request::builder()
+        .uri(path)
+        .header("if-none-match", &etag)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+
+    // A different slice must not match the stored validator
+    let request = Request::builder()
+        .uri("/api/v1/sources/src-demo/dataset?group=seele&limit=10")
+        .header("if-none-match", &etag)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // And a write invalidates it: the cache generation moves
+    state.cache.update("src-demo", &mut |entry| {
+        entry.update_host("batou.section9.net".to_string(), Default::default());
+    });
+
+    let request = Request::builder()
+        .uri(path)
+        .header("if-none-match", &etag)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn dataset_offset_beyond_total_returns_empty_page() {
     let (status, body) = get(

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
 use std::borrow::Cow;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
@@ -185,7 +186,7 @@ impl DatasetParams {
     ),
     responses(
         (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys."),
-        (status = 304, description = "If-None-Match matched the current ETag — dataset unchanged, no body (plain queries only)"),
+        (status = 304, description = "If-None-Match matched the current ETag — nothing changed, no body"),
         (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
         (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
     )
@@ -235,6 +236,44 @@ pub async fn get_source_dataset(
             .header(header::ETAG, &cached.etag)
             // Bytes clone = shared buffer, not a copy
             .body(axum::body::Body::from(cached.bytes.clone()))
+            .unwrap());
+    }
+
+    // A filtered response depends on two things: the data and the query. The
+    // validator combines both — the cache generation, bumped by every write,
+    // and a hash of the parameters.
+    //
+    // The generation is global, so an unrelated source's sync also invalidates
+    // this ETag. That is pessimistic (a needless re-transfer) but never stale,
+    // and it costs one integer read instead of hashing the selected hostvars.
+    //
+    // Unlike the plain path's content-derived ETag, this one does not survive a
+    // restart: the generation counter starts from zero again, so a client's
+    // stored validator stops matching and it re-fetches once. Correct, just not
+    // as good as the plain path.
+    let etag = {
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        params.host.hash(&mut hasher);
+        params.group.hash(&mut hasher);
+        params.limit.hash(&mut hasher);
+        params.offset.hash(&mut hasher);
+        params.fields.hash(&mut hasher);
+        format!("\"{:x}-{}\"", hasher.finish(), state.cache.generation())
+    };
+
+    if let Some(if_none_match) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        && if_none_match.split(',').any(|candidate| {
+            let candidate = candidate.trim();
+            candidate == etag || candidate == "*"
+        })
+    {
+        return Ok(Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header(header::ETAG, &etag)
+            .body(axum::body::Body::empty())
             .unwrap());
     }
 
@@ -309,6 +348,7 @@ pub async fn get_source_dataset(
 
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ETAG, &etag)
         .body(axum::body::Body::from(body))
         .unwrap())
 }

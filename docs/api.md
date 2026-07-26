@@ -207,9 +207,20 @@ $ curl -s -H 'If-None-Match: "cafe1234deadbeef-524288"' \
 ```
 
 The ETag changes whenever the dataset does (sync, enricher, host PUT/DELETE)
-and is stable across restarts for identical data. Filtered/paginated queries
-don't carry one — their responses are parameterized, and the interesting
-saving is on the full pulls anyway.
+and is stable across restarts for identical data.
+
+Filtered and paginated queries carry a validator too, so a consumer polling
+one slice (`?group=linux` every few minutes) gets `304` while nothing
+changes. It is built differently — from the cache's write counter plus the
+query parameters, rather than the response bytes — which has two
+consequences worth knowing:
+
+- **Any write invalidates it**, including a sync of an unrelated source. You
+  may get a full body back when your slice didn't actually change. Never
+  stale, occasionally redundant.
+- **It does not survive a restart.** The counter starts from zero again, so a
+  stored validator stops matching and the client re-fetches once. The plain
+  path's content-derived ETag does survive.
 
 **Gzip.** Responses are compressed when the client sends
 `Accept-Encoding: gzip` (`curl --compressed`, and most HTTP libraries, do by

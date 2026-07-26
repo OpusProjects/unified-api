@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking (consumers reading `total_hosts` from `/status`):** `total_hosts`
+  is now the source's full host count, and the number of entries in the
+  response is reported as the new `returned` field — mirroring the
+  `total_hosts`/`returned` pair the `/dataset` envelope already uses. It
+  previously counted hosts *after* filtering, so `?host=motoko` answered
+  `total_hosts: 1`, which reads as "this source has one host". Unfiltered
+  requests are unaffected: both fields equal the old value.
+
 ## [0.3.9] - 2026-07-25
 
 ### Added

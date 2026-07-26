@@ -322,7 +322,9 @@ async fn status_filter_by_host() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(result["total_hosts"], 1);
+    // total_hosts describes the source (6 hosts), returned this response
+    assert_eq!(result["total_hosts"], 6);
+    assert_eq!(result["returned"], 1);
     assert_eq!(result["hosts"][0]["hostname"], "motoko.section9.net");
 }
 
@@ -345,7 +347,8 @@ async fn status_filter_by_group() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(result["total_hosts"], 3);
+    assert_eq!(result["total_hosts"], 6);
+    assert_eq!(result["returned"], 3);
 }
 
 // =========================================================================
@@ -367,7 +370,10 @@ async fn status_unknown_host_returns_empty() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["total_hosts"], 0);
+    // The filter matched nothing, but the source still has its 6 hosts
+    assert_eq!(json["total_hosts"], 6);
+    assert_eq!(json["returned"], 0);
+    assert_eq!(json["hosts"].as_array().unwrap().len(), 0);
 }
 
 // =========================================================================

@@ -78,6 +78,40 @@ fn app_with_demo_data_and_state() -> (axum::Router, std::sync::Arc<unified_api::
     (app, state)
 }
 
+// A minimal script source. Every field of Source has to be given a value, and
+// the tests that need a *configured* source (rather than just a cache entry)
+// only ever vary the script path.
+fn script_source(script_path: &str) -> unified_api::domain::source::Source {
+    unified_api::domain::source::Source {
+        name: "Test Source".to_string(),
+        project_id: "test".to_string(),
+        script_path: script_path.to_string(),
+        script_args: vec![],
+        output_format: Default::default(),
+        hosts_from_source: None,
+        connector_type: unified_api::domain::source::ConnectorType::Script,
+        sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
+        credential_ids: vec![],
+        schedule: None,
+        sync_interval_seconds: None,
+        ttl_seconds: 3600,
+        timeout_seconds: 300,
+        ttl_overrides: Default::default(),
+        config: std::collections::HashMap::new(),
+    }
+}
+
+// Reads one gauge value out of the Prometheus text exposition format, so tests
+// assert on numbers instead of substring-matching rendered floats.
+// None = the series is not present at all.
+fn gauge_value(body: &str, metric: &str, source: &str) -> Option<f64> {
+    let needle = format!("{}{{source=\"{}\"}}", metric, source);
+    body.lines()
+        .find(|line| line.starts_with(&needle))
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|value| value.parse().ok())
+}
+
 // =========================================================================
 // Tests: health checks
 // =========================================================================
@@ -241,23 +275,7 @@ async fn metrics_exposes_sync_counters() {
     let mut sources = std::collections::HashMap::new();
     sources.insert(
         "src-metrics".to_string(),
-        unified_api::domain::source::Source {
-            name: "Metrics Test".to_string(),
-            project_id: "test".to_string(),
-            script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
-            script_args: vec![],
-            output_format: Default::default(),
-            hosts_from_source: None,
-            connector_type: unified_api::domain::source::ConnectorType::Script,
-            sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
-            credential_ids: vec![],
-            schedule: None,
-            sync_interval_seconds: None,
-            ttl_seconds: 3600,
-            timeout_seconds: 300,
-            ttl_overrides: Default::default(),
-            config: std::collections::HashMap::new(),
-        },
+        script_source("tests/adapters/out/connectors/inventory.py"),
     );
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
@@ -280,6 +298,83 @@ async fn metrics_exposes_sync_counters() {
     );
     assert!(body.contains("unified_api_sync_duration_seconds"));
     assert!(body.contains("src-metrics"));
+}
+
+// Freshness gauges are computed at scrape time from the cache, so they answer
+// "how stale is this source right now" without waiting for a sync to push them
+#[tokio::test]
+async fn metrics_exposes_freshness_gauges() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert(
+        "src-gauges".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    );
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .build_with_state();
+
+    // Configured but never synced: cached=0 is reported (an absent series
+    // could not be told apart from a removed source), and the dataset gauges
+    // do not exist yet because there is no entry to describe.
+    let (status, body) = get(app.clone(), "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_cached", "src-gauges"),
+        Some(0.0),
+        "missing cached gauge in: {}",
+        body
+    );
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_hosts", "src-gauges"),
+        None
+    );
+
+    let dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(
+        r#"{"hostvars": {"a": {}, "b": {}}, "groups": {"g": {"hosts": ["a"]}}}"#,
+    )
+    .unwrap();
+    state.cache.set(
+        "src-gauges",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 3600),
+    );
+
+    let (_, body) = get(app.clone(), "/metrics").await;
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_cached", "src-gauges"),
+        Some(1.0)
+    );
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_hosts", "src-gauges"),
+        Some(2.0)
+    );
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_groups", "src-gauges"),
+        Some(1.0)
+    );
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_fresh", "src-gauges"),
+        Some(1.0)
+    );
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_ttl_seconds", "src-gauges"),
+        Some(3600.0)
+    );
+    assert!(gauge_value(&body, "unified_api_source_age_seconds", "src-gauges").is_some());
+
+    // ttl 0 = expired the moment it was stored: this is the gauge an alert
+    // fires on, and it flips without any sync having to run
+    let dataset: unified_api::domain::dataset::Dataset =
+        serde_json::from_str(r#"{"hostvars": {"a": {}}}"#).unwrap();
+    state.cache.set(
+        "src-gauges",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 0),
+    );
+
+    let (_, body) = get(app, "/metrics").await;
+    assert_eq!(
+        gauge_value(&body, "unified_api_source_fresh", "src-gauges"),
+        Some(0.0)
+    );
 }
 
 // =========================================================================

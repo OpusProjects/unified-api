@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Per-source freshness gauges on `GET /metrics`: `unified_api_source_cached`,
+  `unified_api_source_age_seconds`, `unified_api_source_ttl_seconds`,
+  `unified_api_source_fresh`, `unified_api_source_hosts` and
+  `unified_api_source_groups`, all labeled by source. Read from the cache on
+  every scrape rather than pushed on sync, so age keeps growing while a source
+  is not syncing — previously only counters and histograms existed, so "is any
+  source stale?" could not be answered from Prometheus at all, and a source
+  whose scheduler task stopped ticking produced no errors to alert on.
+  `unified_api_source_cached` covers configured sources that have never
+  synced, which would otherwise be an absent series.
+
 ## [0.3.9] - 2026-07-25
 
 ### Added

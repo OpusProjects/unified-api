@@ -651,6 +651,27 @@ probes — scrapers don't carry the API key):
 | `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |
 | `unified_api_endpoint_total` | `endpoint`, `result` | Output endpoint runs |
 | `unified_api_endpoint_duration_seconds` | `endpoint` | Endpoint duration histogram |
+| `unified_api_source_cached` | `source` | 1 if the configured source has a cache entry, 0 if it has never synced |
+| `unified_api_source_age_seconds` | `source` | Seconds since the dataset was last fetched |
+| `unified_api_source_ttl_seconds` | `source` | The source's dataset TTL |
+| `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired |
+| `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
+| `unified_api_source_groups` | `source` | Groups in the cached dataset |
 
 Timed-out and failed runs count as `result="error"`, so alerting on the error
 rate catches hung connectors too.
+
+The `unified_api_source_*` gauges are read from the cache on every scrape
+rather than pushed on sync, so age keeps growing while a source is not
+syncing — the case worth alerting on. A source whose scheduler task died
+produces no errors at all, so the error rate alone will not catch it:
+
+```yaml
+# Data older than three sync intervals, or never synced at all
+- alert: UnifiedApiSourceStale
+  expr: unified_api_source_fresh == 0 or unified_api_source_cached == 0
+  for: 15m
+```
+
+The gauges are labeled per source, so a source removed from both config and
+cache keeps its last value until the process restarts.

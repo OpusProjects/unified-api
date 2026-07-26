@@ -105,9 +105,14 @@ GET /api/v1/sources/src-d42/dataset?group=linux&limit=50
 ```
 
 `host=` returns a single host, `group=` restricts to that group's members
-(and returns only that group); unknown names are `404`. Group membership
-lists are always included — they're tiny next to the hostvars, which carry
-the facts.
+(and returns only that group). Group membership lists are always included —
+they're tiny next to the hostvars, which carry the facts.
+
+An unmatched filter is an **empty result**, not a `404`: a filter that
+matches nothing is an empty collection, not a missing resource. This matters
+for `group=` in particular, because auto-groups take their names from fact
+keys — `?group=autofs` is a valid query that selects nothing until some host
+reports autofs data. `404` means the *source* isn't in the cache.
 
 ### Conditional requests and compression
 

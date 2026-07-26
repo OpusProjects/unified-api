@@ -13,6 +13,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   nested groups that get merged) produced one entry per occurrence and
   counted each in `total_hosts`; `?host=a,a` did the same. The dataset
   endpoint has always deduplicated its selection — status now agrees.
+- **Breaking (consumers branching on 404):** `?group=` on `/dataset` and
+  `/status` now returns an empty result instead of `404` when the group
+  matches nothing, completing the change 0.3.9 made for `?host=`. A filter
+  that matches nothing is an empty collection, not a missing resource — and
+  it matters more for groups, because auto-groups derive their names from
+  fact keys: `?group=autofs` used to `404` until some host reported autofs
+  data, then start working, with no change to the request. `404` is still
+  returned when the source itself is not in cache.
 
 ## [0.3.9] - 2026-07-25
 

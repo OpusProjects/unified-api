@@ -307,7 +307,7 @@ pub async fn source_status(
     let entry = state.cache.get(&id).ok_or(StatusCode::NOT_FOUND)?;
     let source = state.sources.get(&id);
 
-    let hostnames: Vec<String> = if let Some(ref host) = params.host {
+    let mut hostnames: Vec<String> = if let Some(ref host) = params.host {
         host.split(',')
             .map(|h| h.trim())
             .filter(|h| entry.dataset.hostvars.contains_key(*h))
@@ -321,6 +321,15 @@ pub async fn source_status(
     } else {
         entry.dataset.hostvars.keys().cloned().collect()
     };
+    // Neither input is guaranteed unique: a group's member list can carry the
+    // same host twice (a connector emitting it in two nested groups that get
+    // merged), and ?host=a,a is a valid query. Both used to produce duplicate
+    // entries in `hosts` and inflate total_hosts. The dataset endpoint has
+    // always deduplicated its selection; this makes status agree.
+    // Sorting here also means the response comes out ordered by hostname
+    // without a second sort at the end.
+    hostnames.sort();
+    hostnames.dedup();
 
     // Resolve group TTL overrides into a per-host map ONCE, instead of
     // scanning every group's member list for every host — that scan made a
@@ -342,7 +351,7 @@ pub async fn source_status(
         })
         .unwrap_or_default();
 
-    let mut hosts: Vec<HostStatus> = hostnames
+    let hosts: Vec<HostStatus> = hostnames
         .iter()
         .filter_map(|hostname| {
             let age = entry.host_age_seconds(hostname)?;
@@ -360,8 +369,6 @@ pub async fn source_status(
             })
         })
         .collect();
-
-    hosts.sort_by(|a, b| a.hostname.cmp(&b.hostname));
 
     Ok(Json(SourceStatus {
         source_id: id,

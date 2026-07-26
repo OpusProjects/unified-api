@@ -32,6 +32,14 @@ pub struct ServerConfig {
     // which is right for server-to-server consumers. ["*"] = any origin.
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+
+    // What /readyz means. false (the default) = ready once ANY source has
+    // synced, so a pod serving part of the inventory takes traffic instead of
+    // waiting on the slowest source. true = every configured source must have
+    // synced first, for deployments where a partial inventory is worse than
+    // none (an AWX job that would run against half a datacenter).
+    #[serde(default)]
+    pub readyz_require_all_sources: bool,
 }
 
 // Cache behavior — config.yaml, `cache:` section (optional)

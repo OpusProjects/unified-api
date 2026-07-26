@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `server.readyz_require_all_sources` (default `false`): make `/readyz` turn
+  green only once every configured source has synced. The default stays "ready
+  when at least one source has synced", under which a deployment with ten
+  sources reports ready with nine of them broken — fine when a partial
+  inventory beats none, wrong when a job template would then run against half
+  a datacenter.
+
 ## [0.7.0] - 2026-07-29
 
 ### Added

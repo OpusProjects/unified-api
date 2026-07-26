@@ -34,6 +34,9 @@ pub struct AppState {
     // success, last error). Not a port: it is in-process state with no
     // outside world behind it, like the cache's contents.
     pub sync_health: Arc<SyncHealthRegistry>,
+    // /readyz turns green only when every configured source has synced, rather
+    // than when at least one has (see config::ServerConfig)
+    pub readyz_require_all_sources: bool,
 }
 
 impl AppState {

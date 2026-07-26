@@ -110,6 +110,7 @@ async fn main() {
         .secrets(std::sync::Arc::clone(&secrets))
         .api_keys(api_keys)
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
+        .readyz_require_all_sources(cfg.server.readyz_require_all_sources)
         .build_with_state();
 
     // With persistence configured, reload the last snapshot BEFORE the

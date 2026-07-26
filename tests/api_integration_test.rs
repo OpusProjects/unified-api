@@ -355,6 +355,64 @@ async fn readyz_returns_503_before_sync() {
     assert_eq!(result["sources_pending"][0], "src-test");
 }
 
+// With readyz_require_all_sources, one synced source out of two is not enough
+#[tokio::test]
+async fn readyz_require_all_sources_waits_for_every_source() {
+    let mut sources = std::collections::HashMap::new();
+    for id in ["src-a", "src-b"] {
+        sources.insert(
+            id.to_string(),
+            unified_api::domain::source::Source {
+                name: "Test".to_string(),
+                project_id: "test".to_string(),
+                script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
+                script_args: vec![],
+                output_format: Default::default(),
+                hosts_from_source: None,
+                connector_type: unified_api::domain::source::ConnectorType::Script,
+                sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
+                credential_ids: vec![],
+                schedule: None,
+                sync_interval_seconds: None,
+                ttl_seconds: 3600,
+                timeout_seconds: 300,
+                ttl_overrides: Default::default(),
+                config: std::collections::HashMap::new(),
+            },
+        );
+    }
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .readyz_require_all_sources(true)
+        .build_with_state();
+
+    let dataset: unified_api::domain::dataset::Dataset =
+        serde_json::from_str(r#"{"hostvars": {"a": {}}}"#).unwrap();
+    state.cache.set(
+        "src-a",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset.clone(), 3600),
+    );
+
+    // One of two synced: the default would call this ready, this must not
+    let (status, body) = get(app.clone(), "/readyz").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["ready"], false);
+    assert_eq!(result["sources_synced"], 1);
+    assert_eq!(result["sources_pending"][0], "src-b");
+
+    state.cache.set(
+        "src-b",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 3600),
+    );
+
+    let (status, body) = get(app, "/readyz").await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["ready"], true);
+    assert_eq!(result["sources_synced"], 2);
+}
+
 // =========================================================================
 // Tests: sources API without data — empty cache
 // =========================================================================

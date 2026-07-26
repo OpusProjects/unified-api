@@ -701,7 +701,10 @@ async fn status_lists_repeated_host_parameter_once() {
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["hosts"].as_array().unwrap().len(), 1);
-    assert_eq!(json["total_hosts"], 1);
+    // The duplicate collapses into one returned entry; total_hosts describes
+    // the source (2 hosts), not the filter
+    assert_eq!(json["returned"], 1);
+    assert_eq!(json["total_hosts"], 2);
 }
 
 #[tokio::test]

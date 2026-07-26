@@ -9,6 +9,10 @@ updates:
       # One PR per week bundling all action bumps, instead of one PR per action
       github-actions:
         patterns: ["*"]
+    # Match the commit style in CONTRIBUTING.md: "build(deps): bump ..."
+    commit-message:
+      prefix: "build"
+      include: "scope"
 
   # Keep Rust dependencies up to date; complements the cargo-audit CI job
   # (audit only warns, Dependabot opens the actual bump PRs)
@@ -20,3 +24,6 @@ updates:
       # One grouped PR per week instead of one per crate
       cargo:
         patterns: ["*"]
+    commit-message:
+      prefix: "build"
+      include: "scope"

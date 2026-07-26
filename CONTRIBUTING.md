@@ -20,8 +20,11 @@ gh pr create --base main
 
 ### Commit / PR message style
 
-- Title: short, imperative, sentence case, no prefixes — `Add SSH connector with
-  parallel execution`, `Fix lost updates in cache`, not `feat: ...`
+- Title: `<type>: short imperative summary`, lowercase after the colon —
+  `feat: add SSH connector with parallel execution`, `fix: lost updates in
+  cache`. Types in use: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
+  `build`, `chore`.
+- Release commits are the exception: `Release x.y.z`, matching the tag.
 - Body (when the change needs explaining): plain prose, *what* and *why*, wrapped
   at ~72 columns. The problem first, then the change.
 

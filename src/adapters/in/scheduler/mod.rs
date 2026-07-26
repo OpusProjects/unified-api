@@ -40,6 +40,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     &*state.cache,
                     &**connector,
                     &*state.secrets,
+                    &state.sync_health,
                     &source_id,
                     &source,
                     SyncScope::Full,

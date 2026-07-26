@@ -14,6 +14,7 @@ use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
+use crate::domain::sync_health::SyncHealth;
 
 // Read from the sources cache: list, full dataset, and per-host status.
 // Write operations live in sync.rs, enrichers.rs, and hosts.rs.
@@ -79,6 +80,32 @@ pub struct CachedSourceInfo {
     pub is_fresh: bool,
     pub age_seconds: u64,
     pub total_hosts: usize,
+    /// Absent until the source has been synced at least once through this process
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_health: Option<SyncHealthInfo>,
+}
+
+// The freshness fields above say how old the data is. These say whether
+// anything is still managing to refresh it — the difference between "syncs
+// hourly, last one 20 minutes ago" and "connector has been failing since
+// Tuesday", which used to be visible only in the logs.
+#[derive(Serialize, ToSchema)]
+pub struct SyncHealthInfo {
+    pub last_attempt_age_seconds: Option<u64>,
+    pub last_success_age_seconds: Option<u64>,
+    pub last_error: Option<String>,
+    pub consecutive_failures: u32,
+}
+
+impl From<SyncHealth> for SyncHealthInfo {
+    fn from(health: SyncHealth) -> Self {
+        Self {
+            last_attempt_age_seconds: health.last_attempt_age_seconds,
+            last_success_age_seconds: health.last_success_age_seconds,
+            last_error: health.last_error,
+            consecutive_failures: health.consecutive_failures,
+        }
+    }
 }
 
 // #[utoipa::path] describes the endpoint for documentation:
@@ -110,6 +137,7 @@ pub async fn list_cached_sources(
                 is_fresh: entry.is_fresh(),
                 age_seconds: entry.age_seconds(),
                 total_hosts: entry.dataset.hostvars.len(),
+                sync_health: state.sync_health.get(key).map(Into::into),
             })
         })
         .collect();
@@ -309,6 +337,9 @@ pub struct SourceStatus {
     pub total_hosts: usize,
     /// Hosts described in this response
     pub returned: usize,
+    /// Absent until the source has been synced at least once through this process
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_health: Option<SyncHealthInfo>,
     pub hosts: Vec<HostStatus>,
 }
 
@@ -381,6 +412,10 @@ pub async fn source_status(
         })
         .collect();
 
+    // Read before `id` is moved into the response. No sort here: the shared
+    // filter helper already returns the hostnames in order.
+    let sync_health = state.sync_health.get(&id).map(Into::into);
+
     Ok(Json(SourceStatus {
         source_id: id,
         dataset_age_seconds: entry.age_seconds(),
@@ -392,6 +427,7 @@ pub async fn source_status(
         // envelope's total_hosts/returned pair.
         total_hosts: entry.dataset.hostvars.len(),
         returned: hosts.len(),
+        sync_health,
         hosts,
     }))
 }

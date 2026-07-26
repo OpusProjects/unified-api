@@ -18,6 +18,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
   whose scheduler task stopped ticking produced no errors to alert on.
   `unified_api_source_cached` covers configured sources that have never
   synced, which would otherwise be an absent series.
+- Per-source sync health on `GET /sources` and `GET /sources/{id}/status`: a
+  `sync_health` block with `last_attempt_age_seconds`,
+  `last_success_age_seconds`, `last_error` and `consecutive_failures`. A failed
+  scheduled sync previously left nothing behind but a log line — the dataset
+  just kept aging — so "the connector has been broken for six hours" and "this
+  source syncs daily" were indistinguishable through the API. Recorded in
+  `application::sync` so the scheduler and the HTTP route cannot drift, and
+  kept in a registry outside the cache so a source with no entry still has
+  somewhere to record its error. A success clears `last_error` and the failure
+  count; the last success age survives failures, which is what makes "worked N
+  hours ago, failing since" readable.
 
 ## [0.4.0] - 2026-07-26
 

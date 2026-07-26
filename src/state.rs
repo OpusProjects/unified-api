@@ -6,6 +6,7 @@ use crate::domain::endpoint::OutputEndpoint;
 use crate::domain::enricher::Enricher;
 use crate::domain::project::GitProject;
 use crate::domain::source::{ConnectorType, Source};
+use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports;
 
 // The shared application state: the ports (as Arc<dyn Trait>, so handlers
@@ -29,6 +30,10 @@ pub struct AppState {
     pub endpoints: HashMap<String, OutputEndpoint>,
     pub projects: HashMap<String, GitProject>,
     pub projects_dir: PathBuf,
+    // Why each source's data looks the way it does (last attempt, last
+    // success, last error). Not a port: it is in-process state with no
+    // outside world behind it, like the cache's contents.
+    pub sync_health: Arc<SyncHealthRegistry>,
 }
 
 impl AppState {

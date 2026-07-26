@@ -45,6 +45,7 @@ impl Modify for SecurityAddon {
         http::sources::CachedSourceInfo,
         http::sources::HostStatus,
         http::sources::SourceStatus,
+        http::sources::SyncHealthInfo,
         http::sync::SyncResult,
         http::enrichers::EnrichResult,
         http::endpoints::EndpointInfo,

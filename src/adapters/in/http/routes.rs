@@ -24,8 +24,9 @@ pub fn create_router(
     state: Arc<AppState>,
     api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
+    metrics_require_auth: bool,
 ) -> Router<()> {
-    let api_routes = Router::new()
+    let mut api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
         .route(
             "/api/v1/sources/{id}/dataset",
@@ -62,15 +63,31 @@ pub fn create_router(
         .route(
             "/api/v1/projects/{id}/sync",
             post(http::projects::sync_project_now),
-        )
+        );
+
+    // The exposition labels every source id and host count, which describes
+    // the inventory topology to anyone who can reach the port. Public is right
+    // for a scrape config on a trusted network (Prometheus sends no API key),
+    // so it stays the default — but on a shared network the route can move
+    // inside the authenticated group instead.
+    if metrics_require_auth {
+        api_routes = api_routes.route("/metrics", get(http::metrics::metrics));
+    }
+
+    let api_routes = api_routes
         .layer(middleware::from_fn(http::auth::require_api_key))
         .layer(axum::Extension(ApiKeys(api_keys.into())));
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(http::health::healthz))
-        .route("/readyz", get(http::health::readyz))
-        .route("/metrics", get(http::metrics::metrics))
+        .route("/readyz", get(http::health::readyz));
+
+    if !metrics_require_auth {
+        router = router.route("/metrics", get(http::metrics::metrics));
+    }
+
+    let router = router
         .merge(api_routes)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);

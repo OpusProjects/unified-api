@@ -21,6 +21,14 @@ Wrong or missing key → `401`. Keys are compared in constant time. Health probe
 keys configured at all, authentication is disabled (useful for local
 development) and the app logs a warning at startup.
 
+`/metrics` is public because that is what a Prometheus scrape config expects,
+but its exposition labels every source id and host count — a description of
+your inventory topology. On a shared network set
+`server.metrics_require_auth: true` and give the scraper a key; the health
+probes stay public regardless, since they carry no inventory data. With no
+keys configured the flag has no effect, because authentication is off
+entirely.
+
 ### Authorization
 
 Each key has a role:

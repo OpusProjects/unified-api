@@ -40,6 +40,13 @@ pub struct ServerConfig {
     // none (an AWX job that would run against half a datacenter).
     #[serde(default)]
     pub readyz_require_all_sources: bool,
+    // Require an API key on /metrics. false (the default) keeps it public
+    // alongside the health probes, which is what Prometheus scrape configs
+    // expect. true is for a shared network: the exposition labels every
+    // source id and host count, which describes the inventory topology to
+    // anyone who can reach the port.
+    #[serde(default)]
+    pub metrics_require_auth: bool,
 }
 
 // Cache behavior — config.yaml, `cache:` section (optional)

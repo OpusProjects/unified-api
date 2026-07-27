@@ -131,20 +131,86 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
 
 ## Releasing a new version
 
-When bumping the version, update all of these:
+`main` is protected: it takes no direct pushes and no force pushes, and every
+change needs a PR whose `test`, `audit` and `build-image` checks pass. That
+includes the release commit itself — there is no admin bypass.
 
-1. `Cargo.toml` — `version = "x.y.z"` (source of truth)
-2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"` (must match Cargo.toml)
-3. `CHANGELOG.md` — add a `## [x.y.z] - YYYY-MM-DD` section above the previous release
+### 1. Choose the number
 
-To release: push the commit to `main`, then push a `v<version>` tag. CI
-(`.github/workflows/build.yaml`) handles the rest:
+Semantic Versioning, and the project is pre-1.0:
 
-- Runs tests, clippy, fmt check
-- Builds and pushes the Docker image to `ghcr.io/opusprojects/unified-api:<version>`
-- Creates a GitHub Release with notes extracted from the CHANGELOG section
+- **PATCH** (`0.6.1`) — bug fixes only. Nothing added.
+- **MINOR** (`0.7.0`) — anything added (a route, a config key, a response
+  field), *and* anything breaking, since 0.x puts breaking changes in MINOR.
+- New functionality is never a PATCH, however small the diff.
 
-Do not manually create GitHub releases — the workflow does it from the tag.
+Mark breaking entries in the CHANGELOG as
+`**Breaking (who it affects):**` so a reader can see the risk without a diff.
+
+### 2. Bump, on a branch
+
+```bash
+git checkout main && git pull --ff-only
+git checkout -b release/x.y.z
+```
+
+Four edits, all required:
+
+1. `Cargo.toml` — `version = "x.y.z"` (source of truth; the OpenAPI spec
+   version comes from `CARGO_PKG_VERSION`)
+2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"`
+3. `CHANGELOG.md` — rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` and
+   leave a fresh empty `## [Unreleased]` above it
+4. `CHANGELOG.md` link refs at the bottom — repoint `[Unreleased]` at
+   `vx.y.z...HEAD` and add `[x.y.z]: …/compare/v<previous>...vx.y.z`
+
+### 3. Check before pushing
+
+```bash
+cargo build                        # must compile as the new version
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+git diff --stat Cargo.lock         # exactly 1 line — no dependency drift
+```
+
+Then dry-run the release notes with the same `awk` the workflow uses, because
+a malformed heading silently degrades them to "See CHANGELOG.md for details":
+
+```bash
+awk -v s="## [x.y.z]" 'substr($0,1,length(s))==s{f=1;next} f && substr($0,1,4)=="## ["{exit} f' CHANGELOG.md
+```
+
+### 4. PR, merge, then tag
+
+```bash
+git commit -am "Release x.y.z"     # no type prefix; releases are the exception
+git push -u origin release/x.y.z
+gh pr create --base main --title "Release x.y.z"
+# wait for test + audit + build-image
+gh pr merge --squash --delete-branch --subject "Release x.y.z"
+
+git checkout main && git pull --ff-only   # MUST pull: squashing made a new commit
+git tag vx.y.z && git push origin vx.y.z
+```
+
+**Tag the squashed commit on `main`, not the branch commit.** Squash-merging
+creates a different commit, so tagging before pulling points the tag at
+something that is not on `main`. Tags are not covered by branch protection, so
+the tag push itself needs no PR.
+
+### What CI does with the tag
+
+`.github/workflows/build.yaml` (workflow name "unified-api CI"):
+
+- publishes `ghcr.io/opusprojects/unified-api` as `x.y.z`, `<sha>` and `latest`
+- creates the GitHub Release with notes extracted from the CHANGELOG section
+
+**Only tags publish.** PRs and pushes to `main` build the image and discard it,
+so `latest` always means the newest release rather than the tip of `main`.
+
+Do not create GitHub releases by hand — the workflow does it from the tag, and
+a manual one is authored by a person rather than `github-actions[bot]`, which
+is visible forever in the API and cannot be corrected without deleting and
+recreating the release (losing its original date).
 
 ## Conventions
 

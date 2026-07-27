@@ -18,7 +18,8 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 - axum (HTTP framework)
 - tokio (async runtime)
 - dashmap (concurrent in-memory cache)
-- serde + serde_json + serde_yaml (serialization)
+- serde + serde_json + serde_yaml_ng (serialization; `_ng` is the maintained
+  fork of the deprecated `serde_yaml`)
 - utoipa (OpenAPI/Swagger docs)
 - russh (native SSH connector)
 - metrics + metrics-exporter-prometheus (`/metrics`)
@@ -45,9 +46,12 @@ src/
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # Source, TtlOverrides, ConnectorType
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
+│   ├── sync_health.rs        # SyncHealth + registry (last attempt/success/error)
 │   ├── credential.rs         # Credential, CredentialType
+│   ├── api_key.rs            # ApiKeyDef, ApiKeyRole (admin / restricted)
 │   ├── enricher.rs           # Enricher
 │   ├── sync_mode.rs          # SyncMode (replace/merge)
+│   ├── static_inventory.rs   # Ansible YAML inventory parsing (native, no process)
 │   ├── project.rs            # GitProject
 │   └── endpoint.rs           # OutputEndpoint
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
@@ -67,11 +71,14 @@ src/
 │   │   ├── http/             # axum handlers, auth, routes, OpenAPI spec
 │   │   │   ├── routes.rs     # Router assembly (+ optional CORS layer)
 │   │   │   ├── openapi.rs    # utoipa ApiDoc (register new handlers here)
-│   │   │   ├── sources.rs    # Read endpoints (list/dataset/status)
+│   │   │   ├── error.rs      # ApiError / ErrorBody — the JSON shape of every failure
+│   │   │   ├── sources.rs    # Reads: list/dataset/status/groups/hosts
+│   │   │   ├── cache.rs      # DELETE a source's cache entry (eviction)
 │   │   │   ├── sync.rs       # POST sync
 │   │   │   ├── enrichers.rs  # POST enricher run
 │   │   │   ├── hosts.rs      # PUT/DELETE host
-│   │   │   ├── endpoints.rs  # Output endpoints
+│   │   │   ├── endpoints.rs  # Output endpoints (GET and POST)
+│   │   │   ├── projects.rs   # Git project routes (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
 │   │   │   └── auth.rs       # API key middleware
@@ -112,8 +119,18 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   `timeout_seconds` (default 300); a hung script fails the run instead of blocking
   its scheduler task or HTTP request.
 - **Metrics:** `GET /metrics` (Prometheus, public like the health probes) — sync,
-  enrich and endpoint counters + duration histograms. The recorder is a process
-  global installed once via `OnceLock`, so tests building many apps share it.
+  enrich and endpoint counters + duration histograms, plus per-source gauges
+  (`unified_api_source_age_seconds`, `_fresh`, `_cached`, `_hosts`, `_groups`,
+  `_ttl_seconds`). The gauges are computed from the cache **on each scrape**,
+  not pushed on sync: age grows with the clock, so a pushed value would read
+  "0 seconds old" exactly when a source stops syncing. The recorder is a
+  process global installed once via `OnceLock`, so tests building many apps
+  share it.
+- **Sync health:** every sync goes through `application::sync`, which records
+  last attempt / last success / last error / consecutive failures into the
+  `SyncHealthRegistry` on `AppState`. `GET /sources` and `/status` expose it as
+  `sync_health`. It lives outside the cache on purpose — a source that has
+  never synced has no cache entry but still needs somewhere to record why.
 - **Read path is shared, not copied:** `CacheEntry` holds its dataset (and
   host timestamps) behind `Arc`; reads bump a refcount, writers go through
   `Arc::make_mut` (copy-on-write). The entry also caches its serialized JSON +
@@ -125,8 +142,17 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   write) lets the persistence task skip disk writes when nothing changed.
 - **CORS is off by default:** opt in with `server.cors_allowed_origins` (`["*"]`
   = any). No configured origins = no CORS layer at all.
-- **Auth:** optional static key (`UNIFIED_API_KEY`); constant-time compare;
-  `/healthz`, `/readyz`, `/metrics` and Swagger stay public.
+- **Auth:** keys are declared in `api_keys.yaml`, each `role: admin` (everything)
+  or restricted to explicit `sources`/`endpoints` id lists; secrets come from the
+  env var each definition names. The legacy `UNIFIED_API_KEY` still works as one
+  extra admin key. Constant-time compare; `/healthz`, `/readyz`, `/metrics` and
+  Swagger stay public. No keys configured at all = auth disabled, logged loudly
+  at startup.
+- **Errors carry a body:** handlers return `ApiError`, which renders as
+  `{"error": "..."}` — never a bare `StatusCode`, which axum sends with an empty
+  body. New handlers should use `ApiError::source_forbidden` /
+  `source_not_cached` / `source_not_configured` so the wording stays identical
+  across routes, and name `body = ErrorBody` in their `#[utoipa::path]`.
 - **OpenAPI version** comes from `CARGO_PKG_VERSION` — bump only `Cargo.toml`.
 
 ## Releasing a new version

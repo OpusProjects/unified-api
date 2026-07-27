@@ -85,7 +85,9 @@ src/
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
 │       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
-│       ├── connectors/       # process.rs: ConnectorPort → tokio::process; ssh.rs → russh
+│       ├── connectors/       # process.rs → tokio::process; ssh.rs → russh;
+│       │                     #   static_inventory.rs → Ansible YAML on disk;
+│       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
 │       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
 │       ├── output/           # process.rs: OutputPort → tokio::process

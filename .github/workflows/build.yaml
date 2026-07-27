@@ -28,7 +28,7 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE"
-          ./scripts/check-changelog.sh "origin/$BASE"
+          ./.github/scripts/check-changelog.sh "origin/$BASE"
 
       - uses: dtolnay/rust-toolchain@stable
         with:

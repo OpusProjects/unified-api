@@ -100,6 +100,7 @@ tests/                        # Integration tests (*.rs), with sample scripts mi
         ├── enrichers/        #   sample enricher scripts
         └── output/           #   sample output transformer scripts
 .cargo/audit.toml             # cargo-audit ignore list (documented advisories)
+.github/scripts/              # helpers the workflow runs (check-changelog.sh)
 CHANGELOG.md                  # Keep a Changelog; move Unreleased entries on release
 ```
 
@@ -248,7 +249,7 @@ recreating the release (losing its original date).
 ## Conventions
 
 - **Only `## [Unreleased]` is editable in CHANGELOG.md.** Released sections
-  record what shipped. `scripts/check-changelog.sh` runs in CI on every PR and
+  record what shipped. `.github/scripts/check-changelog.sh` runs in CI on every PR and
   fails if they change — the mistake is otherwise silent, because rebasing
   across a release makes git apply your entry into the newly released section
   without a conflict. If that happens, move the entry back up to Unreleased.

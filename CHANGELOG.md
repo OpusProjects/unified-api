@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/v1/endpoints/{id}` alongside the existing `POST`: query parameters
+  become the endpoint's dynamic parameters. Rendering an inventory is a read,
+  and POST-only shut out consumers that can only fetch a URL (browsers, proxy
+  caches, tools pointed at an inventory URL). A query string carries no types,
+  so parameters arrive as strings; `POST` is still the way to pass numbers,
+  booleans or nested structures.
+
 ## [0.6.0] - 2026-07-28
 
 ### Added

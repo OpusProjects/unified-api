@@ -56,7 +56,7 @@ pub fn create_router(
         .route("/api/v1/endpoints", get(http::endpoints::list_endpoints))
         .route(
             "/api/v1/endpoints/{id}",
-            post(http::endpoints::run_endpoint),
+            post(http::endpoints::run_endpoint).get(http::endpoints::run_endpoint_get),
         )
         .route("/api/v1/projects", get(http::projects::list_projects))
         .route(

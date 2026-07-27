@@ -975,6 +975,58 @@ async fn endpoint_with_dynamic_params() {
 }
 
 // =========================================================================
+// Test: GET runs the endpoint with query-string params
+// =========================================================================
+#[tokio::test]
+async fn endpoint_get_passes_query_params() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-dynamic".to_string(),
+        OutputEndpoint {
+            name: "Dynamic Endpoint".to_string(),
+            source_ids: vec!["src-test".to_string()],
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: 300,
+        },
+    );
+
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
+
+    // No query string = no params, same as a POST with no body
+    let (status, body) = request(app.clone(), "GET", "/api/v1/endpoints/ep-dynamic").await;
+    assert_eq!(status, StatusCode::OK);
+    let full: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(full["_meta"]["hostvars"].as_object().unwrap().len(), 6);
+
+    // Query parameters reach the script the same way a JSON body does
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/api/v1/endpoints/ep-dynamic?filter_datacenter=section9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let filtered: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(filtered["_meta"]["hostvars"].as_object().unwrap().len(), 3);
+    assert!(filtered["_meta"]["hostvars"]["motoko.section9.net"].is_object());
+
+    // And an unknown endpoint still 404s through the GET route
+    let (status, _) = request(app, "GET", "/api/v1/endpoints/ep-nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// =========================================================================
 // Test: dynamic params override static config
 // =========================================================================
 #[tokio::test]

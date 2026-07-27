@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
@@ -82,6 +82,55 @@ pub async fn run_endpoint(
     Path(id): Path<String>,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Response, StatusCode> {
+    let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
+    execute_endpoint(&state, &auth, id, params).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/endpoints/{id}",
+    tag = "Endpoints",
+    params(
+        ("id" = String, Path, description = "Endpoint identifier (e.g. ep-ansible-linux)")
+    ),
+    responses(
+        (status = 200, description = "Transformed output from the endpoint script. Query parameters become the endpoint's dynamic parameters, all as strings"),
+        (status = 403, description = "API key not allowed to run this endpoint"),
+        (status = 404, description = "Endpoint not configured"),
+        (status = 503, description = "Required sources not yet synced")
+    )
+)]
+pub async fn run_endpoint_get(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+    Path(id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, StatusCode> {
+    // Rendering an inventory is a read, so it should be reachable with GET:
+    // browsers, proxy caches and tools that only fetch URLs could not call
+    // the POST-only route at all.
+    //
+    // A query string has no types, so every parameter arrives as a string.
+    // The script receives the same ENDPOINT_PARAMS object either way, so a
+    // transformer that already coerces its inputs needs no change; one that
+    // needs real numbers, booleans or nesting still wants POST.
+    let params = serde_json::Value::Object(
+        query
+            .into_iter()
+            .map(|(key, value)| (key, serde_json::Value::String(value)))
+            .collect(),
+    );
+    execute_endpoint(&state, &auth, id, params).await
+}
+
+// The shared body of both methods: authorize, collect the datasets, run the
+// transformer under its timeout, record metrics.
+async fn execute_endpoint(
+    state: &Arc<AppState>,
+    auth: &AuthContext,
+    id: String,
+    params: serde_json::Value,
+) -> Result<Response, StatusCode> {
     // Granting an endpoint implicitly grants reading its output, even when
     // the key cannot read the underlying sources directly — the endpoint IS
     // the product being granted (e.g. a rendered inventory).
@@ -89,7 +138,6 @@ pub async fn run_endpoint(
         return Err(StatusCode::FORBIDDEN);
     }
     let endpoint = state.endpoints.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
 
     // Collect datasets from configured sources (Arc clones — shared with the
     // cache, not deep copies)

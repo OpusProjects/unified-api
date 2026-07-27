@@ -40,6 +40,7 @@ impl Modify for SecurityAddon {
         http::hosts::put_host,
         http::hosts::delete_host,
         http::endpoints::run_endpoint,
+        http::endpoints::run_endpoint_get,
         http::endpoints::list_endpoints,
         http::projects::list_projects,
         http::projects::sync_project_now,

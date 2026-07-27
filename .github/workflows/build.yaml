@@ -1,4 +1,4 @@
-name: Build and Push
+name: unified-api CI
 
 on:
   push:

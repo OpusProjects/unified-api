@@ -18,7 +18,8 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 - axum (HTTP framework)
 - tokio (async runtime)
 - dashmap (concurrent in-memory cache)
-- serde + serde_json + serde_yaml (serialization)
+- serde + serde_json + serde_yaml_ng (serialization; `_ng` is the maintained
+  fork of the deprecated `serde_yaml`)
 - utoipa (OpenAPI/Swagger docs)
 - russh (native SSH connector)
 - metrics + metrics-exporter-prometheus (`/metrics`)
@@ -45,9 +46,12 @@ src/
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # Source, TtlOverrides, ConnectorType
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
+│   ├── sync_health.rs        # SyncHealth + registry (last attempt/success/error)
 │   ├── credential.rs         # Credential, CredentialType
+│   ├── api_key.rs            # ApiKeyDef, ApiKeyRole (admin / restricted)
 │   ├── enricher.rs           # Enricher
 │   ├── sync_mode.rs          # SyncMode (replace/merge)
+│   ├── static_inventory.rs   # Ansible YAML inventory parsing (native, no process)
 │   ├── project.rs            # GitProject
 │   └── endpoint.rs           # OutputEndpoint
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
@@ -67,18 +71,23 @@ src/
 │   │   ├── http/             # axum handlers, auth, routes, OpenAPI spec
 │   │   │   ├── routes.rs     # Router assembly (+ optional CORS layer)
 │   │   │   ├── openapi.rs    # utoipa ApiDoc (register new handlers here)
-│   │   │   ├── sources.rs    # Read endpoints (list/dataset/status)
+│   │   │   ├── error.rs      # ApiError / ErrorBody — the JSON shape of every failure
+│   │   │   ├── sources.rs    # Reads: list/dataset/status/groups/hosts
+│   │   │   ├── cache.rs      # DELETE a source's cache entry (eviction)
 │   │   │   ├── sync.rs       # POST sync
 │   │   │   ├── enrichers.rs  # POST enricher run
 │   │   │   ├── hosts.rs      # PUT/DELETE host
-│   │   │   ├── endpoints.rs  # Output endpoints
+│   │   │   ├── endpoints.rs  # Output endpoints (GET and POST)
+│   │   │   ├── projects.rs   # Git project routes (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
 │   │   │   └── auth.rs       # API key middleware
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
 │       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
-│       ├── connectors/       # process.rs: ConnectorPort → tokio::process; ssh.rs → russh
+│       ├── connectors/       # process.rs → tokio::process; ssh.rs → russh;
+│       │                     #   static_inventory.rs → Ansible YAML on disk;
+│       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
 │       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
 │       ├── output/           # process.rs: OutputPort → tokio::process
@@ -112,8 +121,18 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   `timeout_seconds` (default 300); a hung script fails the run instead of blocking
   its scheduler task or HTTP request.
 - **Metrics:** `GET /metrics` (Prometheus, public like the health probes) — sync,
-  enrich and endpoint counters + duration histograms. The recorder is a process
-  global installed once via `OnceLock`, so tests building many apps share it.
+  enrich and endpoint counters + duration histograms, plus per-source gauges
+  (`unified_api_source_age_seconds`, `_fresh`, `_cached`, `_hosts`, `_groups`,
+  `_ttl_seconds`). The gauges are computed from the cache **on each scrape**,
+  not pushed on sync: age grows with the clock, so a pushed value would read
+  "0 seconds old" exactly when a source stops syncing. The recorder is a
+  process global installed once via `OnceLock`, so tests building many apps
+  share it.
+- **Sync health:** every sync goes through `application::sync`, which records
+  last attempt / last success / last error / consecutive failures into the
+  `SyncHealthRegistry` on `AppState`. `GET /sources` and `/status` expose it as
+  `sync_health`. It lives outside the cache on purpose — a source that has
+  never synced has no cache entry but still needs somewhere to record why.
 - **Read path is shared, not copied:** `CacheEntry` holds its dataset (and
   host timestamps) behind `Arc`; reads bump a refcount, writers go through
   `Arc::make_mut` (copy-on-write). The entry also caches its serialized JSON +
@@ -125,26 +144,101 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   write) lets the persistence task skip disk writes when nothing changed.
 - **CORS is off by default:** opt in with `server.cors_allowed_origins` (`["*"]`
   = any). No configured origins = no CORS layer at all.
-- **Auth:** optional static key (`UNIFIED_API_KEY`); constant-time compare;
-  `/healthz`, `/readyz`, `/metrics` and Swagger stay public.
+- **Auth:** keys are declared in `api_keys.yaml`, each `role: admin` (everything)
+  or restricted to explicit `sources`/`endpoints` id lists; secrets come from the
+  env var each definition names. The legacy `UNIFIED_API_KEY` still works as one
+  extra admin key. Constant-time compare; `/healthz`, `/readyz`, `/metrics` and
+  Swagger stay public. No keys configured at all = auth disabled, logged loudly
+  at startup.
+- **Errors carry a body:** handlers return `ApiError`, which renders as
+  `{"error": "..."}` — never a bare `StatusCode`, which axum sends with an empty
+  body. New handlers should use `ApiError::source_forbidden` /
+  `source_not_cached` / `source_not_configured` so the wording stays identical
+  across routes, and name `body = ErrorBody` in their `#[utoipa::path]`.
 - **OpenAPI version** comes from `CARGO_PKG_VERSION` — bump only `Cargo.toml`.
 
 ## Releasing a new version
 
-When bumping the version, update all of these:
+`main` is protected: it takes no direct pushes and no force pushes, and every
+change needs a PR whose `test`, `audit` and `build-image` checks pass. That
+includes the release commit itself — there is no admin bypass.
 
-1. `Cargo.toml` — `version = "x.y.z"` (source of truth)
-2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"` (must match Cargo.toml)
-3. `CHANGELOG.md` — add a `## [x.y.z] - YYYY-MM-DD` section above the previous release
+### 1. Choose the number
 
-To release: push the commit to `main`, then push a `v<version>` tag. CI
-(`.github/workflows/build.yaml`) handles the rest:
+Semantic Versioning, and the project is pre-1.0:
 
-- Runs tests, clippy, fmt check
-- Builds and pushes the Docker image to `ghcr.io/opusprojects/unified-api:<version>`
-- Creates a GitHub Release with notes extracted from the CHANGELOG section
+- **PATCH** (`0.6.1`) — bug fixes only. Nothing added.
+- **MINOR** (`0.7.0`) — anything added (a route, a config key, a response
+  field), *and* anything breaking, since 0.x puts breaking changes in MINOR.
+- New functionality is never a PATCH, however small the diff.
 
-Do not manually create GitHub releases — the workflow does it from the tag.
+Mark breaking entries in the CHANGELOG as
+`**Breaking (who it affects):**` so a reader can see the risk without a diff.
+
+### 2. Bump, on a branch
+
+```bash
+git checkout main && git pull --ff-only
+git checkout -b release/x.y.z
+```
+
+Four edits, all required:
+
+1. `Cargo.toml` — `version = "x.y.z"` (source of truth; the OpenAPI spec
+   version comes from `CARGO_PKG_VERSION`)
+2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"`
+3. `CHANGELOG.md` — rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` and
+   leave a fresh empty `## [Unreleased]` above it
+4. `CHANGELOG.md` link refs at the bottom — repoint `[Unreleased]` at
+   `vx.y.z...HEAD` and add `[x.y.z]: …/compare/v<previous>...vx.y.z`
+
+### 3. Check before pushing
+
+```bash
+cargo build                        # must compile as the new version
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+git diff --stat Cargo.lock         # exactly 1 line — no dependency drift
+```
+
+Then dry-run the release notes with the same `awk` the workflow uses, because
+a malformed heading silently degrades them to "See CHANGELOG.md for details":
+
+```bash
+awk -v s="## [x.y.z]" 'substr($0,1,length(s))==s{f=1;next} f && substr($0,1,4)=="## ["{exit} f' CHANGELOG.md
+```
+
+### 4. PR, merge, then tag
+
+```bash
+git commit -am "Release x.y.z"     # no type prefix; releases are the exception
+git push -u origin release/x.y.z
+gh pr create --base main --title "Release x.y.z"
+# wait for test + audit + build-image
+gh pr merge --squash --delete-branch --subject "Release x.y.z"
+
+git checkout main && git pull --ff-only   # MUST pull: squashing made a new commit
+git tag vx.y.z && git push origin vx.y.z
+```
+
+**Tag the squashed commit on `main`, not the branch commit.** Squash-merging
+creates a different commit, so tagging before pulling points the tag at
+something that is not on `main`. Tags are not covered by branch protection, so
+the tag push itself needs no PR.
+
+### What CI does with the tag
+
+`.github/workflows/build.yaml` (workflow name "unified-api CI"):
+
+- publishes `ghcr.io/opusprojects/unified-api` as `x.y.z`, `<sha>` and `latest`
+- creates the GitHub Release with notes extracted from the CHANGELOG section
+
+**Only tags publish.** PRs and pushes to `main` build the image and discard it,
+so `latest` always means the newest release rather than the tip of `main`.
+
+Do not create GitHub releases by hand — the workflow does it from the tag, and
+a manual one is authored by a person rather than `github-actions[bot]`, which
+is visible forever in the API and cannot be corrected without deleting and
+recreating the release (losing its original date).
 
 ## Conventions
 

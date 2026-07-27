@@ -179,8 +179,13 @@ Mark breaking entries in the CHANGELOG as
 
 ```bash
 git checkout main && git pull --ff-only
-git checkout -b release/x.y.z
+git checkout -b release/x.y.z          # the release/ prefix matters, see below
 ```
+
+The branch **must** be named `release/*`. CI fails any other PR that edits an
+already-released CHANGELOG section, and cutting a version is precisely that
+edit — renaming `## [Unreleased]` to `## [x.y.z]`. The prefix is how the check
+knows to stand aside.
 
 Four edits, all required:
 
@@ -242,6 +247,11 @@ recreating the release (losing its original date).
 
 ## Conventions
 
+- **Only `## [Unreleased]` is editable in CHANGELOG.md.** Released sections
+  record what shipped. `scripts/check-changelog.sh` runs in CI on every PR and
+  fails if they change — the mistake is otherwise silent, because rebasing
+  across a release makes git apply your entry into the newly released section
+  without a conflict. If that happens, move the entry back up to Unreleased.
 - Private by default, `pub` only what needs to be exposed
 - Comments only when the WHY is non-obvious
 - **All code comments must be written in English** — no exceptions, including

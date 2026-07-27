@@ -17,6 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Released CHANGELOG sections are the record of what shipped; only
+      # "## [Unreleased]" is open for editing. Rebasing a branch across a
+      # release silently drops its entry into the just-released section, so
+      # this is checked rather than remembered. Release branches are exempt:
+      # cutting a version is exactly the case that rewrites that region.
+      - name: CHANGELOG history is immutable
+        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          ./scripts/check-changelog.sh "origin/$BASE"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

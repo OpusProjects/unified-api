@@ -7,11 +7,13 @@
 
 Lightweight infrastructure inventory aggregation and caching middleware, written in Rust.
 
-Unified API ingests inventory data from sources of truth like Device42, VMware,
-Pure Storage, ad-hoc scripts or SSH facts, caches and enriches it in memory, and
-serves it through a fast REST API to consumers like AWX and AnsibleForms — so every
-automation tool works from the same fresh, consistent view of the infrastructure
-without each run hammering the upstream systems of record behind it.
+Unified API ingests inventory from sources of truth like Device42, VMware,
+Pure Storage, ad-hoc scripts or SSH facts, caches and enriches it in memory,
+and serves it over a fast REST API.
+
+Consumers like AWX and AnsibleForms query that cache, never the sources. A
+hundred job runs cost Device42, VMware or Pure Storage exactly what one does,
+and every one of them sees the same inventory.
 
 ---
 

@@ -414,6 +414,44 @@ async fn readyz_require_all_sources_waits_for_every_source() {
 }
 
 // =========================================================================
+// Tests: metrics_require_auth
+// =========================================================================
+
+#[tokio::test]
+async fn metrics_is_public_by_default() {
+    let app = unified_api::AppBuilder::new()
+        .api_key(Some("secret123".to_string()))
+        .build();
+
+    // No key, still served — Prometheus scrape configs carry none
+    let (status, _) = get(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn metrics_require_auth_rejects_unauthenticated_scrapes() {
+    let app = unified_api::AppBuilder::new()
+        .api_key(Some("secret123".to_string()))
+        .metrics_require_auth(true)
+        .build();
+
+    let (status, _) = get(app.clone(), "/metrics").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Only the status matters here: whether the exposition has any series yet
+    // depends on which other tests in this binary have recorded metrics
+    let (status, _) = get_with_key(app.clone(), "/metrics", "secret123").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = get_with_key(app.clone(), "/metrics", "wrong").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The health probes stay public either way — they carry no inventory data
+    let (status, _) = get(app, "/healthz").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+// =========================================================================
 // Tests: sources API without data — empty cache
 // =========================================================================
 

@@ -44,6 +44,7 @@ pub struct AppBuilder {
     api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
     readyz_require_all_sources: bool,
+    metrics_require_auth: bool,
 }
 
 impl AppBuilder {
@@ -59,6 +60,7 @@ impl AppBuilder {
             api_keys: Vec::new(),
             cors_allowed_origins: Vec::new(),
             readyz_require_all_sources: false,
+            metrics_require_auth: false,
         }
     }
 
@@ -120,6 +122,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn metrics_require_auth(mut self, require_auth: bool) -> Self {
+        self.metrics_require_auth = require_auth;
+        self
+    }
+
     pub fn build(self) -> Router<()> {
         let (router, _state) = self.build_with_state();
         router
@@ -153,6 +160,7 @@ impl AppBuilder {
             Arc::clone(&state),
             self.api_keys,
             self.cors_allowed_origins,
+            self.metrics_require_auth,
         );
         (router, state)
     }

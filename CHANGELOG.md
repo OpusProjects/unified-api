@@ -14,6 +14,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   sources reports ready with nine of them broken — fine when a partial
   inventory beats none, wrong when a job template would then run against half
   a datacenter.
+- `server.metrics_require_auth` (default `false`): require an API key on
+  `GET /metrics`. The endpoint is public by default because that is what a
+  Prometheus scrape config expects, but its exposition labels every source id
+  and host count — a description of the inventory topology available to
+  anything that can reach the port. `/healthz` and `/readyz` stay public
+  either way; with no API keys configured the flag has no effect, since
+  authentication is off entirely.
 
 ## [0.7.0] - 2026-07-29
 

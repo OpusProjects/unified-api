@@ -21,6 +21,11 @@ server:
   # true = every configured source must have synced first — for deployments
   # where a partial inventory is worse than none.
   readyz_require_all_sources: false
+  # Optional, default false. false keeps /metrics public alongside the health
+  # probes, which is what Prometheus scrape configs expect. true requires an
+  # API key — for a shared network, since the exposition labels every source
+  # id and host count.
+  metrics_require_auth: false
 
 # Optional. Absent = purely in-memory cache (restarts start empty).
 # With the block, the cache is snapshotted to `path` every `interval_seconds`

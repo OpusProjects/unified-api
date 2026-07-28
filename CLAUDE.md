@@ -121,7 +121,10 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
 - **Execution timeouts:** every connector/enricher/output run is bounded by
   `timeout_seconds` (default 300); a hung script fails the run instead of blocking
   its scheduler task or HTTP request.
-- **Metrics:** `GET /metrics` (Prometheus, public like the health probes) — sync,
+- **Metrics:** `GET /metrics` (Prometheus; public by default, since a scrape
+  config carries no API key — set `server.metrics_require_auth: true` to move
+  it behind the key on a shared network, as the exposition labels every source
+  id and host count) — sync,
   enrich and endpoint counters + duration histograms, plus per-source gauges
   (`unified_api_source_age_seconds`, `_fresh`, `_cached`, `_hosts`, `_groups`,
   `_ttl_seconds`). The gauges are computed from the cache **on each scrape**,
@@ -156,9 +159,11 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
 - **Auth:** keys are declared in `api_keys.yaml`, each `role: admin` (everything)
   or restricted to explicit `sources`/`endpoints` id lists; secrets come from the
   env var each definition names. The legacy `UNIFIED_API_KEY` still works as one
-  extra admin key. Constant-time compare; `/healthz`, `/readyz`, `/metrics` and
-  Swagger stay public. No keys configured at all = auth disabled, logged loudly
-  at startup.
+  extra admin key. Constant-time compare; `/healthz`, `/readyz` and Swagger
+  stay public, and so does `/metrics` unless
+  `server.metrics_require_auth: true`. No keys configured at all = auth
+  disabled, logged loudly at startup — and the flag has no effect in that
+  state, since the middleware treats every caller as admin.
 - **Errors carry a body:** handlers return `ApiError`, which renders as
   `{"error": "..."}` — never a bare `StatusCode`, which axum sends with an empty
   body. New handlers should use `ApiError::source_forbidden` /

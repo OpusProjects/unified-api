@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-29
+
 ### Added
 
 - `GET /api/v1/endpoints/{id}` alongside the existing `POST`: query parameters
@@ -420,7 +422,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/OpusProjects/unified-api/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OpusProjects/unified-api/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OpusProjects/unified-api/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/OpusProjects/unified-api/compare/v0.3.9...v0.4.0

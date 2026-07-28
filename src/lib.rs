@@ -43,6 +43,7 @@ pub struct AppBuilder {
     secrets: Arc<dyn SecretsPort>,
     api_keys: Vec<ResolvedApiKey>,
     cors_allowed_origins: Vec<String>,
+    readyz_require_all_sources: bool,
 }
 
 impl AppBuilder {
@@ -57,6 +58,7 @@ impl AppBuilder {
             secrets: Arc::new(MockSecrets::new()),
             api_keys: Vec::new(),
             cors_allowed_origins: Vec::new(),
+            readyz_require_all_sources: false,
         }
     }
 
@@ -113,6 +115,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn readyz_require_all_sources(mut self, require_all: bool) -> Self {
+        self.readyz_require_all_sources = require_all;
+        self
+    }
+
     pub fn build(self) -> Router<()> {
         let (router, _state) = self.build_with_state();
         router
@@ -140,6 +147,7 @@ impl AppBuilder {
             projects: self.projects,
             projects_dir: self.projects_dir,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            readyz_require_all_sources: self.readyz_require_all_sources,
         });
         let router = adapters::r#in::http::routes::create_router(
             Arc::clone(&state),

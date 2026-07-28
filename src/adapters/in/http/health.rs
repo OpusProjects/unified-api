@@ -48,8 +48,17 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Rea
 
     let sources_synced = sources_total - sources_pending.len();
 
-    // Ready if no sources configured, or if at least one is synced
-    let ready = sources_total == 0 || sources_synced > 0;
+    // Default: ready if no sources are configured, or at least one is synced —
+    // a pod serving part of the inventory beats one serving nothing while it
+    // waits on the slowest source. With readyz_require_all_sources, every
+    // configured source must be in cache first, for deployments where a
+    // partial inventory is worse than none (a job template that would run
+    // against half a datacenter).
+    let ready = if state.readyz_require_all_sources {
+        sources_pending.is_empty()
+    } else {
+        sources_total == 0 || sources_synced > 0
+    };
 
     let status = if ready {
         StatusCode::OK

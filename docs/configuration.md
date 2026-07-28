@@ -16,6 +16,11 @@ server:
   # Optional. Empty/absent (default) = no CORS headers at all — right for
   # server-to-server consumers. List browser origins to enable, "*" for any.
   cors_allowed_origins: []
+  # Optional, default false. false = /readyz is green once ANY source has
+  # synced (a pod serving part of the inventory beats one serving nothing).
+  # true = every configured source must have synced first — for deployments
+  # where a partial inventory is worse than none.
+  readyz_require_all_sources: false
 
 # Optional. Absent = purely in-memory cache (restarts start empty).
 # With the block, the cache is snapshotted to `path` every `interval_seconds`

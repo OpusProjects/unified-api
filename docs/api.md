@@ -48,7 +48,7 @@ unaffected). Browser-based consumers need their origins listed in
 | Route | Meaning |
 |---|---|
 | `GET /healthz` | Liveness — always `200 ok` while the process runs |
-| `GET /readyz` | Readiness — `200` when no sources are configured or at least one has synced; `503` otherwise, with the pending list |
+| `GET /readyz` | Readiness — `200` when no sources are configured or at least one has synced; `503` otherwise, with the pending list. `server.readyz_require_all_sources: true` waits for every source |
 | `GET /metrics` | Prometheus metrics (sync/enrich/endpoint counters and durations, per-source freshness gauges) — see [deployment](deployment.md) |
 
 ## Sources

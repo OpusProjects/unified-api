@@ -145,6 +145,14 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   write) lets the persistence task skip disk writes when nothing changed.
 - **CORS is off by default:** opt in with `server.cors_allowed_origins` (`["*"]`
   = any). No configured origins = no CORS layer at all.
+- **Readiness:** `/readyz` is green when no sources are configured or at least
+  one has synced — a pod serving part of the inventory beats one serving
+  nothing while it waits on the slowest source. Set
+  `server.readyz_require_all_sources: true` where a partial inventory is worse
+  than none (a job template that would run against half a datacenter); it then
+  waits for every configured source. Either way the body carries
+  `sources_synced` and `sources_pending`, so a failing probe names what it is
+  waiting for.
 - **Auth:** keys are declared in `api_keys.yaml`, each `role: admin` (everything)
   or restricted to explicit `sources`/`endpoints` id lists; secrets come from the
   env var each definition names. The legacy `UNIFIED_API_KEY` still works as one

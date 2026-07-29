@@ -8,6 +8,46 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `refresh=true` on `GET /sources/{id}/dataset`: bring the requested hosts up to
+  date before answering, so a consumer that can only fetch a URL (a form, a
+  dashboard) gets current facts without knowing the topology or issuing a write.
+  It requires `?host=` — a whole-source refresh triggered by opening a page
+  would gather the entire inventory, so the hosts have to be named — and the
+  source must carry the new `allow_on_demand_refresh: true`, off by default,
+  because a read that can cause SSH into a datacenter is a capability rather
+  than a convenience.
+
+  **The caller does not get a freshness knob.** How stale is too stale is the
+  source's `ttl_seconds` (and its `ttl_overrides`), which the operator writes;
+  `refresh=true` says only "I would rather wait than be served stale data". Any
+  consumer-supplied staleness bound would be a consumer-supplied load knob, and
+  the load lands on somebody's datacenter. What that buys is a load ceiling from
+  arithmetic rather than trust: a host is re-gathered at most once per TTL
+  window however many consumers ask for it, so the worst case for a source is
+  the load of setting `sync_interval_seconds` equal to `ttl_seconds`, and in
+  practice far less, since only the hosts somebody looks at are refreshed at
+  all. Note this makes `ttl_seconds` load bearing where it used to be purely
+  informational, so it is worth a look before enabling the flag on a source.
+
+  Two limits sit under that one, for what the TTL window does not cover.
+  Concurrent requests for the same host would each start a gather before the
+  first finished, so they queue on a per-host lock and the late ones re-check
+  freshness rather than gathering again (per host, not per source: a
+  source-wide lock would make everyone wait behind a refresh of an unreachable
+  host). Requests for many *different* hosts are all first in their window, so
+  the TTL does not bound them at all and `server.refresh_max_concurrent`
+  (default 8) does.
+
+  A refresh that fails or outlasts `server.refresh_timeout_seconds` (default 15)
+  never fails the read: the cached data is served and
+  `x-unified-api-refreshed: false` plus `x-unified-api-refresh-error` say not to
+  trust it as current. On success, `x-unified-api-refreshed-hosts` names what was
+  re-gathered. The information travels in headers so neither response shape
+  changes: a consumer adding `&refresh=true` to a call it already makes keeps
+  parsing exactly what it parsed before. `unified_api_refresh_total{source,
+  result}` counts the outcomes, so "how much of my gathering load comes from
+  consumers?" is answerable.
+
 - `refresh_origin=true` on `POST /sources/{id}/sync`: make a federated source's
   origin re-gather before answering, instead of handing over whatever it has
   cached. A central holding an edge's data cannot produce newer facts by

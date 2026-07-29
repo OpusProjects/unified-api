@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::application::refresh::RefreshCoordinator;
 use crate::domain::endpoint::OutputEndpoint;
 use crate::domain::enricher::Enricher;
 use crate::domain::project::GitProject;
@@ -34,6 +35,9 @@ pub struct AppState {
     // success, last error). Not a port: it is in-process state with no
     // outside world behind it, like the cache's contents.
     pub sync_health: Arc<SyncHealthRegistry>,
+    // Coalescing and limits for reads that are allowed to refresh before
+    // answering. In-process state like sync_health: no outside world behind it.
+    pub refresh: Arc<RefreshCoordinator>,
     // /readyz turns green only when every configured source has synced, rather
     // than when at least one has (see config::ServerConfig)
     pub readyz_require_all_sources: bool,

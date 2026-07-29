@@ -85,6 +85,18 @@ pub struct Source {
     #[serde(default)]
     pub hosts_from_source: Option<HostsFromSource>,
 
+    // Whether a READ of this source may trigger a sync of the hosts it asks
+    // for (`GET /dataset?host=X&refresh=true`). Off by default: a read that
+    // can cause SSH into a datacenter is a capability, not a convenience, and
+    // it should be granted per source rather than assumed.
+    //
+    // Turning it on makes `ttl_seconds` load bearing — it stops being purely
+    // informational and becomes the threshold at which a read is willing to pay
+    // for a gather. A source with a TTL set loosely at some point in the past
+    // deserves a look before this is enabled.
+    #[serde(default)]
+    pub allow_on_demand_refresh: bool,
+
     // Free config for the connector (api_url, filters, etc.)
     #[serde(default)]
     pub config: HashMap<String, String>,
@@ -229,6 +241,48 @@ impl HostsFromSource {
         }
 
         (specs, warnings)
+    }
+}
+
+// Which TTL applies to which host. Two callers need this — the status endpoint
+// reporting freshness, and the on-demand refresh deciding whether a host is
+// stale enough to be worth gathering — and they must not be able to disagree:
+// a host reported fresh by one and refreshed by the other is a bug in both
+// directions at once.
+impl Source {
+    // Resolve the GROUP-level overrides into a per-host map, once.
+    //
+    // One pass over the override list, not a scan of every group for every
+    // host: doing it the other way made a full status quadratic on a large
+    // source. When a host sits in several groups that each carry an override
+    // the winner is whichever is seen first, which is arbitrary but stable
+    // within a request.
+    pub fn group_ttl_by_host<'a>(&self, dataset: &'a Dataset) -> HashMap<&'a str, u64> {
+        let mut by_host: HashMap<&str, u64> = HashMap::new();
+        for (group_name, ttl) in &self.ttl_overrides.groups {
+            if let Some(group) = dataset.groups.get(group_name) {
+                for hostname in &group.hosts {
+                    by_host.entry(hostname.as_str()).or_insert(*ttl);
+                }
+            }
+        }
+        by_host
+    }
+
+    // The TTL for one host: its own override wins, then a group's, then the
+    // fallback the caller passes (the cache entry's TTL).
+    pub fn effective_ttl(
+        &self,
+        hostname: &str,
+        group_ttls: &HashMap<&str, u64>,
+        fallback: u64,
+    ) -> u64 {
+        self.ttl_overrides
+            .hosts
+            .get(hostname)
+            .copied()
+            .or_else(|| group_ttls.get(hostname).copied())
+            .unwrap_or(fallback)
     }
 }
 

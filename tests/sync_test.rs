@@ -63,6 +63,7 @@ fn test_source(scenario: &str) -> Source {
         ttl_seconds: 3600,
         timeout_seconds: 300,
         ttl_overrides: TtlOverrides::default(),
+        allow_on_demand_refresh: false,
         config,
     }
 }
@@ -701,6 +702,7 @@ async fn sync_infra_source() {
             ttl_seconds: 3600,
             timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
+            allow_on_demand_refresh: false,
             config,
         },
     );
@@ -793,6 +795,7 @@ async fn endpoint_combines_sources() {
             ttl_seconds: 3600,
             timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
+            allow_on_demand_refresh: false,
             config: infra_config,
         },
     );

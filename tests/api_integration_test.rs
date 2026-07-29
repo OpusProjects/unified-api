@@ -122,6 +122,7 @@ fn script_source(script_path: &str) -> unified_api::domain::source::Source {
         ttl_seconds: 3600,
         timeout_seconds: 300,
         ttl_overrides: Default::default(),
+        allow_on_demand_refresh: false,
         config: std::collections::HashMap::new(),
     }
 }
@@ -342,6 +343,7 @@ async fn readyz_returns_503_before_sync() {
             ttl_seconds: 3600,
             timeout_seconds: 300,
             ttl_overrides: Default::default(),
+            allow_on_demand_refresh: false,
             config: std::collections::HashMap::new(),
         },
     );
@@ -377,6 +379,7 @@ async fn readyz_require_all_sources_waits_for_every_source() {
                 ttl_seconds: 3600,
                 timeout_seconds: 300,
                 ttl_overrides: Default::default(),
+                allow_on_demand_refresh: false,
                 config: std::collections::HashMap::new(),
             },
         );

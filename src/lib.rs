@@ -45,6 +45,8 @@ pub struct AppBuilder {
     cors_allowed_origins: Vec<String>,
     readyz_require_all_sources: bool,
     metrics_require_auth: bool,
+    refresh_timeout_seconds: u64,
+    refresh_max_concurrent: usize,
 }
 
 impl AppBuilder {
@@ -61,6 +63,11 @@ impl AppBuilder {
             cors_allowed_origins: Vec::new(),
             readyz_require_all_sources: false,
             metrics_require_auth: false,
+            // Same defaults as config.rs: a page-length wait, and a cap that
+            // lets a handful of forms refresh at once without opening a session
+            // per host in the inventory.
+            refresh_timeout_seconds: 15,
+            refresh_max_concurrent: 8,
         }
     }
 
@@ -122,6 +129,12 @@ impl AppBuilder {
         self
     }
 
+    pub fn on_demand_refresh(mut self, timeout_seconds: u64, max_concurrent: usize) -> Self {
+        self.refresh_timeout_seconds = timeout_seconds;
+        self.refresh_max_concurrent = max_concurrent;
+        self
+    }
+
     pub fn metrics_require_auth(mut self, require_auth: bool) -> Self {
         self.metrics_require_auth = require_auth;
         self
@@ -154,6 +167,10 @@ impl AppBuilder {
             projects: self.projects,
             projects_dir: self.projects_dir,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            refresh: Arc::new(application::refresh::RefreshCoordinator::new(
+                self.refresh_max_concurrent,
+                self.refresh_timeout_seconds,
+            )),
             readyz_require_all_sources: self.readyz_require_all_sources,
         });
         let router = adapters::r#in::http::routes::create_router(

@@ -51,6 +51,49 @@ async fn spawn_edge(api_key: &str) -> String {
     format!("http://{}", addr)
 }
 
+// Same edge, no api key: for the tests that go through sync_source with
+// MockSecrets, which resolves no token and would be answered 401.
+async fn spawn_open_edge() -> String {
+    let (app, state) = unified_api::AppBuilder::new().build_with_state();
+
+    state.cache.set(
+        "src-edge",
+        CacheEntry::restore(edge_dataset(), 3600, 300, {
+            let mut ages = HashMap::new();
+            ages.insert("web01.mad.example.com".to_string(), 300);
+            ages.insert("web02.mad.example.com".to_string(), 120);
+            ages
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{}", addr)
+}
+
+fn remote_source(url: &str) -> Source {
+    Source {
+        name: "DC Madrid".to_string(),
+        project_id: "prj-unused".to_string(),
+        script_path: "src-edge".to_string(),
+        script_args: vec![],
+        output_format: Default::default(),
+        hosts_from_source: None,
+        connector_type: ConnectorType::Remote,
+        sync_mode: Default::default(),
+        credential_ids: vec![],
+        schedule: None,
+        sync_interval_seconds: None,
+        ttl_seconds: 600,
+        timeout_seconds: 60,
+        ttl_overrides: Default::default(),
+        config: remote_config(url),
+    }
+}
+
 fn remote_config(url: &str) -> HashMap<String, String> {
     let mut config = HashMap::new();
     config.insert("url".to_string(), url.to_string());
@@ -195,4 +238,125 @@ async fn central_cache_entry_keeps_the_origin_age() {
     );
     // and with ttl 600 it is still fresh — stale only when the ORIGIN data ages out
     assert!(entry.is_fresh());
+}
+
+// A host-scoped sync must not drag the whole remote dataset across the WAN:
+// the scope becomes a `?host=` on the remote calls.
+#[tokio::test]
+async fn host_scope_only_fetches_the_named_host() {
+    let url = spawn_open_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-madrid",
+        &remote_source(&url),
+        SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+    )
+    .await;
+
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+    // 1, not 2: the edge answered a filtered dataset. Before honouring the
+    // scope this was the full host count.
+    assert_eq!(outcome.total_hosts, 1);
+    assert_eq!(outcome.scope, "host:web02.mad.example.com");
+
+    let entry = central_cache.get("src-madrid").unwrap();
+    assert!(entry.dataset.hostvars.contains_key("web02.mad.example.com"));
+    assert!(!entry.dataset.hostvars.contains_key("web01.mad.example.com"));
+}
+
+// The point of federation: a host pulled from the edge carries the age it has
+// AT THE EDGE. Stamping it "now" would report a six-hour-old fact as fresh.
+#[tokio::test]
+async fn host_scope_keeps_the_origin_age_for_that_host() {
+    let url = spawn_open_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-madrid",
+        &remote_source(&url),
+        SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+    )
+    .await;
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+
+    let age = central_cache
+        .get("src-madrid")
+        .unwrap()
+        .host_age_seconds("web02.mad.example.com")
+        .expect("the host must have a timestamp");
+
+    assert!(
+        (120..180).contains(&age),
+        "expected the edge's ~120s age, got {}",
+        age
+    );
+}
+
+// A second host-scoped sync must not evict what the first one cached: the
+// entry accumulates hosts instead of being replaced by the last slice.
+#[tokio::test]
+async fn successive_host_scopes_accumulate_in_the_entry() {
+    let url = spawn_open_edge().await;
+    let source = remote_source(&url);
+    let central_cache = MemoryCache::new();
+
+    for host in ["web01.mad.example.com", "web02.mad.example.com"] {
+        let outcome = sync_source(
+            &central_cache,
+            &RemoteConnector::new(),
+            &MockSecrets::new(),
+            &SyncHealthRegistry::new(),
+            "src-madrid",
+            &source,
+            SyncScope::Hosts(vec![host.to_string()]),
+        )
+        .await;
+        assert!(
+            outcome.success(),
+            "sync of {} failed: {:?}",
+            host,
+            outcome.error
+        );
+    }
+
+    let entry = central_cache.get("src-madrid").unwrap();
+    assert_eq!(entry.dataset.hostvars.len(), 2);
+    // each kept ITS own origin age, not the other's
+    let web01 = entry.host_age_seconds("web01.mad.example.com").unwrap();
+    let web02 = entry.host_age_seconds("web02.mad.example.com").unwrap();
+    assert!((300..360).contains(&web01), "web01 age was {}", web01);
+    assert!((120..180).contains(&web02), "web02 age was {}", web02);
+}
+
+// A host the source does not have is a clear failure, not a silent success
+// that cached nothing.
+#[tokio::test]
+async fn host_scope_naming_an_unknown_host_caches_nothing() {
+    let url = spawn_open_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-madrid",
+        &remote_source(&url),
+        SyncScope::Hosts(vec!["ghost.mad.example.com".to_string()]),
+    )
+    .await;
+
+    // The remote answers an empty filtered dataset (an unmatched filter is an
+    // empty result, not a 404), so the sync itself succeeds with nothing in it
+    assert_eq!(outcome.total_hosts, 0);
+    assert!(central_cache.get("src-madrid").is_none());
 }

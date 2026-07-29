@@ -62,7 +62,7 @@ impl ConnectorPort for SshConnector {
         let credentials = credentials.clone();
 
         Box::pin(async move {
-            let hosts = parse_hosts(&config)?;
+            let hosts = narrow_to_scope(parse_hosts(&config)?, &config)?;
             let port: u16 = config
                 .get("port")
                 .and_then(|p| p.parse().ok())
@@ -320,6 +320,56 @@ fn parse_hosts(config: &HashMap<String, String>) -> Result<Vec<HostSpec>, Connec
     }
 
     Ok(hosts)
+}
+
+// Narrow the host list to what a host-scoped sync asked for.
+//
+// The scope arrives in the config (application::sync puts `scope` and `target`
+// there for every connector). This connector used to ignore it and read only
+// `hosts`/`hosts_spec`, so a `POST /sync?host=one-box` opened an SSH session to
+// every host in the datacenter and then kept a single one — the cost of a full
+// gather for one host's worth of data.
+//
+// Group scope is deliberately not narrowed here: HostSpec carries a name and
+// addresses, not group membership, so this connector has no way to tell which
+// hosts belong to a group. A group-scoped sync still gathers everything and
+// lets the cache apply the group slice.
+fn narrow_to_scope(
+    hosts: Vec<HostSpec>,
+    config: &HashMap<String, String>,
+) -> Result<Vec<HostSpec>, ConnectorError> {
+    if config.get("scope").map(String::as_str) != Some("host") {
+        return Ok(hosts);
+    }
+
+    let target = config.get("target").map(String::as_str).unwrap_or_default();
+    let wanted: Vec<&str> = target
+        .split(',')
+        .map(|h| h.trim())
+        .filter(|h| !h.is_empty())
+        .collect();
+
+    let narrowed: Vec<HostSpec> = hosts
+        .into_iter()
+        .filter(|h| wanted.contains(&h.name.as_str()))
+        .collect();
+
+    // Naming a host this source does not know about is a configuration or
+    // consumer mistake, and gathering nothing would report a bland success.
+    // The message names what was asked for, because the usual cause is a
+    // hostname that differs between the inventory and the caller.
+    if narrowed.is_empty() {
+        return Err(ConnectorError {
+            message: format!(
+                "host scope '{}' matched none of this source's hosts",
+                target
+            ),
+            stderr: String::new(),
+            exit_code: None,
+        });
+    }
+
+    Ok(narrowed)
 }
 
 fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[String]) -> String {
@@ -595,6 +645,71 @@ mod tests {
     fn parse_hosts_errors_when_only_separators() {
         let err = parse_hosts(&config(&[("hosts", " , , ")])).unwrap_err();
         assert!(err.message.contains("No hosts"));
+    }
+
+    fn spec(name: &str) -> HostSpec {
+        HostSpec {
+            name: name.to_string(),
+            addresses: vec![name.to_string()],
+        }
+    }
+
+    #[test]
+    fn narrow_to_scope_is_a_passthrough_without_host_scope() {
+        let hosts = vec![spec("a.example"), spec("b.example")];
+        // no scope at all
+        assert_eq!(
+            narrow_to_scope(hosts.clone(), &config(&[])).unwrap().len(),
+            2
+        );
+        // a group scope is NOT narrowed here — HostSpec has no group membership
+        let group = config(&[("scope", "group"), ("target", "web")]);
+        assert_eq!(narrow_to_scope(hosts, &group).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn narrow_to_scope_keeps_only_the_targeted_host() {
+        let hosts = vec![spec("a.example"), spec("b.example"), spec("c.example")];
+        let cfg = config(&[("scope", "host"), ("target", "b.example")]);
+        let narrowed = narrow_to_scope(hosts, &cfg).unwrap();
+        assert_eq!(narrowed.len(), 1);
+        assert_eq!(narrowed[0].name, "b.example");
+    }
+
+    #[test]
+    fn narrow_to_scope_accepts_a_comma_separated_target() {
+        let hosts = vec![spec("a.example"), spec("b.example"), spec("c.example")];
+        let cfg = config(&[("scope", "host"), ("target", " c.example , a.example ")]);
+        let names: Vec<String> = narrow_to_scope(hosts, &cfg)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.name)
+            .collect();
+        // the source's own order is preserved, not the target's
+        assert_eq!(names, vec!["a.example", "c.example"]);
+    }
+
+    #[test]
+    fn narrow_to_scope_preserves_the_candidate_addresses() {
+        let hosts = vec![HostSpec {
+            name: "web01.example.com".to_string(),
+            addresses: vec!["10.0.0.1".to_string(), "web01.example.com".to_string()],
+        }];
+        let cfg = config(&[("scope", "host"), ("target", "web01.example.com")]);
+        let narrowed = narrow_to_scope(hosts, &cfg).unwrap();
+        assert_eq!(
+            narrowed[0].addresses,
+            vec!["10.0.0.1".to_string(), "web01.example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn narrow_to_scope_errors_when_the_target_is_unknown() {
+        let hosts = vec![spec("a.example")];
+        let cfg = config(&[("scope", "host"), ("target", "ghost.example")]);
+        let err = narrow_to_scope(hosts, &cfg).unwrap_err();
+        assert!(err.message.contains("ghost.example"), "{}", err.message);
+        assert!(err.message.contains("matched none"), "{}", err.message);
     }
 
     #[test]

@@ -98,8 +98,21 @@ impl ConnectorPort for RemoteConnector {
                 .build()
                 .map_err(|e| connector_error(&format!("failed to build HTTP client: {}", e)))?;
 
+            // A host-scoped sync asks the remote for those hosts only. Without
+            // this the central pulled the whole dataset across the WAN (megabytes
+            // on a facts source) to keep the one host it was asked for.
+            //
+            // The remote answers a filtered `/dataset` with its paginated
+            // envelope rather than a bare Dataset, which deserializes into
+            // Dataset all the same: `hostvars` and `groups` are there under the
+            // same names and the envelope's extra fields are ignored.
+            let host_filter = host_scope_filter(&config);
+
             // 1. The data
-            let dataset_url = format!("{}/api/v1/sources/{}/dataset", base_url, remote_source);
+            let dataset_url = format!(
+                "{}/api/v1/sources/{}/dataset{}",
+                base_url, remote_source, host_filter
+            );
             let response = get(&client, &dataset_url, &api_key).await?;
             let dataset: Dataset = response.json().await.map_err(|e| {
                 connector_error(&format!(
@@ -110,7 +123,10 @@ impl ConnectorPort for RemoteConnector {
 
             // 2. The truth about its age. Failing to get it degrades to
             // "fresh as of now" with a warning — data beats metadata.
-            let status_url = format!("{}/api/v1/sources/{}/status", base_url, remote_source);
+            let status_url = format!(
+                "{}/api/v1/sources/{}/status{}",
+                base_url, remote_source, host_filter
+            );
             let ages = match fetch_ages(&client, &status_url, &api_key).await {
                 Ok(ages) => Some(ages),
                 Err(e) => {
@@ -133,6 +149,26 @@ impl ConnectorPort for RemoteConnector {
 
             Ok(ConnectorOutput { dataset, ages })
         })
+    }
+}
+
+// The `?host=` query string to append to the remote calls, or "" for a full
+// sync. Only host scope is translated: the remote has no group filter that
+// would also narrow what a group-scoped sync needs, and a full sync wants
+// everything by definition.
+//
+// Hostnames are assumed identical on both sides of a federation link, which is
+// what the rest of the chain already relies on (hosts_from_source keys its
+// results by the inventory hostname). Percent-encoding is not applied because a
+// hostname that needed it would not be a hostname.
+fn host_scope_filter(config: &HashMap<String, String>) -> String {
+    if config.get("scope").map(String::as_str) != Some("host") {
+        return String::new();
+    }
+
+    match config.get("target") {
+        Some(target) if !target.is_empty() => format!("?host={}", target),
+        _ => String::new(),
     }
 }
 
@@ -198,5 +234,48 @@ fn connector_error(message: &str) -> ConnectorError {
         message: message.to_string(),
         stderr: String::new(),
         exit_code: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn full_sync_asks_for_everything() {
+        assert_eq!(host_scope_filter(&config(&[])), "");
+    }
+
+    #[test]
+    fn host_scope_becomes_a_host_query() {
+        let cfg = config(&[("scope", "host"), ("target", "web01.mad.example.com")]);
+        assert_eq!(host_scope_filter(&cfg), "?host=web01.mad.example.com");
+    }
+
+    #[test]
+    fn host_scope_passes_a_comma_list_through() {
+        let cfg = config(&[("scope", "host"), ("target", "a.example,b.example")]);
+        assert_eq!(host_scope_filter(&cfg), "?host=a.example,b.example");
+    }
+
+    #[test]
+    fn group_scope_is_not_translated() {
+        let cfg = config(&[("scope", "group"), ("target", "madrid")]);
+        assert_eq!(host_scope_filter(&cfg), "");
+    }
+
+    #[test]
+    fn host_scope_without_a_target_asks_for_everything() {
+        // Rather than emitting `?host=`, which the remote would read as a
+        // filter matching nothing and answer with an empty dataset
+        let cfg = config(&[("scope", "host")]);
+        assert_eq!(host_scope_filter(&cfg), "");
     }
 }

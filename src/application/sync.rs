@@ -4,6 +4,7 @@ use tokio::time::timeout;
 
 use crate::application::credentials::resolve_credentials;
 use crate::domain::cache_entry::CacheEntry;
+use crate::domain::dataset::HostVars;
 use crate::domain::source::Source;
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::domain::sync_mode::SyncMode;
@@ -11,21 +12,41 @@ use crate::ports::cache::CachePort;
 use crate::ports::connector::{ConnectorOutput, ConnectorPort};
 use crate::ports::secrets::SecretsPort;
 
-// Scope of a sync: the complete inventory, a single host, or a group
+// Scope of a sync: the complete inventory, a named set of hosts, or a group.
+//
+// Hosts is a list rather than a single name because `?host=` accepts a
+// comma-separated list everywhere else in the API, and a caller refreshing the
+// five hosts a form displays should pay for one gather, not five. A single-name
+// list is the common case and keeps its old label.
 pub enum SyncScope {
     Full,
-    Host(String),
+    Hosts(Vec<String>),
     Group(String),
 }
 
 impl SyncScope {
-    // Readable label for logs and responses: "full", "host:x", "group:y"
+    // Readable label for logs and responses: "full", "host:x", "host:x,y",
+    // "group:y"
     pub fn label(&self) -> String {
         match self {
             SyncScope::Full => "full".to_string(),
-            SyncScope::Host(host) => format!("host:{}", host),
+            SyncScope::Hosts(hosts) => format!("host:{}", hosts.join(",")),
             SyncScope::Group(group) => format!("group:{}", group),
         }
+    }
+
+    // Parse the `?host=` form: comma-separated, trimmed, empties dropped.
+    // Returns None when nothing survives, so the caller can fall back to
+    // another scope instead of syncing an empty host set.
+    pub fn hosts_from_csv(value: &str) -> Option<Self> {
+        let hosts: Vec<String> = value
+            .split(',')
+            .map(|h| h.trim())
+            .filter(|h| !h.is_empty())
+            .map(|h| h.to_string())
+            .collect();
+
+        (!hosts.is_empty()).then_some(SyncScope::Hosts(hosts))
     }
 }
 
@@ -166,9 +187,12 @@ async fn run_sync(
     }
 
     match &scope {
-        SyncScope::Host(host) => {
+        // `target` stays a comma-joined string: it is the shape connector
+        // scripts have always received (the query value, verbatim), and a
+        // single host renders identically.
+        SyncScope::Hosts(hosts) => {
             config.insert("scope".to_string(), "host".to_string());
-            config.insert("target".to_string(), host.clone());
+            config.insert("target".to_string(), hosts.join(","));
         }
         SyncScope::Group(group) => {
             config.insert("scope".to_string(), "group".to_string());
@@ -241,16 +265,55 @@ fn apply_to_cache(
 ) {
     let ConnectorOutput { dataset, ages } = output;
     match scope {
-        SyncScope::Host(host) => {
-            // Only cache if the connector returned the requested host
-            if let Some(vars) = dataset.hostvars.get(host).cloned() {
-                let hostname = host.clone();
+        SyncScope::Hosts(hosts) => {
+            // Only the requested hosts the connector actually returned. One
+            // missing host does not discard the others: a batch refresh of five
+            // hosts where one is unreachable still updates the four that
+            // answered.
+            let updates: Vec<(String, HostVars, u64)> = hosts
+                .iter()
+                .filter_map(|host| {
+                    let vars = dataset.hostvars.get(host).cloned()?;
+                    // A connector that knows how old its data is (the remote
+                    // one, federating another instance's cache) backdates the
+                    // host; a local gather happened now, so age zero.
+                    let age = ages
+                        .as_ref()
+                        .and_then(|a| a.host_ages.get(host).copied())
+                        .unwrap_or(0);
+                    Some((host.clone(), vars, age))
+                })
+                .collect();
+
+            if !updates.is_empty() {
                 cache.merge_or_insert(
                     source_id,
                     dataset,
                     source.ttl_seconds,
-                    &mut |entry, _new| entry.update_host(hostname.clone(), vars.clone()),
+                    &mut |entry, _new| {
+                        for (hostname, vars, age) in &updates {
+                            entry.update_host_aged(hostname.clone(), vars.clone(), *age);
+                        }
+                    },
                 );
+
+                // merge_or_insert's closure only runs when the entry already
+                // existed; its insert branch builds a CacheEntry::new, which
+                // stamps every host "now". On a cold central (no scheduled sync
+                // yet, a consumer asking for a host) that would throw away the
+                // origin's ages this whole path exists to preserve, so the
+                // timestamps are corrected in a second atomic pass. Re-stamping
+                // an already-correct entry is idempotent, and this only runs for
+                // connectors that report ages at all.
+                if ages.is_some() {
+                    cache.update(source_id, &mut |entry| {
+                        for (hostname, _vars, age) in &updates {
+                            if let Some(vars) = entry.dataset.hostvars.get(hostname).cloned() {
+                                entry.update_host_aged(hostname.clone(), vars, *age);
+                            }
+                        }
+                    });
+                }
             }
         }
         SyncScope::Group(group) => {
@@ -280,5 +343,44 @@ fn apply_to_cache(
                 });
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_host_keeps_the_old_label() {
+        let scope = SyncScope::hosts_from_csv("motoko.section9.net").unwrap();
+        assert_eq!(scope.label(), "host:motoko.section9.net");
+    }
+
+    #[test]
+    fn several_hosts_are_listed_in_the_label() {
+        let scope = SyncScope::hosts_from_csv("a.example,b.example").unwrap();
+        assert_eq!(scope.label(), "host:a.example,b.example");
+    }
+
+    #[test]
+    fn hosts_from_csv_trims_and_drops_empties() {
+        let scope = SyncScope::hosts_from_csv(" a.example , , b.example ").unwrap();
+        match scope {
+            SyncScope::Hosts(hosts) => assert_eq!(hosts, vec!["a.example", "b.example"]),
+            _ => panic!("expected a host scope"),
+        }
+    }
+
+    #[test]
+    fn a_value_with_no_hostnames_is_not_a_host_scope() {
+        // the caller falls back to another scope instead of syncing nothing
+        assert!(SyncScope::hosts_from_csv(" , , ").is_none());
+        assert!(SyncScope::hosts_from_csv("").is_none());
+    }
+
+    #[test]
+    fn the_other_labels_are_unchanged() {
+        assert_eq!(SyncScope::Full.label(), "full");
+        assert_eq!(SyncScope::Group("magi".to_string()).label(), "group:magi");
     }
 }

@@ -275,6 +275,51 @@ async fn sync_single_host() {
 }
 
 // =========================================================================
+// Test: sync of several named hosts — one gather, not one per host
+// =========================================================================
+#[tokio::test]
+async fn sync_several_hosts_in_one_call() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = request(
+        app.clone(),
+        "POST",
+        "/api/v1/sources/src-test/sync?host=motoko.section9.net,casper.seele.net",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["success"], true);
+    assert_eq!(result["scope"], "host:motoko.section9.net,casper.seele.net");
+    assert_eq!(result["total_hosts"], 2);
+
+    // and the other four are still there
+    let (_, body) = request(app.clone(), "GET", "/api/v1/sources/src-test/dataset").await;
+    let dataset: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(dataset["hostvars"].as_object().unwrap().len(), 6);
+}
+
+// A ?host= that names nothing must not silently become a full sync: it is a
+// caller mistake, and a full gather is the expensive way to hide it.
+#[tokio::test]
+async fn sync_with_an_empty_host_list_falls_back_to_full() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, body) = request(app, "POST", "/api/v1/sources/src-test/sync?host=,,").await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    // no hostname survived the parse, so there is no host scope to honour
+    assert_eq!(result["scope"], "full");
+}
+
+// =========================================================================
 // Test: sync of a group — only refreshes hosts in the group
 // =========================================================================
 #[tokio::test]

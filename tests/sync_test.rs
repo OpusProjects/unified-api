@@ -1284,3 +1284,49 @@ mod hosts_from_source {
         assert!(connector.seen_config.lock().unwrap().is_none());
     }
 }
+
+// =========================================================================
+// Test: refresh_origin is a no-op on a local source
+// =========================================================================
+// A local connector IS the origin — its sync already gathers fresh data — so
+// the flag must be accepted and ignored rather than rejected. Consumers point
+// at a source id without knowing whether it is local or federated, and a 400
+// here would make them care.
+#[tokio::test]
+async fn refresh_origin_is_accepted_and_ignored_by_a_local_source() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, body) = request(
+        app,
+        "POST",
+        "/api/v1/sources/src-test/sync?host=motoko.section9.net&refresh_origin=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["success"], true);
+    assert_eq!(result["scope"], "host:motoko.section9.net");
+    assert_eq!(result["total_hosts"], 1);
+}
+
+// An explicit hop budget of zero is still a valid request, not a rejection:
+// the source is synced, nothing is asked of any origin.
+#[tokio::test]
+async fn refresh_origin_with_no_hops_left_is_still_a_sync() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, body) = request(
+        app,
+        "POST",
+        "/api/v1/sources/src-test/sync?refresh_origin=true&refresh_depth=0",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["success"], true);
+    assert_eq!(result["total_hosts"], 6);
+}

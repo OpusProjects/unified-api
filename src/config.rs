@@ -47,6 +47,28 @@ pub struct ServerConfig {
     // anyone who can reach the port.
     #[serde(default)]
     pub metrics_require_auth: bool,
+
+    // How long a read may wait for an on-demand refresh before it gives up and
+    // serves what is cached. Separate from a source's `timeout_seconds`, which
+    // bounds a scheduled sync and may reasonably be minutes: a consumer waiting
+    // on a page cannot. Reaching it is not an error, the read still answers.
+    #[serde(default = "default_refresh_timeout_seconds")]
+    pub refresh_timeout_seconds: u64,
+
+    // How many on-demand refreshes may run at once, process-wide. The TTL
+    // window already limits repeat requests for the SAME host; this is what
+    // limits requests for many DIFFERENT hosts arriving together, which the TTL
+    // does not bound at all.
+    #[serde(default = "default_refresh_max_concurrent")]
+    pub refresh_max_concurrent: usize,
+}
+
+fn default_refresh_timeout_seconds() -> u64 {
+    15
+}
+
+fn default_refresh_max_concurrent() -> usize {
+    8
 }
 
 // Cache behavior — config.yaml, `cache:` section (optional)

@@ -112,6 +112,10 @@ async fn main() {
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .readyz_require_all_sources(cfg.server.readyz_require_all_sources)
         .metrics_require_auth(cfg.server.metrics_require_auth)
+        .on_demand_refresh(
+            cfg.server.refresh_timeout_seconds,
+            cfg.server.refresh_max_concurrent,
+        )
         .build_with_state();
 
     // With persistence configured, reload the last snapshot BEFORE the

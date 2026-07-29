@@ -90,6 +90,7 @@ fn remote_source(url: &str) -> Source {
         ttl_seconds: 600,
         timeout_seconds: 60,
         ttl_overrides: Default::default(),
+        allow_on_demand_refresh: false,
         config: remote_config(url),
     }
 }
@@ -191,6 +192,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         ttl_seconds: 600,
         timeout_seconds: 60,
         ttl_overrides: Default::default(),
+        allow_on_demand_refresh: false,
         config: remote_config(&url),
     };
 
@@ -390,6 +392,7 @@ async fn spawn_gathering_edge() -> (String, std::sync::Arc<unified_api::AppState
         ttl_seconds: 3600,
         timeout_seconds: 60,
         ttl_overrides: Default::default(),
+        allow_on_demand_refresh: false,
         config,
     };
 

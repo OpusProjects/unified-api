@@ -14,6 +14,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
 use crate::domain::sync_health::SyncHealth;
@@ -72,6 +73,80 @@ fn resolve_hostnames<'a>(
     hostnames.sort();
     hostnames.dedup();
     hostnames
+}
+
+// Validate what the caller asked for, then hand off to the use case.
+//
+// The two refusals are checked here because they are about the REQUEST, not
+// about the refresh: naming no hosts, and a source that has not been given the
+// capability. Everything after that is best effort — a refresh that fails
+// reports itself in the headers and the read still answers from cache.
+async fn refresh_before_reading(
+    state: &Arc<AppState>,
+    id: &str,
+    host: Option<&str>,
+) -> Result<RefreshOutcome, ApiError> {
+    let source = state
+        .sources
+        .get(id)
+        .ok_or_else(|| ApiError::source_not_configured(id))?;
+
+    if !source.allow_on_demand_refresh {
+        return Err(ApiError::refresh_not_allowed(id));
+    }
+
+    let hosts: Vec<String> = host
+        .map(|h| {
+            h.split(',')
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if hosts.is_empty() {
+        return Err(ApiError::refresh_needs_hosts());
+    }
+
+    let connector = state.connector_for(&source.connector_type);
+    Ok(refresh_hosts(
+        &*state.cache,
+        &**connector,
+        &*state.secrets,
+        &state.sync_health,
+        &state.refresh,
+        id,
+        source,
+        &hosts,
+    )
+    .await)
+}
+
+// Stamp the outcome onto whatever response the read produced, including a 304:
+// a caller that asked for a refresh is told whether it happened even when the
+// answer is "nothing changed".
+fn with_refresh_headers(
+    mut builder: axum::http::response::Builder,
+    refresh: &Option<RefreshOutcome>,
+) -> axum::http::response::Builder {
+    if let Some(outcome) = refresh {
+        builder = builder.header(HEADER_REFRESHED, (outcome.error.is_none()).to_string());
+        if !outcome.refreshed.is_empty() {
+            builder = builder.header(HEADER_REFRESHED_HOSTS, outcome.refreshed.join(","));
+        }
+        if let Some(error) = &outcome.error {
+            // Header values cannot carry newlines or control characters, and a
+            // connector's error text can; replacing them keeps a broken script's
+            // stderr from becoming an unsendable response.
+            let sanitized: String = error
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            builder = builder.header(HEADER_REFRESH_ERROR, sanitized);
+        }
+    }
+    builder
 }
 
 // ToSchema = utoipa generates the JSON Schema definition for this struct
@@ -164,9 +239,18 @@ pub struct DatasetParams {
     pub offset: Option<usize>,
     /// Return only these top-level hostvars keys (comma-separated)
     pub fields: Option<String>,
+    /// Bring the requested hosts up to date before answering, if the source's
+    /// TTL says they are stale. Requires `host` and a source configured with
+    /// `allow_on_demand_refresh`. A refresh that fails does not fail the read:
+    /// the cached data is served and the `x-unified-api-refreshed` header says
+    /// what happened.
+    pub refresh: Option<bool>,
 }
 
 impl DatasetParams {
+    // `refresh` is deliberately not part of this: it changes how current the
+    // data is, not the shape of the response. A consumer that adds
+    // `&refresh=true` to an existing call keeps getting the shape it parses.
     fn is_plain(&self) -> bool {
         self.host.is_none()
             && self.group.is_none()
@@ -175,6 +259,14 @@ impl DatasetParams {
             && self.fields.is_none()
     }
 }
+
+// What the refresh did, as response headers rather than body fields — it is
+// metadata about the response, not part of the resource, and putting it in
+// headers is what lets both the raw Dataset and the paginated envelope carry it
+// without either shape changing.
+const HEADER_REFRESHED: &str = "x-unified-api-refreshed";
+const HEADER_REFRESH_ERROR: &str = "x-unified-api-refresh-error";
+const HEADER_REFRESHED_HOSTS: &str = "x-unified-api-refreshed-hosts";
 
 #[utoipa::path(
     get,
@@ -185,9 +277,10 @@ impl DatasetParams {
         DatasetParams
     ),
     responses(
-        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys."),
+        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys. With refresh=true the response also carries x-unified-api-refreshed (whether the refresh succeeded), x-unified-api-refreshed-hosts (which hosts were re-gathered) and, on failure, x-unified-api-refresh-error — the data is served either way."),
         (status = 304, description = "If-None-Match matched the current ETag — nothing changed, no body"),
-        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 400, description = "refresh=true without ?host=: the hosts to refresh must be named", body = ErrorBody),
+        (status = 403, description = "API key not allowed to read this source, or refresh=true on a source without allow_on_demand_refresh", body = ErrorBody),
         (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
     )
 )]
@@ -201,6 +294,16 @@ pub async fn get_source_dataset(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
+
+    // The refresh runs BEFORE the entry is read and before any ETag is
+    // computed: doing it after would answer a 304 for data the caller just
+    // asked to have replaced.
+    let refresh = if params.refresh.unwrap_or(false) {
+        Some(refresh_before_reading(&state, &id, params.host.as_deref()).await?)
+    } else {
+        None
+    };
+
     let entry = state
         .cache
         .get(&id)
@@ -224,19 +327,25 @@ pub async fn get_source_dataset(
                 candidate == cached.etag || candidate == "*"
             })
         {
-            return Ok(Response::builder()
-                .status(StatusCode::NOT_MODIFIED)
-                .header(header::ETAG, &cached.etag)
-                .body(axum::body::Body::empty())
-                .unwrap());
+            return Ok(with_refresh_headers(
+                Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
+                    .header(header::ETAG, &cached.etag),
+                &refresh,
+            )
+            .body(axum::body::Body::empty())
+            .unwrap());
         }
 
-        return Ok(Response::builder()
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::ETAG, &cached.etag)
-            // Bytes clone = shared buffer, not a copy
-            .body(axum::body::Body::from(cached.bytes.clone()))
-            .unwrap());
+        return Ok(with_refresh_headers(
+            Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::ETAG, &cached.etag),
+            &refresh,
+        )
+        // Bytes clone = shared buffer, not a copy
+        .body(axum::body::Body::from(cached.bytes.clone()))
+        .unwrap());
     }
 
     // A filtered response depends on two things: the data and the query. The
@@ -259,6 +368,10 @@ pub async fn get_source_dataset(
         params.limit.hash(&mut hasher);
         params.offset.hash(&mut hasher);
         params.fields.hash(&mut hasher);
+        // A refresh request and a plain one get distinct validators: a client
+        // polling with refresh=true must not be handed a 304 that was minted
+        // for a request that never went to the origin.
+        params.refresh.hash(&mut hasher);
         format!("\"{:x}-{}\"", hasher.finish(), state.cache.generation())
     };
 
@@ -270,11 +383,14 @@ pub async fn get_source_dataset(
             candidate == etag || candidate == "*"
         })
     {
-        return Ok(Response::builder()
-            .status(StatusCode::NOT_MODIFIED)
-            .header(header::ETAG, &etag)
-            .body(axum::body::Body::empty())
-            .unwrap());
+        return Ok(with_refresh_headers(
+            Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(header::ETAG, &etag),
+            &refresh,
+        )
+        .body(axum::body::Body::empty())
+        .unwrap());
     }
 
     let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
@@ -346,11 +462,14 @@ pub async fn get_source_dataset(
     })
     .map_err(|e| ApiError::internal(format!("failed to serialize dataset page: {}", e)))?;
 
-    Ok(Response::builder()
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::ETAG, &etag)
-        .body(axum::body::Body::from(body))
-        .unwrap())
+    Ok(with_refresh_headers(
+        Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ETAG, &etag),
+        &refresh,
+    )
+    .body(axum::body::Body::from(body))
+    .unwrap())
 }
 
 #[derive(Serialize, ToSchema)]
@@ -524,24 +643,12 @@ pub async fn source_status(
 
     let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
 
-    // Resolve group TTL overrides into a per-host map ONCE, instead of
-    // scanning every group's member list for every host — that scan made a
-    // full status quadratic on large sources. Host-level overrides still win
-    // (checked first below). When a host sits in several groups that carry
-    // an override the winner is arbitrary, exactly as before, when it
-    // depended on group iteration order.
+    // Group overrides resolved into a per-host map ONCE, rather than scanning
+    // every group's member list for every host, which made a full status
+    // quadratic on large sources. Shared with the on-demand refresh, which has
+    // to reach the same verdict about the same host.
     let group_ttl_by_host: HashMap<&str, u64> = source
-        .map(|s| {
-            let mut by_host: HashMap<&str, u64> = HashMap::new();
-            for (group_name, ttl) in &s.ttl_overrides.groups {
-                if let Some(group) = entry.dataset.groups.get(group_name) {
-                    for hostname in &group.hosts {
-                        by_host.entry(hostname.as_str()).or_insert(*ttl);
-                    }
-                }
-            }
-            by_host
-        })
+        .map(|s| s.group_ttl_by_host(&entry.dataset))
         .unwrap_or_default();
 
     let hosts: Vec<HostStatus> = hostnames
@@ -552,8 +659,7 @@ pub async fn source_status(
             let age = entry.host_age_seconds(hostname)?;
 
             let effective_ttl = source
-                .and_then(|s| s.ttl_overrides.hosts.get(hostname).copied())
-                .or_else(|| group_ttl_by_host.get(hostname).copied())
+                .map(|s| s.effective_ttl(hostname, &group_ttl_by_host, entry.ttl.as_secs()))
                 .unwrap_or(entry.ttl.as_secs());
 
             Some(HostStatus {

@@ -72,6 +72,29 @@ impl ApiError {
     pub fn admin_only() -> Self {
         Self::forbidden("this route requires an admin API key")
     }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, message)
+    }
+
+    // Refusing a refresh is worth its own wording, because the two ways it can
+    // be refused have completely different fixes and both used to be one bland
+    // 403 or nothing at all.
+    pub fn refresh_needs_hosts() -> Self {
+        Self::bad_request(
+            "refresh=true requires ?host=: a refresh of a whole source on a read \
+             would gather the entire inventory, so the hosts have to be named. \
+             POST the source's /sync endpoint for a full refresh.",
+        )
+    }
+
+    pub fn refresh_not_allowed(id: &str) -> Self {
+        Self::forbidden(format!(
+            "source '{}' does not allow on-demand refresh — set \
+             allow_on_demand_refresh: true on it to let a read trigger a gather",
+            id
+        ))
+    }
 }
 
 // Implementing IntoResponse is what lets a handler return

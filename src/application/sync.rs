@@ -50,6 +50,57 @@ impl SyncScope {
     }
 }
 
+// How many federation hops a refresh request may travel before it stops being
+// propagated. Three covers edge → region → global with a hop to spare; the
+// point is that a topology accidentally wired into a cycle stops instead of
+// generating an infinite storm of gathers.
+pub const DEFAULT_REFRESH_DEPTH: u8 = 3;
+
+// What to sync: the slice (scope) and whether to make the origin re-gather it
+// first (refresh_origin).
+//
+// The two are deliberately separate. The scope is a transfer optimisation — it
+// says which hosts are wanted. refresh_origin is an intent that travels down a
+// federation chain: a central holding an edge's data as a source cannot produce
+// newer data by itself, it can only ask the edge to go and get it. Without the
+// flag a sync means "give me what you have", which is what a scheduled sync
+// must keep meaning: a central pulling on its own interval must never turn into
+// SSH load on the edge.
+pub struct SyncRequest {
+    pub scope: SyncScope,
+    pub refresh_origin: bool,
+    // Remaining hops. Each federated connector propagates depth - 1 and stops
+    // propagating at zero.
+    pub refresh_depth: u8,
+}
+
+impl SyncRequest {
+    // The plain sync: whatever the source can give without asking anyone else
+    pub fn new(scope: SyncScope) -> Self {
+        Self {
+            scope,
+            refresh_origin: false,
+            refresh_depth: 0,
+        }
+    }
+
+    pub fn refreshing_origin(scope: SyncScope, refresh_depth: u8) -> Self {
+        Self {
+            scope,
+            refresh_origin: true,
+            refresh_depth,
+        }
+    }
+}
+
+// So every existing caller can keep passing a bare scope: the scheduler and
+// every plain `POST /sync` mean "no refresh", which is the From below.
+impl From<SyncScope> for SyncRequest {
+    fn from(scope: SyncScope) -> Self {
+        Self::new(scope)
+    }
+}
+
 // Result of a sync — pure data, no HTTP types.
 // The handler converts it to JSON; the scheduler converts it to logs.
 pub struct SyncOutcome {
@@ -89,9 +140,12 @@ pub async fn sync_source(
     health: &SyncHealthRegistry,
     source_id: &str,
     source: &Source,
-    scope: SyncScope,
+    // `impl Into<SyncRequest>` accepts both a bare SyncScope (the plain sync
+    // every existing caller does) and a full SyncRequest, so adding the refresh
+    // intent did not have to touch the scheduler or any test
+    request: impl Into<SyncRequest>,
 ) -> SyncOutcome {
-    let outcome = run_sync(cache, connector, secrets, source_id, source, scope).await;
+    let outcome = run_sync(cache, connector, secrets, source_id, source, request.into()).await;
 
     // Recorded here rather than at the call sites so the scheduler and the HTTP
     // handler cannot drift: every sync in the process goes through this
@@ -131,8 +185,13 @@ async fn run_sync(
     secrets: &dyn SecretsPort,
     source_id: &str,
     source: &Source,
-    scope: SyncScope,
+    request: SyncRequest,
 ) -> SyncOutcome {
+    let SyncRequest {
+        scope,
+        refresh_origin,
+        refresh_depth,
+    } = request;
     let scope_label = scope.label();
 
     // The scope travels to the connector script via its config
@@ -199,6 +258,14 @@ async fn run_sync(
             config.insert("target".to_string(), group.clone());
         }
         SyncScope::Full => {}
+    }
+
+    // Only federated connectors act on this: they are the ones with an origin
+    // to ask. A local connector (script, ssh, static inventory) IS the origin —
+    // its sync already gathers fresh data — so it ignores both keys.
+    if refresh_origin {
+        config.insert("refresh_origin".to_string(), "true".to_string());
+        config.insert("refresh_depth".to_string(), refresh_depth.to_string());
     }
 
     let start = Instant::now();

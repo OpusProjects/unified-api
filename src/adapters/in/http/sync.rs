@@ -9,7 +9,9 @@ use utoipa::{IntoParams, ToSchema};
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
-use crate::application::sync::{SyncScope, sync_source as application_sync_source};
+use crate::application::sync::{
+    DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source as application_sync_source,
+};
 
 // IntoParams = utoipa generates documentation for query params
 // Each Option<String> field appears as an optional parameter in Swagger
@@ -19,6 +21,12 @@ pub struct SyncParams {
     pub host: Option<String>,
     /// Sync only hosts in this group (e.g. magi)
     pub group: Option<String>,
+    /// Make a federated source's origin re-gather before answering. Has no
+    /// effect on a local source: its sync already gathers fresh data.
+    pub refresh_origin: Option<bool>,
+    /// How many federation hops the refresh may travel (default 3). Only
+    /// meaningful with refresh_origin.
+    pub refresh_depth: Option<u8>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -42,7 +50,7 @@ pub struct SyncResult {
         SyncParams
     ),
     responses(
-        (status = 200, description = "Sync result with host/group counts", body = SyncResult),
+        (status = 200, description = "Sync result with host/group counts. Always 200 when the request itself was valid: a connector that failed reports success=false with the reason in `error` — including an origin that refused to re-gather under refresh_origin", body = SyncResult),
         (status = 403, description = "API key not allowed to sync this source", body = ErrorBody),
         (status = 404, description = "Source not configured", body = ErrorBody)
     )
@@ -73,6 +81,15 @@ pub async fn sync_source(
         .or_else(|| params.group.clone().map(SyncScope::Group))
         .unwrap_or(SyncScope::Full);
 
+    // The refresh intent is separate from the scope: the scope says which hosts,
+    // this says whether a federated source's origin should go and re-gather them
+    // rather than hand over what it already has.
+    let request = if params.refresh_origin.unwrap_or(false) {
+        SyncRequest::refreshing_origin(scope, params.refresh_depth.unwrap_or(DEFAULT_REFRESH_DEPTH))
+    } else {
+        SyncRequest::new(scope)
+    };
+
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)
     let connector = state.connector_for(&source.connector_type);
@@ -83,7 +100,7 @@ pub async fn sync_source(
         &state.sync_health,
         &id,
         source,
-        scope,
+        request,
     )
     .await;
 

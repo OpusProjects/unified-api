@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use unified_api::adapters::out::cache::memory::MemoryCache;
 use unified_api::adapters::out::connectors::remote::RemoteConnector;
 use unified_api::adapters::out::secrets::mock::MockSecrets;
-use unified_api::application::sync::{SyncScope, sync_source};
+use unified_api::application::sync::{DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source};
 use unified_api::domain::cache_entry::CacheEntry;
 use unified_api::domain::dataset::Dataset;
 use unified_api::domain::source::{ConnectorType, Source};
@@ -359,4 +359,219 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
     // empty result, not a 404), so the sync itself succeeds with nothing in it
     assert_eq!(outcome.total_hosts, 0);
     assert!(central_cache.get("src-madrid").is_none());
+}
+
+// =========================================================================
+// Refresh at origin: the central asks the edge to re-gather before answering
+// =========================================================================
+
+// An edge whose source is a REAL script connector, so a POST /sync on it
+// actually re-gathers instead of replaying a fixture. Its cache entry starts
+// 300s old, which is what a refresh has to visibly undo.
+//
+// Returns (base url, the edge's own state) so a test can look at what the edge
+// did, not only at what the central ended up with.
+async fn spawn_gathering_edge() -> (String, std::sync::Arc<unified_api::AppState>) {
+    let mut config = HashMap::new();
+    config.insert("scenario".to_string(), "default".to_string());
+
+    let edge_source = Source {
+        name: "Edge inventory".to_string(),
+        project_id: "test".to_string(),
+        script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
+        script_args: vec![],
+        output_format: Default::default(),
+        hosts_from_source: None,
+        connector_type: ConnectorType::Script,
+        sync_mode: Default::default(),
+        credential_ids: vec![],
+        schedule: None,
+        sync_interval_seconds: None,
+        ttl_seconds: 3600,
+        timeout_seconds: 60,
+        ttl_overrides: Default::default(),
+        config,
+    };
+
+    let mut sources = HashMap::new();
+    sources.insert("src-edge".to_string(), edge_source);
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .build_with_state();
+
+    // Seed it with data that is ALREADY 300s old at both levels
+    let seeded: Dataset = serde_json::from_value(serde_json::json!({
+        "hostvars": {"motoko.section9.net": {"os": "stale"}},
+        "groups": {}
+    }))
+    .unwrap();
+    state.cache.set(
+        "src-edge",
+        CacheEntry::restore(seeded, 3600, 300, {
+            let mut ages = HashMap::new();
+            ages.insert("motoko.section9.net".to_string(), 300);
+            ages
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{}", addr), state)
+}
+
+// The baseline this feature exists to change: without the flag the central
+// serves the edge's cache, and the age it reports is the edge's age.
+#[tokio::test]
+async fn without_refresh_origin_the_edge_does_not_re_gather() {
+    let (url, edge_state) = spawn_gathering_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-central",
+        &remote_source(&url),
+        SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
+    )
+    .await;
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+
+    // the edge's own entry is untouched: still the seeded 300s
+    let edge_age = edge_state
+        .cache
+        .get("src-edge")
+        .unwrap()
+        .host_age_seconds("motoko.section9.net")
+        .unwrap();
+    assert!(
+        edge_age >= 300,
+        "the edge re-gathered unasked: {}",
+        edge_age
+    );
+
+    // and the central reports that age rather than pretending otherwise
+    let central_age = central_cache
+        .get("src-central")
+        .unwrap()
+        .host_age_seconds("motoko.section9.net")
+        .unwrap();
+    assert!((300..360).contains(&central_age), "age was {}", central_age);
+    // the stale fixture, not a fresh gather
+    assert_eq!(
+        central_cache.get("src-central").unwrap().dataset.hostvars["motoko.section9.net"]["os"],
+        "stale"
+    );
+}
+
+// The whole point: one call to the central, and the SSH-side instance goes and
+// gets the data.
+#[tokio::test]
+async fn refresh_origin_makes_the_edge_re_gather_the_host() {
+    let (url, edge_state) = spawn_gathering_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-central",
+        &remote_source(&url),
+        SyncRequest::refreshing_origin(
+            SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
+            DEFAULT_REFRESH_DEPTH,
+        ),
+    )
+    .await;
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+
+    // the edge really re-gathered: its own entry is new again
+    let edge_age = edge_state
+        .cache
+        .get("src-edge")
+        .unwrap()
+        .host_age_seconds("motoko.section9.net")
+        .unwrap();
+    assert!(
+        edge_age < 30,
+        "the edge did not re-gather: age {}",
+        edge_age
+    );
+
+    // …and the central holds the fresh data with a truthful, near-zero age
+    let entry = central_cache.get("src-central").unwrap();
+    let central_age = entry.host_age_seconds("motoko.section9.net").unwrap();
+    assert!(central_age < 30, "central age was {}", central_age);
+    // the script's real output replaced the stale fixture
+    assert_ne!(entry.dataset.hostvars["motoko.section9.net"]["os"], "stale");
+}
+
+// A refresh the origin cannot satisfy is reported, not papered over with older
+// data labelled as a success.
+#[tokio::test]
+async fn an_origin_that_cannot_re_gather_fails_the_sync() {
+    let (url, _edge_state) = spawn_gathering_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-central",
+        &remote_source(&url),
+        SyncRequest::refreshing_origin(
+            // a host the edge's inventory does not have: its connector exits
+            // non-zero, so the edge answers success=false
+            SyncScope::Hosts(vec!["ghost.section9.net".to_string()]),
+            DEFAULT_REFRESH_DEPTH,
+        ),
+    )
+    .await;
+
+    let error = outcome.error.expect("the refusal must surface");
+    assert!(
+        error.contains("refused to re-gather"),
+        "error was: {}",
+        error
+    );
+    // nothing was cached from a refresh that did not happen
+    assert!(central_cache.get("src-central").is_none());
+}
+
+// The hop budget is what keeps a mis-wired topology from becoming a storm.
+#[tokio::test]
+async fn an_exhausted_hop_budget_still_serves_the_data() {
+    let (url, edge_state) = spawn_gathering_edge().await;
+
+    let central_cache = MemoryCache::new();
+    let outcome = sync_source(
+        &central_cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        "src-central",
+        &remote_source(&url),
+        SyncRequest::refreshing_origin(
+            SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
+            0,
+        ),
+    )
+    .await;
+
+    // it degrades to a plain fetch rather than failing
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+    let edge_age = edge_state
+        .cache
+        .get("src-edge")
+        .unwrap()
+        .host_age_seconds("motoko.section9.net")
+        .unwrap();
+    assert!(edge_age >= 300, "the edge re-gathered with no hops left");
 }

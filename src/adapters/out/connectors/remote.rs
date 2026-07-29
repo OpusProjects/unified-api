@@ -108,6 +108,23 @@ impl ConnectorPort for RemoteConnector {
             // same names and the envelope's extra fields are ignored.
             let host_filter = host_scope_filter(&config);
 
+            // 0. If asked to, make the origin go and get the data first.
+            //
+            // This is what lets a consumer talking only to the central obtain
+            // genuinely current facts: the central cannot produce them, it can
+            // only ask the edge that owns the SSH path to the host. The edge
+            // recurses in turn (region → global) until the hops run out, so the
+            // same call works at any depth of the topology.
+            if let Some(remaining) = propagated_refresh_depth(&config) {
+                let sync_url = format!(
+                    "{}/api/v1/sources/{}/sync{}",
+                    base_url,
+                    remote_source,
+                    refresh_query(&host_filter, remaining)
+                );
+                trigger_remote_refresh(&client, &sync_url, &api_key).await?;
+            }
+
             // 1. The data
             let dataset_url = format!(
                 "{}/api/v1/sources/{}/dataset{}",
@@ -172,6 +189,85 @@ fn host_scope_filter(config: &HashMap<String, String>) -> String {
     }
 }
 
+// How many hops the refresh may still travel, or None when there is nothing to
+// propagate — either no refresh was asked for, or the budget is spent.
+//
+// Running out of hops is not an error: the data is still fetched, just without
+// re-gathering at the far end. A depth of zero arriving here means a chain
+// longer than the caller's budget, or a topology wired into a cycle, and
+// stopping quietly with a log beats failing a request that can still be served.
+fn propagated_refresh_depth(config: &HashMap<String, String>) -> Option<u8> {
+    if config.get("refresh_origin").map(String::as_str) != Some("true") {
+        return None;
+    }
+
+    let depth: u8 = config
+        .get("refresh_depth")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(0);
+
+    if depth == 0 {
+        warn!("refresh hop budget exhausted — fetching the remote data without re-gathering it");
+        return None;
+    }
+
+    Some(depth - 1)
+}
+
+// The query string for the remote sync call: the host filter it inherits from
+// the scope, plus the refresh intent with one hop spent.
+fn refresh_query(host_filter: &str, remaining_depth: u8) -> String {
+    let separator = if host_filter.is_empty() { "?" } else { "&" };
+    format!(
+        "{}{}refresh_origin=true&refresh_depth={}",
+        host_filter, separator, remaining_depth
+    )
+}
+
+// Ask the remote to re-gather, and treat its refusal as this sync's failure.
+//
+// The remote answers 200 with `success: false` when its own connector failed
+// (an unreachable host, a broken script), so the status code is not enough. A
+// caller that explicitly asked for a refresh is told it did not happen, naming
+// the origin's own error — rather than being handed older data labelled as a
+// success. Degrading to the cached data is a decision for the read path, which
+// has a response to say "not refreshed" in; a write says what it did.
+async fn trigger_remote_refresh(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &Option<String>,
+) -> Result<(), ConnectorError> {
+    #[derive(Deserialize)]
+    struct RemoteSyncResult {
+        success: bool,
+        #[serde(default)]
+        error: Option<String>,
+        #[serde(default)]
+        total_hosts: usize,
+    }
+
+    let response = send(client, reqwest::Method::POST, url, api_key).await?;
+    let result: RemoteSyncResult = response.json().await.map_err(|e| {
+        connector_error(&format!(
+            "remote sync at '{}' did not answer a sync result: {}",
+            url, e
+        ))
+    })?;
+
+    if !result.success {
+        return Err(connector_error(&format!(
+            "the origin refused to re-gather via '{}': {}",
+            url,
+            result
+                .error
+                .unwrap_or_else(|| "no reason given".to_string())
+        )));
+    }
+
+    debug!(url = %url, hosts = result.total_hosts, "origin re-gathered on request");
+    Ok(())
+}
+
 async fn fetch_ages(
     client: &reqwest::Client,
     url: &str,
@@ -198,7 +294,18 @@ async fn get(
     url: &str,
     api_key: &Option<String>,
 ) -> Result<reqwest::Response, ConnectorError> {
-    let mut request = client.get(url);
+    send(client, reqwest::Method::GET, url, api_key).await
+}
+
+// One place for the error mapping, because a 401 or a 403 means the same thing
+// whether it came back from a read or from a refresh request.
+async fn send(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    api_key: &Option<String>,
+) -> Result<reqwest::Response, ConnectorError> {
+    let mut request = client.request(method, url);
     if let Some(key) = api_key {
         request = request.header("x-api-key", key);
     }
@@ -215,7 +322,7 @@ async fn get(
             url
         ))),
         403 => Err(connector_error(&format!(
-            "'{}' answered 403 — the remote key is not allowed to read that source",
+            "'{}' answered 403 — the remote key is not scoped to that source",
             url
         ))),
         404 => Err(connector_error(&format!(
@@ -269,6 +376,52 @@ mod tests {
     fn group_scope_is_not_translated() {
         let cfg = config(&[("scope", "group"), ("target", "madrid")]);
         assert_eq!(host_scope_filter(&cfg), "");
+    }
+
+    #[test]
+    fn no_refresh_asked_for_means_nothing_to_propagate() {
+        assert_eq!(propagated_refresh_depth(&config(&[])), None);
+        // the depth alone is not a request
+        assert_eq!(
+            propagated_refresh_depth(&config(&[("refresh_depth", "3")])),
+            None
+        );
+    }
+
+    #[test]
+    fn a_refresh_spends_one_hop_on_the_way_down() {
+        let cfg = config(&[("refresh_origin", "true"), ("refresh_depth", "3")]);
+        assert_eq!(propagated_refresh_depth(&cfg), Some(2));
+    }
+
+    #[test]
+    fn the_last_hop_still_refreshes_but_propagates_nothing() {
+        let cfg = config(&[("refresh_origin", "true"), ("refresh_depth", "1")]);
+        assert_eq!(propagated_refresh_depth(&cfg), Some(0));
+    }
+
+    #[test]
+    fn an_exhausted_budget_stops_propagating() {
+        // a chain longer than the caller's budget, or a cycle: the data is
+        // still fetched, it is just not re-gathered again
+        let cfg = config(&[("refresh_origin", "true"), ("refresh_depth", "0")]);
+        assert_eq!(propagated_refresh_depth(&cfg), None);
+        // a missing depth is treated as exhausted, never as unlimited
+        let cfg = config(&[("refresh_origin", "true")]);
+        assert_eq!(propagated_refresh_depth(&cfg), None);
+    }
+
+    #[test]
+    fn the_refresh_query_carries_the_host_filter_along() {
+        assert_eq!(
+            refresh_query("?host=web01.example.com", 2),
+            "?host=web01.example.com&refresh_origin=true&refresh_depth=2"
+        );
+    }
+
+    #[test]
+    fn the_refresh_query_opens_its_own_query_string_on_a_full_sync() {
+        assert_eq!(refresh_query("", 0), "?refresh_origin=true&refresh_depth=0");
     }
 
     #[test]

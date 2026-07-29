@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `refresh_origin=true` on `POST /sources/{id}/sync`: make a federated source's
+  origin re-gather before answering, instead of handing over whatever it has
+  cached. A central holding an edge's data cannot produce newer facts by
+  itself — only the instance with the SSH path to the host can — so until now
+  the only way to get current data through a mesh was to call the edge
+  directly, which means the consumer has to know the topology and hold a
+  credential per datacenter. The intent travels down the chain and recurses
+  (edge → region → global), bounded by `refresh_depth` (default 3), so a
+  topology accidentally wired into a cycle stops instead of amplifying. It
+  pairs with the host scope: `?host=X&refresh_origin=true` re-gathers that
+  host and nothing else. A local source accepts and ignores the flag — its
+  sync already gathers fresh data — so consumers do not have to know whether
+  the source id they were given is local or federated. An origin that cannot
+  re-gather fails the sync naming its own error, rather than quietly returning
+  older data as a success.
+
 ### Fixed
 
 - A host-scoped sync now actually gathers only that host. The scope reached

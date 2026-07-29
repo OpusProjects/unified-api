@@ -6,6 +6,37 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A host-scoped sync now actually gathers only that host. The scope reached
+  every connector as `scope`/`target` in its config, but two of them ignored
+  it: the SSH connector read only its host list, so
+  `POST /sync?host=one-box` opened a session to every host in the datacenter
+  and kept one; and the remote (federation) connector fetched the whole remote
+  dataset across the WAN — megabytes on a facts source — to keep one host. The
+  SSH connector now narrows its host list to the target (a target it does not
+  have is an error naming it, not a bland success), and the remote connector
+  translates the scope into `?host=` on both remote calls. Group scope is
+  unchanged: a `HostSpec` carries addresses, not group membership, so the SSH
+  connector has nothing to narrow by.
+- A host-scoped federated sync no longer resets that host's age. Origin ages
+  were applied only on the full-dataset path (`CacheEntry::restore`), so a
+  per-host pull through a central stamped the host "now" and reported
+  six-hour-old facts as fresh — the exact lie federation exists to avoid.
+  Host timestamps are now backdated by the age the origin reported
+  (`CacheEntry::update_host_aged`), including on the entry's first write.
+
+### Changed
+
+- `?host=` on `POST /sources/{id}/sync` accepts a comma-separated list, like
+  every other `?host=` in the API. Previously the whole value was treated as
+  one hostname: `?host=a,b` gathered everything and then cached nothing,
+  because no host is named "a,b". A consumer refreshing the five hosts a form
+  displays now pays for one gather instead of five. Connector scripts receive
+  the list verbatim in `target` and should split it on commas (both sample
+  scripts under `tests/` show the shape); a value that names no host at all
+  falls back to a full sync rather than gathering and discarding.
+
 ### Added
 
 - `server.readyz_require_all_sources` (default `false`): make `/readyz` turn

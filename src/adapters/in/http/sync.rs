@@ -15,7 +15,7 @@ use crate::application::sync::{SyncScope, sync_source as application_sync_source
 // Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]
 pub struct SyncParams {
-    /// Sync only this host (e.g. motoko.section9.net)
+    /// Sync only these hosts, comma-separated (e.g. motoko.section9.net)
     pub host: Option<String>,
     /// Sync only hosts in this group (e.g. magi)
     pub group: Option<String>,
@@ -63,13 +63,15 @@ pub async fn sync_source(
         .get(&id)
         .ok_or_else(|| ApiError::source_not_configured(&id))?;
 
-    let scope = if let Some(host) = params.host {
-        SyncScope::Host(host)
-    } else if let Some(group) = params.group {
-        SyncScope::Group(group)
-    } else {
-        SyncScope::Full
-    };
+    // `?host=` accepts a comma-separated list, like everywhere else in the API.
+    // A value that is all separators selects no hosts, which would be a sync of
+    // nothing: fall through to the next scope rather than gather and discard.
+    let scope = params
+        .host
+        .as_deref()
+        .and_then(SyncScope::hosts_from_csv)
+        .or_else(|| params.group.clone().map(SyncScope::Group))
+        .unwrap_or(SyncScope::Full);
 
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)

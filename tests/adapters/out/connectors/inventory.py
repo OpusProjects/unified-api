@@ -209,10 +209,15 @@ scope = config.get("scope", "full")
 target = config.get("target", "")
 
 if scope == "host" and target:
-    # Return only one host's vars
-    if target in inventory.get("hostvars", {}):
+    # The target is a COMMA-SEPARATED list of hostnames: the API accepts
+    # ?host=a,b so a consumer needing several hosts pays for one gather
+    # instead of one per host. A single hostname is a list of one.
+    wanted = [h.strip() for h in target.split(",") if h.strip()]
+    available = inventory.get("hostvars", {})
+    known = [h for h in wanted if h in available]
+    if known:
         inventory = {
-            "hostvars": {target: inventory["hostvars"][target]},
+            "hostvars": {h: available[h] for h in known},
             "groups": {}
         }
     else:

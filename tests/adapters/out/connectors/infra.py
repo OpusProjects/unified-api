@@ -249,11 +249,16 @@ if scenario == "error":
     print("Simulated SSH connection failure", file=sys.stderr)
     sys.exit(1)
 
-# Scope filtering
+# Scope filtering.
+# With scope "host" the target is a COMMA-SEPARATED list: the API accepts
+# ?host=a,b so one gather can serve a form showing several hosts. A single
+# hostname is just a list of one.
 if scope == "host":
-    if target in HOSTS:
+    wanted = [h.strip() for h in target.split(",") if h.strip()]
+    known = [h for h in wanted if h in HOSTS]
+    if known:
         json.dump({
-            "hostvars": {target: HOSTS[target]},
+            "hostvars": {h: HOSTS[h] for h in known},
             "groups": {}
         }, sys.stdout)
     else:

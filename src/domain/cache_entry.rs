@@ -182,10 +182,30 @@ impl CacheEntry {
     // keeps seeing an immutable snapshot. Either way mutation is safe and
     // readers are never blocked or torn.
     pub fn update_host(&mut self, hostname: String, vars: HostVars) {
+        self.update_host_aged(hostname, vars, 0);
+    }
+
+    // Same as update_host, but the host's timestamp is backdated by
+    // `age_seconds` instead of stamped "now".
+    //
+    // This is what a host-scoped federated sync needs: the central fetched the
+    // data from the edge, but the edge gathered it some seconds (or hours) ago.
+    // Stamping now() would report a host as newly born every time a central
+    // pulled it, which is exactly the lie CacheEntry::restore exists to avoid on
+    // the full-dataset path. Same reasoning, same fallback: if the clock cannot
+    // represent the backdated instant the data is older than the machine's
+    // uptime, so `now` is the closest representable answer and it is still no
+    // fresher than the truth by more than the uptime.
+    pub fn update_host_aged(&mut self, hostname: String, vars: HostVars, age_seconds: u64) {
         self.invalidate_serialized();
         let dataset = Arc::make_mut(&mut self.dataset);
         dataset.hostvars.insert(hostname.clone(), vars);
-        Arc::make_mut(&mut self.host_timestamps).insert(hostname, Instant::now());
+
+        let now = Instant::now();
+        let timestamp = now
+            .checked_sub(Duration::from_secs(age_seconds))
+            .unwrap_or(now);
+        Arc::make_mut(&mut self.host_timestamps).insert(hostname, timestamp);
     }
 
     // Merge: patches the hosts that come, the rest is left alone.
@@ -292,6 +312,38 @@ mod tests {
     fn new_entry_is_fresh() {
         let entry = CacheEntry::new(empty_dataset(), 3600);
         assert!(entry.is_fresh());
+    }
+
+    #[test]
+    fn update_host_aged_backdates_the_timestamp() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 600);
+        let vars: HostVars = [("role".to_string(), serde_json::json!("sniper"))]
+            .into_iter()
+            .collect();
+
+        entry.update_host_aged("saito.section9.net".to_string(), vars, 300);
+
+        assert_eq!(entry.host_age_seconds("saito.section9.net"), Some(300));
+        // still fresh: the TTL is longer than the age it came with
+        assert!(entry.is_host_fresh("saito.section9.net", None));
+        // and stale under a TTL shorter than that age
+        assert!(!entry.is_host_fresh("saito.section9.net", Some(60)));
+    }
+
+    #[test]
+    fn update_host_aged_with_zero_age_matches_update_host() {
+        let mut entry = CacheEntry::new(empty_dataset(), 600);
+        entry.update_host_aged("a.example".to_string(), HashMap::new(), 0);
+        assert_eq!(entry.host_age_seconds("a.example"), Some(0));
+    }
+
+    #[test]
+    fn update_host_aged_leaves_the_other_hosts_alone() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 600);
+        entry.update_host_aged("motoko.section9.net".to_string(), HashMap::new(), 300);
+
+        assert_eq!(entry.host_age_seconds("motoko.section9.net"), Some(300));
+        assert_eq!(entry.host_age_seconds("batou.section9.net"), Some(0));
     }
 
     #[test]

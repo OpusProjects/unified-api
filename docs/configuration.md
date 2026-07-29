@@ -26,6 +26,14 @@ server:
   # API key — for a shared network, since the exposition labels every source
   # id and host count.
   metrics_require_auth: false
+  # Optional, default 15. How long a read with ?refresh=true may wait before it
+  # gives up and serves the cached data. Sized for a consumer waiting on a page,
+  # not for a scheduled sync. See docs/on-demand-refresh.md.
+  refresh_timeout_seconds: 15
+  # Optional, default 8. Concurrent on-demand refreshes, process-wide. The TTL
+  # bounds repeat requests for the same host; this bounds requests for many
+  # different hosts arriving together.
+  refresh_max_concurrent: 8
 
 # Optional. Absent = purely in-memory cache (restarts start empty).
 # With the block, the cache is snapshotted to `path` every `interval_seconds`
@@ -62,6 +70,7 @@ src-section9:
       production: 900
     hosts:
       motoko.section9.net: 300
+  allow_on_demand_refresh: false       # may a READ trigger a sync? (default false)
   config:                              # free-form strings passed to the script
     scenario: "large"
 ```
@@ -74,6 +83,7 @@ src-section9:
 | `connector_type` | `script` runs a local process; `ssh` fans out over hosts; `static_inventory` parses an Ansible YAML inventory (+ `group_vars/`/`host_vars/`) from disk natively; `remote` federates another unified-api instance (see [connectors](connectors.md)) |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
 | `ttl_*` | See [caching](caching.md) for the freshness model |
+| `allow_on_demand_refresh` | Whether `GET /dataset?host=X&refresh=true` may gather the named hosts. Off by default: a read that can cause SSH into a datacenter is a capability. Turning it on makes `ttl_seconds` load bearing — it becomes the threshold at which a read pays for a gather — so review it first. See [on-demand refresh](on-demand-refresh.md) |
 | `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path` from here — see [connectors](connectors.md) |

@@ -64,11 +64,11 @@ unaffected). Browser-based consumers need their origins listed in
 | Route | Meaning |
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health |
-| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=` |
+| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=`; `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
 | `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
 | `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=`. `total_hosts` counts the whole source, `returned` this response |
-| `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` or `?group=y` scope the sync |
+| `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` (comma-separated list) or `?group=y` scope the sync; `&refresh_origin=true` makes a federated source's origin re-gather first — see [on-demand refresh](on-demand-refresh.md) |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
 | `DELETE /api/v1/sources/{id}/hosts/{hostname}` | Remove a host from the cached dataset |
 | `DELETE /api/v1/sources/{id}` | Drop the whole cache entry (the configuration is untouched) |

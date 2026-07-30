@@ -337,7 +337,34 @@ impl CacheEntry {
 
     // Merge: patches the hosts that come, the rest is left alone.
     // Also processes remove_hosts if they come.
+    //
+    // For data a connector GATHERED, so the hosts it carries were collected now
+    // and their timestamps say so.
     pub fn merge_dataset(&mut self, partial: Dataset) {
+        self.merge_into(partial, true);
+    }
+
+    // The same merge, for what a script enricher returns.
+    //
+    // The one difference is that it does not restamp a host that is already
+    // here. `host_timestamps` record when a host was last GATHERED, and a read
+    // consults them to decide whether to refresh before answering. Enrichment
+    // derives from data already in the cache — it gathers nothing — so stamping
+    // made an enriched host look freshly collected and could suppress a refresh
+    // the consumer had explicitly asked for.
+    //
+    // The declarative merge was fixed in 0.10.0 by writing through
+    // merge_hostvar_fields; the script path kept the bug because it went
+    // through merge_dataset, which exists for gathered data.
+    //
+    // A host the enricher INTRODUCES is stamped: every host needs a timestamp
+    // (one without is absent from /status and never fresh), and "now" is when
+    // it became known.
+    pub fn merge_enrichment(&mut self, partial: Dataset) {
+        self.merge_into(partial, false);
+    }
+
+    fn merge_into(&mut self, partial: Dataset, restamp_existing: bool) {
         self.invalidate_serialized();
         let now = Instant::now();
         let dataset = Arc::make_mut(&mut self.dataset);
@@ -346,7 +373,12 @@ impl CacheEntry {
         // Merge hostvars
         for (hostname, vars) in partial.hostvars {
             dataset.hostvars.insert(hostname.clone(), vars);
-            timestamps.insert(hostname, now);
+            // Keyed on the timestamp map rather than on hostvars, so the
+            // invariant it protects — every host has one — holds even for an
+            // entry that somehow arrived without it.
+            if restamp_existing || !timestamps.contains_key(&hostname) {
+                timestamps.insert(hostname, now);
+            }
         }
 
         // Merge groups
@@ -740,6 +772,89 @@ mod tests {
             entry.dataset.hostvars["motoko.section9.net"]["role"],
             "major"
         );
+    }
+
+    // Derived data must not testify to when a host was last gathered: those
+    // timestamps decide whether a read refreshes. Same rule the declarative
+    // merge follows — the script path used to break it through merge_dataset.
+    #[test]
+    fn merge_enrichment_does_not_refresh_an_existing_hosts_age() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let (name, vars) = host_vars("motoko.section9.net", "commander");
+        entry.update_host_aged(name, vars, 900);
+        let before = entry.host_age_seconds("motoko.section9.net");
+
+        entry.merge_enrichment(Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("infinibox".to_string(), serde_json::json!("vol-a"))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        });
+
+        assert_eq!(before, entry.host_age_seconds("motoko.section9.net"));
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["infinibox"],
+            "vol-a"
+        );
+        // Still stale under a TTL shorter than its real age, so a refresh the
+        // consumer asked for still happens
+        assert!(!entry.is_host_fresh("motoko.section9.net", Some(600)));
+    }
+
+    // Every host needs a timestamp: one without is absent from /status and
+    // never counts as fresh.
+    #[test]
+    fn merge_enrichment_stamps_a_host_it_introduces() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+
+        entry.merge_enrichment(Dataset {
+            hostvars: [host_vars("saito.section9.net", "sniper")]
+                .into_iter()
+                .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        });
+
+        assert_eq!(entry.host_age_seconds("saito.section9.net"), Some(0));
+        assert!(entry.is_host_fresh("saito.section9.net", None));
+    }
+
+    #[test]
+    fn merge_enrichment_still_removes_hosts() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+
+        entry.merge_enrichment(Dataset {
+            hostvars: HashMap::new(),
+            groups: HashMap::new(),
+            remove_hosts: vec!["batou.section9.net".to_string()],
+        });
+
+        assert!(!entry.dataset.hostvars.contains_key("batou.section9.net"));
+        assert!(!entry.host_timestamps.contains_key("batou.section9.net"));
+    }
+
+    // The other side of the distinction: a gather DOES say when it happened.
+    #[test]
+    fn merge_dataset_refreshes_an_existing_hosts_age() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let (name, vars) = host_vars("motoko.section9.net", "commander");
+        entry.update_host_aged(name, vars, 900);
+
+        entry.merge_dataset(Dataset {
+            hostvars: [host_vars("motoko.section9.net", "major")]
+                .into_iter()
+                .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        });
+
+        assert_eq!(entry.host_age_seconds("motoko.section9.net"), Some(0));
     }
 
     #[test]

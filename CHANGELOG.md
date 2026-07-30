@@ -8,6 +8,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A script enricher no longer resets how fresh a host looks.** 0.10.0 fixed
+  this for the declarative merge, but the script path wrote through
+  `merge_dataset` — which exists for data a connector *gathered*, and stamps the
+  hosts it carries as collected now. So enriching a host still made it look
+  freshly gathered, and a read arriving with `refresh=true` found nothing stale
+  and did nothing: the consumer asked for current facts, got cached ones, and
+  was told the refresh had succeeded.
+
+  Enrichment derives from data already in the cache and gathers nothing, so it
+  no longer touches the timestamps of hosts that are already there. A host an
+  enricher *introduces* is still stamped — every host needs a timestamp, one
+  without is absent from `/status` and never fresh, and "now" is when it became
+  known. Removals and group merges are unchanged.
+
+  **This will increase gathering load.** Hosts that looked fresh only because an
+  enricher had touched them now read as stale, so `refresh=true` requests that
+  have been quietly doing nothing will start doing real work. That is the bug
+  being fixed — the consumer's explicit request was being dropped — and it stays
+  bounded by `ttl_seconds` and `refresh_max_concurrent`, but it is worth knowing
+  before you see SSH volume move.
+
 - **A scoped sync no longer reports the whole source as freshly gathered.** A
   host- or group-scoped sync landing on a cold cache creates the entry — that is
   what lets a consumer ask a central for one host before any scheduled sync has

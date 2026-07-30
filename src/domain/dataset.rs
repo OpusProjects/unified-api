@@ -26,7 +26,9 @@ pub struct Dataset {
 pub type HostVars = HashMap<String, serde_json::Value>;
 
 // An Ansible inventory group
-#[derive(Debug, Serialize, Deserialize, Clone)]
+// Default: an empty group (no hosts, no children, no vars) — what a group
+// recreated for a retained host starts from.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Group {
     // Vec<String> = list[str] in Python
     // #[serde(default)] = if it doesn't appear in YAML/JSON, uses an empty Vec

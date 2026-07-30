@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A host that fails to answer keeps its groups, not just its variables.**
+  0.10.0 stopped a `replace` sync from deleting hosts the connector could not
+  reach, but it put back only their hostvars. Group membership is derived from
+  the hosts a connector managed to gather, so the retained host landed in the
+  dataset and in no group at all — and an Ansible inventory is groups. A
+  consumer running `hosts: oracle_version` still saw the host vanish on every
+  sync that missed it, which is the disappearance the retention was written to
+  prevent.
+
+  A retained host now comes back with its whole previous state: variables, its
+  true age, and every group it belonged to. A group that vanished entirely is
+  recreated, because a group disappears from a gather exactly when every host
+  in it failed to answer — dropping it would take the retained hosts with it.
+  A host upstream has stopped listing is still removed, groups included: it is
+  never attempted, so it is never retained.
+
 ## [0.10.0] - 2026-07-30
 
 ### Fixed

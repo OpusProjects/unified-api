@@ -5,7 +5,7 @@ use tokio::time::timeout;
 
 use crate::application::credentials::resolve_credentials;
 use crate::application::enrich::run_enrichers_for_target;
-use crate::domain::cache_entry::CacheEntry;
+use crate::domain::cache_entry::{CacheEntry, RetainedHost};
 use crate::domain::dataset::HostVars;
 use crate::domain::enricher::Enricher;
 use crate::domain::source::Source;
@@ -459,17 +459,19 @@ fn apply_to_cache(
             // retained host is as stale as it truly is, so the TTL still expires
             // it and a refresh still targets it. Stamping it fresh would turn an
             // intermittent gap into stale data presented as current.
+            //
+            // What is kept is the host's WHOLE previous state, group memberships
+            // included. A connector derives its groups from the hosts it managed
+            // to gather, so keeping only the variables left the host in the
+            // dataset and in no group — still gone for every consumer that
+            // renders an inventory from `groups`, which is most of them.
             SyncMode::Replace => {
                 let ttl = source.ttl_seconds;
                 cache.merge_or_insert(source_id, dataset, ttl, &mut |entry, new| {
-                    let retained: Vec<(String, HostVars, u64)> = unreachable
+                    let retained: Vec<RetainedHost> = unreachable
                         .iter()
                         .filter(|host| !new.hostvars.contains_key(*host))
-                        .filter_map(|host| {
-                            let vars = entry.dataset.hostvars.get(host).cloned()?;
-                            let age = entry.host_age_seconds(host).unwrap_or(0);
-                            Some((host.clone(), vars, age))
-                        })
+                        .filter_map(|host| entry.capture_host(host))
                         .collect();
 
                     // The closure replaces the entry wholesale, which is what
@@ -486,8 +488,8 @@ fn apply_to_cache(
                         None => CacheEntry::new(new, ttl),
                     };
 
-                    for (hostname, vars, age) in retained {
-                        entry.update_host_aged(hostname, vars, age);
+                    for host in retained {
+                        entry.restore_host(host);
                     }
                 });
             }
@@ -526,6 +528,33 @@ mod tests {
         Dataset {
             hostvars: hosts.into_iter().collect(),
             groups: std::collections::HashMap::new(),
+            remove_hosts: Vec::new(),
+        }
+    }
+
+    // The shape an SSH source produces: groups derived from the hosts that
+    // actually answered, so a host that did not answer is in none of them.
+    fn dataset_of_grouped(
+        hosts: Vec<(String, HostVars)>,
+        groups: Vec<(&str, Vec<&str>)>,
+    ) -> Dataset {
+        use crate::domain::dataset::Group;
+
+        Dataset {
+            hostvars: hosts.into_iter().collect(),
+            groups: groups
+                .into_iter()
+                .map(|(name, members)| {
+                    (
+                        name.to_string(),
+                        Group {
+                            hosts: members.into_iter().map(String::from).collect(),
+                            children: Vec::new(),
+                            vars: None,
+                        },
+                    )
+                })
+                .collect(),
             remove_hosts: Vec::new(),
         }
     }
@@ -620,6 +649,129 @@ mod tests {
             "a retained host must not be stamped fresh"
         );
         assert!(!entry.is_host_fresh("b.example", Some(600)));
+    }
+
+    // Keeping the variables is only half of keeping the host: a consumer that
+    // renders an inventory from `groups` — which is what an Ansible inventory
+    // is — still could not see it.
+    #[test]
+    fn a_retained_host_keeps_its_group_membership() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(
+                dataset_of_grouped(
+                    vec![host("a.example", "web"), host("b.example", "db")],
+                    vec![
+                        ("ssh_gathered", vec!["a.example", "b.example"]),
+                        ("ansible_os_family", vec!["a.example", "b.example"]),
+                    ],
+                ),
+                3600,
+            ),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of_grouped(
+                    vec![host("a.example", "web")],
+                    vec![
+                        ("ssh_gathered", vec!["a.example"]),
+                        ("ansible_os_family", vec!["a.example"]),
+                    ],
+                ),
+                ages: None,
+                unreachable: vec!["b.example".to_string()],
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        for group in ["ssh_gathered", "ansible_os_family"] {
+            assert!(
+                entry.dataset.groups[group]
+                    .hosts
+                    .contains(&"b.example".to_string()),
+                "retained host missing from group '{}'",
+                group
+            );
+        }
+    }
+
+    // A group disappears from a gather exactly when every host in it failed to
+    // answer, so it has to come back with them.
+    #[test]
+    fn a_group_whose_hosts_all_failed_comes_back_with_them() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(
+                dataset_of_grouped(
+                    vec![host("a.example", "web"), host("b.example", "db")],
+                    vec![
+                        ("ssh_gathered", vec!["a.example", "b.example"]),
+                        ("oracle_version", vec!["b.example"]),
+                    ],
+                ),
+                3600,
+            ),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of_grouped(
+                    vec![host("a.example", "web")],
+                    vec![("ssh_gathered", vec!["a.example"])],
+                ),
+                ages: None,
+                unreachable: vec!["b.example".to_string()],
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert_eq!(entry.dataset.groups["oracle_version"].hosts, ["b.example"]);
+    }
+
+    // The other half of the distinction, at group level: a host upstream
+    // stopped listing is not retained, so its groups do not come back either.
+    #[test]
+    fn a_dropped_host_does_not_resurrect_its_groups() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(
+                dataset_of_grouped(
+                    vec![host("a.example", "web"), host("b.example", "db")],
+                    vec![("oracle_version", vec!["b.example"])],
+                ),
+                3600,
+            ),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "web")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert!(!entry.dataset.groups.contains_key("oracle_version"));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::domain::enricher::Enricher;
 use crate::domain::project::GitProject;
 use crate::domain::source::{ConnectorType, Source};
 use crate::domain::sync_health::SyncHealthRegistry;
+use crate::domain::view::View;
 use crate::ports;
 
 // The shared application state: the ports (as Arc<dyn Trait>, so handlers
@@ -27,6 +28,11 @@ pub struct AppState {
     pub secrets: Arc<dyn ports::secrets::SecretsPort>,
     pub git: Arc<dyn ports::git::GitPort>,
     pub sources: HashMap<String, Source>,
+    // Read-only composites over sources, served on the same routes and sharing
+    // the same id space (config validation rejects a collision). They hold no
+    // cache entry of their own — a view is resolved from its members on every
+    // read, which is what keeps it from being a third copy of the inventory.
+    pub views: HashMap<String, View>,
     pub enrichers: HashMap<String, Enricher>,
     pub endpoints: HashMap<String, OutputEndpoint>,
     pub projects: HashMap<String, GitProject>,

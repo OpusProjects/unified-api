@@ -27,6 +27,7 @@ use domain::endpoint::OutputEndpoint;
 use domain::enricher::Enricher;
 use domain::project::GitProject;
 use domain::source::Source;
+use domain::view::View;
 use ports::secrets::SecretsPort;
 
 // AppBuilder is the composition root: the ONLY place where concrete adapters
@@ -36,6 +37,7 @@ use ports::secrets::SecretsPort;
 // and build() finalizes the construction.
 pub struct AppBuilder {
     sources: HashMap<String, Source>,
+    views: HashMap<String, View>,
     enrichers: HashMap<String, Enricher>,
     endpoints: HashMap<String, OutputEndpoint>,
     projects: HashMap<String, GitProject>,
@@ -53,6 +55,7 @@ impl AppBuilder {
     pub fn new() -> Self {
         Self {
             sources: HashMap::new(),
+            views: HashMap::new(),
             enrichers: HashMap::new(),
             endpoints: HashMap::new(),
             projects: HashMap::new(),
@@ -73,6 +76,11 @@ impl AppBuilder {
 
     pub fn sources(mut self, sources: HashMap<String, Source>) -> Self {
         self.sources = sources;
+        self
+    }
+
+    pub fn views(mut self, views: HashMap<String, View>) -> Self {
+        self.views = views;
         self
     }
 
@@ -162,6 +170,7 @@ impl AppBuilder {
             secrets: self.secrets,
             git: Arc::new(CliGit::new()),
             sources: self.sources,
+            views: self.views,
             enrichers: self.enrichers,
             endpoints: self.endpoints,
             projects: self.projects,

@@ -26,6 +26,7 @@ and every one of them sees the same inventory.
 - **Enrichers**: post-process cached data on a schedule or on demand
 - **Output endpoints**: turn cached datasets into the format each consumer needs
 - **Federation**: one instance per datacenter doing the local work, one central aggregating them, with the data's real age travelling along
+- **Views**: one id over several sources, routing each host to the member that owns it, so consumers stop needing to know which datacenter a host lives in
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **On-demand refresh**: a read can bring the hosts it names up to date at the origin, bounded by the source's TTL so consumers cannot outrun the operator's policy
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
@@ -46,6 +47,7 @@ and every one of them sees the same inventory.
 | [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
 | [On-demand refresh](docs/on-demand-refresh.md) | Getting current facts for a named host across a federated mesh, and the limits that keep consumers from overloading a datacenter |
 | [Testing](docs/testing.md) | How to run the suite, what the unit and integration tests cover, and how to add more |
+| [Views](docs/views.md) | Presenting several sources as one id, how a host is routed to its owner, and why ownership is declared rather than inferred |
 
 ---
 

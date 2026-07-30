@@ -26,6 +26,7 @@ pub struct EvictResult {
     params(("id" = String, Path, description = "Source identifier")),
     responses(
         (status = 200, description = "Cache entry dropped (the source's configuration is untouched)", body = EvictResult),
+        (status = 400, description = "The id names a view — a view holds no cache entry of its own", body = ErrorBody),
         (status = 403, description = "API key not allowed to touch this source", body = ErrorBody),
         (status = 404, description = "Source not in cache", body = ErrorBody)
     )
@@ -40,6 +41,13 @@ pub async fn evict_source(
     // all at once.
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+    if let Some(view) = state.views.get(&id) {
+        return Err(crate::adapters::r#in::http::views::write_refused(
+            &id,
+            view,
+            "be evicted",
+        ));
     }
 
     // Read the size before dropping, so the response says what was discarded.

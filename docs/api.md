@@ -63,7 +63,7 @@ unaffected). Browser-based consumers need their origins listed in
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health |
+| `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health, then every configured [view](views.md) (`kind: "view"`) |
 | `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=`; `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
 | `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
 | `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
@@ -89,6 +89,18 @@ connector or credential error rather than mapping it to an HTTP status:
 ```
 
 `404` means the source id itself isn't configured.
+
+### Views
+
+A [view](views.md) answers on every route above, in the same shapes: a per-host
+read is served by whichever member owns that host, and `refresh=true` is
+delegated to that member. `GET .../status` gains a `members` array, and the
+write routes (`POST .../sync`, `DELETE`, host `PUT`/`DELETE`) answer `400` with
+a body naming the members — a view gathers nothing and holds no cache entry.
+
+One read semantic differs, deliberately: on a view, a **named** host that no
+member claims is a `404` rather than an empty result, because the request cannot
+be routed at all. An unmatched `?group=` is still an empty result.
 
 `DELETE /api/v1/sources/{id}` drops the cached entry and reports how many
 hosts went with it. It removes **cached data, not configuration**: a source

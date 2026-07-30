@@ -88,6 +88,50 @@ src-section9:
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path` from here — see [connectors](connectors.md) |
 
+## views.yaml
+
+Read-only composites over several sources: one id that routes a per-host read
+to whichever member owns that host. Views answer on the **source routes**, share
+the source id space (a collision fails startup) and hold no cache entry of their
+own. Full treatment in [views](views.md).
+
+```yaml
+vw-facts-all:
+  name: "Facts, both datacenters"
+  members:                            # ordered: the first claim wins
+    - source: "src-ssh-aa1"           # where the facts come from
+      owns:
+        source: "src-d42"             # inventory the pattern resolves against
+        groups: ["datacenter_aa1"]
+    - source: "src-edge-dc4"          # a remote (federated) member works too
+      owns:
+        source: "src-d42"
+        groups: ["datacenter_dc4"]
+        hosts: ["appliance01.dc4.example"]   # claimed literally as well
+  # ttl_seconds: 30                   # optional; absent = inherit the owner's
+```
+
+| Field | Meaning |
+|---|---|
+| `members` | Ordered list. Overlap resolves by declared order — the first member that claims a host wins it |
+| `members[].source` | Source id this member serves data from; must exist and must not be another view |
+| `members[].owns.source` | Source whose cached dataset the groups below resolve against |
+| `members[].owns.groups` | Groups of that source whose members this member owns |
+| `members[].owns.hosts` | Hosts claimed literally, whether or not the inventory knows them — a host built this morning is exactly the one somebody needs to reach |
+| `ttl_seconds` | The view's own freshness policy, which is also the **gate** for `refresh=true`. Absent = each host inherits its owning member's TTL. A member's per-host/per-group `ttl_overrides` win either way |
+
+Ownership is **declared, not inferred from what a member has cached**: facts
+sources often sync daily on purpose, and some hosts (appliances that take no
+SSH) never enter any cache at all — both are exactly the hosts on-demand refresh
+exists for. See [views → ownership](views.md#ownership-is-declared-not-inferred).
+
+Unlike the other config files, an unknown key inside a view is a hard startup
+error. Ownership is the routing table, and `grups:` instead of `groups:` would
+otherwise parse as an empty pattern, which claims everything.
+
+A view is granted to an API key exactly like a source, by its id under
+`sources:`; the key needs no access to the members.
+
 ## credentials.yaml
 
 Credentials **never contain secrets** — they describe *where* to read them
@@ -226,13 +270,14 @@ key-forms:
   name: "AnsibleForms"
   env: "UNIFIED_API_KEY_FORMS"
   # role defaults to "restricted": only what is listed below
-  sources: ["src-ssh-linux"]       # may list/read/sync these sources
+  sources: ["src-ssh-linux"]       # may list/read/sync these sources (or views)
   endpoints: ["ep-ansible-full"]   # may list/run these endpoints
 ```
 
 A declared key whose env var is missing or empty fails startup (a typo must
 not silently lock a consumer out at request time). Restricted keys referencing
-unknown source/endpoint ids also fail startup. No file and no
+unknown source/endpoint ids also fail startup; a `sources:` entry may name a
+[view](views.md), which grants the view without granting its members. No file and no
 `UNIFIED_API_KEY` = open API (with a loud warning). See
 [API → Authentication](api.md#authentication) for the exact route semantics.
 

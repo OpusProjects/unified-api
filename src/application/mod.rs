@@ -9,3 +9,4 @@ pub mod enrich;
 pub mod projects;
 pub mod refresh;
 pub mod sync;
+pub mod views;

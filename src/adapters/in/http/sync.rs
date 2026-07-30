@@ -51,6 +51,7 @@ pub struct SyncResult {
     ),
     responses(
         (status = 200, description = "Sync result with host/group counts. Always 200 when the request itself was valid: a connector that failed reports success=false with the reason in `error` — including an origin that refused to re-gather under refresh_origin", body = SyncResult),
+        (status = 400, description = "The id names a view — a view gathers nothing, so a sync of it has no meaning; sync the member source instead", body = ErrorBody),
         (status = 403, description = "API key not allowed to sync this source", body = ErrorBody),
         (status = 404, description = "Source not configured", body = ErrorBody)
     )
@@ -63,6 +64,16 @@ pub async fn sync_source(
 ) -> Result<Json<SyncResult>, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+    // A view gathers nothing, so a sync of it has no meaning to invent. The
+    // tempting reading — "sync every member" — would let a request aimed at one
+    // consumer's view re-gather somebody else's datacenter.
+    if let Some(view) = state.views.get(&id) {
+        return Err(crate::adapters::r#in::http::views::write_refused(
+            &id,
+            view,
+            "be synced",
+        ));
     }
     // Not the same 404 as the read routes: this one means the id is absent
     // from sources.yaml, not merely uncached

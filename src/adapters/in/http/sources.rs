@@ -14,6 +14,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::views;
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
@@ -119,6 +120,8 @@ async fn refresh_before_reading(
         id,
         source,
         &hosts,
+        // No view in play: the source's own TTL is the gate
+        None,
     )
     .await)
 }
@@ -154,6 +157,10 @@ fn with_refresh_headers(
 #[derive(Serialize, ToSchema)]
 pub struct CachedSourceInfo {
     pub source_id: String,
+    /// "source" for a cached source, "view" for a read-only composite over
+    /// several of them. A view answers on the same routes in the same shapes,
+    /// so this is the only place the difference shows.
+    pub kind: &'static str,
     pub is_fresh: bool,
     pub age_seconds: u64,
     pub total_hosts: usize,
@@ -195,7 +202,7 @@ impl From<SyncHealth> for SyncHealthInfo {
     path = "/api/v1/sources",
     tag = "Sources",
     responses(
-        (status = 200, description = "List of cached sources with freshness info", body = Vec<CachedSourceInfo>)
+        (status = 200, description = "Cached sources with freshness info, then every configured view (kind: \"view\"). A view is listed whether or not its members have synced — it is a contract to discover, not a cache entry", body = Vec<CachedSourceInfo>)
     )
 )]
 pub async fn list_cached_sources(
@@ -204,13 +211,14 @@ pub async fn list_cached_sources(
 ) -> Json<Vec<CachedSourceInfo>> {
     let keys = state.cache.keys();
 
-    let sources: Vec<CachedSourceInfo> = keys
+    let mut sources: Vec<CachedSourceInfo> = keys
         .iter()
         .filter(|key| auth.permissions.allows_source(key))
         .filter_map(|key| {
             let entry = state.cache.get(key)?;
             Some(CachedSourceInfo {
                 source_id: key.clone(),
+                kind: "source",
                 is_fresh: entry.is_fresh(),
                 age_seconds: entry.age_seconds(),
                 total_hosts: entry.dataset.hostvars.len(),
@@ -218,6 +226,21 @@ pub async fn list_cached_sources(
             })
         })
         .collect();
+
+    // Views are appended sorted by id, and are listed whether or not their
+    // members have synced: a view is a contract to discover, not a cache entry
+    // that appears once there is data.
+    let mut view_ids: Vec<&String> = state
+        .views
+        .keys()
+        .filter(|id| auth.permissions.allows_source(id))
+        .collect();
+    view_ids.sort();
+    sources.extend(
+        view_ids
+            .into_iter()
+            .map(|id| views::info(&state, id, &state.views[id])),
+    );
 
     Json(sources)
 }
@@ -251,7 +274,7 @@ impl DatasetParams {
     // `refresh` is deliberately not part of this: it changes how current the
     // data is, not the shape of the response. A consumer that adds
     // `&refresh=true` to an existing call keeps getting the shape it parses.
-    fn is_plain(&self) -> bool {
+    pub fn is_plain(&self) -> bool {
         self.host.is_none()
             && self.group.is_none()
             && self.limit.is_none()
@@ -280,8 +303,8 @@ const HEADER_REFRESHED_HOSTS: &str = "x-unified-api-refreshed-hosts";
         (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys. With refresh=true the response also carries x-unified-api-refreshed (whether the refresh succeeded), x-unified-api-refreshed-hosts (which hosts were re-gathered) and, on failure, x-unified-api-refresh-error — the data is served either way."),
         (status = 304, description = "If-None-Match matched the current ETag — nothing changed, no body"),
         (status = 400, description = "refresh=true without ?host=: the hosts to refresh must be named", body = ErrorBody),
-        (status = 403, description = "API key not allowed to read this source, or refresh=true on a source without allow_on_demand_refresh", body = ErrorBody),
-        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
+        (status = 403, description = "API key not allowed to read this source, or refresh=true on a source without allow_on_demand_refresh (on a view, on the member that owns the named hosts)", body = ErrorBody),
+        (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404 — except on a view, where a NAMED host that no member claims is a 404, because the request cannot be routed at all", body = ErrorBody)
     )
 )]
 pub async fn get_source_dataset(
@@ -293,6 +316,12 @@ pub async fn get_source_dataset(
 ) -> Result<Response, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+
+    // A view answers here, in the same shapes: the id space is shared and
+    // config validation rejects a collision, so this dispatch is unambiguous.
+    if let Some(view) = state.views.get(&id) {
+        return views::dataset(&state, &id, view, params, headers).await;
     }
 
     // The refresh runs BEFORE the entry is read and before any ETag is
@@ -506,6 +535,9 @@ pub async fn list_source_groups(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
+    if let Some(view) = state.views.get(&id) {
+        return Ok(Json(views::groups(&state, &id, view)));
+    }
     let entry = state
         .cache
         .get(&id)
@@ -563,6 +595,9 @@ pub async fn list_source_hosts(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
+    if let Some(view) = state.views.get(&id) {
+        return Ok(Json(views::hosts(&state, &id, view)));
+    }
     let entry = state
         .cache
         .get(&id)
@@ -606,10 +641,16 @@ pub struct SourceStatus {
     pub total_hosts: usize,
     /// Hosts described in this response
     pub returned: usize,
-    /// Absent until the source has been synced at least once through this process
+    /// Absent until the source has been synced at least once through this
+    /// process, and always absent for a view — a view never syncs, so its
+    /// members carry the health instead
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_health: Option<SyncHealthInfo>,
     pub hosts: Vec<HostStatus>,
+    /// Views only: the state of each member, in declared order. This is where
+    /// "why is this stale" is answerable for a view
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<crate::adapters::r#in::http::views::ViewMemberStatus>>,
 }
 
 #[utoipa::path(
@@ -621,7 +662,7 @@ pub struct SourceStatus {
         StatusParams
     ),
     responses(
-        (status = 200, description = "Cache status per host with TTL info", body = SourceStatus),
+        (status = 200, description = "Cache status per host with TTL info. On a view, each host's age and TTL come from the member that owns it, and `members` reports the state of every member", body = SourceStatus),
         (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
         (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404", body = ErrorBody)
     )
@@ -634,6 +675,9 @@ pub async fn source_status(
 ) -> Result<Json<SourceStatus>, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+    if let Some(view) = state.views.get(&id) {
+        return Ok(Json(views::status(&state, &id, view, params)?));
     }
     let entry = state
         .cache
@@ -688,5 +732,7 @@ pub async fn source_status(
         returned: hosts.len(),
         sync_health,
         hosts,
+        // Sources have no members; only a view fills this in
+        members: None,
     }))
 }

@@ -21,6 +21,7 @@ use crate::domain::dataset::HostVars;
     request_body(content = Object, description = "Host variables as JSON key-value pairs"),
     responses(
         (status = 200, description = "Host added/updated"),
+        (status = 400, description = "The id names a view — a view is read-only and holds no cache entry", body = ErrorBody),
         (status = 404, description = "Source not in cache", body = ErrorBody)
     )
 )]
@@ -32,6 +33,13 @@ pub async fn put_host(
 ) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+    if let Some(view) = state.views.get(&id) {
+        return Err(crate::adapters::r#in::http::views::write_refused(
+            &id,
+            view,
+            "take a host write",
+        ));
     }
     let mut vars = Some(vars);
     let found = state.cache.update(&id, &mut |entry| {
@@ -55,6 +63,7 @@ pub async fn put_host(
     ),
     responses(
         (status = 200, description = "Host removed"),
+        (status = 400, description = "The id names a view — a view is read-only and holds no cache entry", body = ErrorBody),
         (status = 404, description = "Source or host not in cache", body = ErrorBody)
     )
 )]
@@ -65,6 +74,13 @@ pub async fn delete_host(
 ) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
+    }
+    if let Some(view) = state.views.get(&id) {
+        return Err(crate::adapters::r#in::http::views::write_refused(
+            &id,
+            view,
+            "take a host write",
+        ));
     }
     // The "does host exist?" check and deletion happen in the same
     // update() — checking outside with get() would be another race window.

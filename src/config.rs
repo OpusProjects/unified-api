@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -9,6 +9,7 @@ use crate::domain::endpoint::OutputEndpoint;
 use crate::domain::enricher::Enricher;
 use crate::domain::project::GitProject;
 use crate::domain::source::Source;
+use crate::domain::view::View;
 
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -16,6 +17,7 @@ pub struct AppConfig {
     pub projects_config: ProjectsConfig,
     pub credentials: HashMap<String, Credential>,
     pub sources: HashMap<String, Source>,
+    pub views: HashMap<String, View>,
     pub enrichers: HashMap<String, Enricher>,
     pub projects: HashMap<String, GitProject>,
     pub endpoints: HashMap<String, OutputEndpoint>,
@@ -133,7 +135,16 @@ impl AppConfig {
 
         // Enrichers must reference existing sources
         for (id, enricher) in &self.enrichers {
-            if !self.sources.contains_key(&enricher.target_id) {
+            if self.views.contains_key(&enricher.target_id) {
+                // An enricher WRITES into a cache entry, and a view has none:
+                // it composes other sources' entries at read time. Enrich the
+                // member instead and the view serves the result.
+                errors.push(format!(
+                    "Enricher '{}' targets view '{}' — a view has no cache entry to write \
+                     into; target one of its member sources instead",
+                    id, enricher.target_id
+                ));
+            } else if !self.sources.contains_key(&enricher.target_id) {
                 errors.push(format!(
                     "Enricher '{}' references unknown target '{}'",
                     id, enricher.target_id
@@ -158,10 +169,67 @@ impl AppConfig {
         // Endpoints must reference existing sources
         for (id, endpoint) in &self.endpoints {
             for source_id in &endpoint.source_ids {
-                if !self.sources.contains_key(source_id) {
+                if self.views.contains_key(source_id) {
+                    // Worth its own message: an endpoint script is fed whole
+                    // cached datasets on stdin, and a view has no cache entry
+                    // of its own — it composes other sources' entries at read
+                    // time. Listing the members is what the operator wants.
+                    errors.push(format!(
+                        "Endpoint '{}' references view '{}' — output endpoints read cached \
+                         sources, not views; list the view's member sources instead",
+                        id, source_id
+                    ));
+                } else if !self.sources.contains_key(source_id) {
                     errors.push(format!(
                         "Endpoint '{}' references unknown source '{}'",
                         id, source_id
+                    ));
+                }
+            }
+        }
+
+        // Views: a read-only composite over sources. The rules exist because
+        // every one of them turns into empty data or a wrong route at runtime
+        // rather than into a visible failure.
+        for (id, view) in &self.views {
+            // Views are served on the /sources routes, so the two id spaces are
+            // really one. A collision would silently shadow whichever the
+            // handler happens to look up first.
+            if self.sources.contains_key(id) {
+                errors.push(format!(
+                    "View '{}' has the same id as a source — views are served on the \
+                     source routes, so the ids must not collide",
+                    id
+                ));
+            }
+            if view.members.is_empty() {
+                errors.push(format!("View '{}' has no members", id));
+            }
+
+            let mut seen: HashSet<&String> = HashSet::new();
+            for member in &view.members {
+                if self.views.contains_key(&member.source) {
+                    errors.push(format!(
+                        "View '{}' has member '{}' which is another view — views do not nest",
+                        id, member.source
+                    ));
+                } else if !self.sources.contains_key(&member.source) {
+                    errors.push(format!(
+                        "View '{}' references unknown source '{}'",
+                        id, member.source
+                    ));
+                }
+                if !seen.insert(&member.source) {
+                    errors.push(format!(
+                        "View '{}' lists source '{}' twice — the second member could never \
+                         win a host, since the first claim wins",
+                        id, member.source
+                    ));
+                }
+                if !self.sources.contains_key(&member.owns.source) {
+                    errors.push(format!(
+                        "View '{}' member '{}' resolves ownership against unknown source '{}'",
+                        id, member.source, member.owns.source
                     ));
                 }
             }
@@ -262,9 +330,15 @@ impl AppConfig {
         for (id, key) in &self.api_keys {
             if key.role == ApiKeyRole::Restricted {
                 for source_id in &key.sources {
-                    if !self.sources.contains_key(source_id) {
+                    // A view is granted exactly like a source, by its id: it is
+                    // served on the source routes and shares their id space.
+                    // That is what decouples the two — a key granted the view
+                    // needs no access to the members, because the members are
+                    // internal topology and the view is the contract.
+                    if !self.sources.contains_key(source_id) && !self.views.contains_key(source_id)
+                    {
                         errors.push(format!(
-                            "API key '{}' references unknown source '{}'",
+                            "API key '{}' references unknown source or view '{}'",
                             id, source_id
                         ));
                     }
@@ -368,6 +442,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
     // The rest are optional — if they do not exist, empty HashMap
     let credentials = load_optional_yaml(&dir.join("credentials.yaml"))?;
     let sources = load_optional_yaml(&dir.join("sources.yaml"))?;
+    let views = load_optional_yaml(&dir.join("views.yaml"))?;
     let enrichers = load_optional_yaml(&dir.join("enrichers.yaml"))?;
     let projects = load_optional_yaml(&dir.join("projects.yaml"))?;
     let endpoints = load_optional_yaml(&dir.join("endpoints.yaml"))?;
@@ -379,6 +454,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
         projects_config: server_file.projects,
         credentials,
         sources,
+        views,
         enrichers,
         projects,
         endpoints,
@@ -711,6 +787,135 @@ mod tests {
             .expect("expected validation error")
             .to_string();
         assert!(err.contains("src-ghost"), "error was: {}", err);
+    }
+
+    // A directory with one source and one project, so view tests only have to
+    // write views.yaml.
+    fn dir_with_one_source() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-a:\n  name: \"A\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn load_err(dir: &tempfile::TempDir) -> String {
+        load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("expected validation error")
+            .to_string()
+    }
+
+    #[test]
+    fn validate_view_rules() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("views.yaml"),
+            concat!(
+                // id collides with a source, and its member is unknown
+                "src-a:\n  name: \"Collides\"\n  members:\n",
+                "    - source: \"src-ghost\"\n      owns:\n        source: \"src-a\"\n",
+                // lists the same member twice, and owns against an unknown source
+                "vw-dup:\n  name: \"Dup\"\n  members:\n",
+                "    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+                "    - source: \"src-a\"\n      owns:\n        source: \"src-nowhere\"\n",
+                // no members at all
+                "vw-empty:\n  name: \"Empty\"\n  members: []\n",
+            ),
+        )
+        .unwrap();
+
+        let err = load_err(&dir);
+        assert!(err.contains("same id as a source"), "missing rule: {}", err);
+        assert!(err.contains("src-ghost"), "missing rule: {}", err);
+        assert!(err.contains("twice"), "missing rule: {}", err);
+        assert!(err.contains("src-nowhere"), "missing rule: {}", err);
+        assert!(err.contains("has no members"), "missing rule: {}", err);
+    }
+
+    #[test]
+    fn validate_rejects_a_view_as_a_views_member() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("views.yaml"),
+            concat!(
+                "vw-inner:\n  name: \"Inner\"\n  members:\n",
+                "    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+                "vw-outer:\n  name: \"Outer\"\n  members:\n",
+                "    - source: \"vw-inner\"\n      owns:\n        source: \"src-a\"\n",
+            ),
+        )
+        .unwrap();
+
+        assert!(load_err(&dir).contains("views do not nest"));
+    }
+
+    #[test]
+    fn validate_rejects_an_endpoint_or_enricher_pointed_at_a_view() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("views.yaml"),
+            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-a:\n  name: \"E\"\n  source_ids: [\"vw-a\"]\n  script_path: \"t.py\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("enrichers.yaml"),
+            "en-a:\n  name: \"E\"\n  target_id: \"vw-a\"\n  script_path: \"t.py\"\n",
+        )
+        .unwrap();
+
+        let err = load_err(&dir);
+        assert!(err.contains("output endpoints read cached"), "{}", err);
+        assert!(err.contains("no cache entry to write into"), "{}", err);
+    }
+
+    #[test]
+    fn a_restricted_api_key_may_be_granted_a_view_by_its_id() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("views.yaml"),
+            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("api_keys.yaml"),
+            "key-forms:\n  name: \"Forms\"\n  env: \"X\"\n  sources: [\"vw-a\"]\n",
+        )
+        .unwrap();
+
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("a view id is a valid grant");
+        assert_eq!(cfg.views.len(), 1);
+    }
+
+    #[test]
+    fn a_typo_in_an_ownership_pattern_fails_to_load() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("views.yaml"),
+            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        grups: [\"x\"]\n",
+        )
+        .unwrap();
+
+        // Not a validation error but a parse error: an unknown key in the
+        // routing table must never deserialize into "claims everything"
+        assert!(load_err(&dir).contains("grups"));
     }
 
     #[test]

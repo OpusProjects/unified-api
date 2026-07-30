@@ -44,6 +44,7 @@ async fn main() {
 
     info!(
         sources = cfg.sources.len(),
+        views = cfg.views.len(),
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),
         endpoints = cfg.endpoints.len(),
@@ -101,6 +102,7 @@ async fn main() {
 
     let (app, state) = unified_api::AppBuilder::new()
         .sources(cfg.sources)
+        .views(cfg.views)
         .enrichers(cfg.enrichers)
         .endpoints(cfg.endpoints)
         .projects(

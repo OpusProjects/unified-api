@@ -53,6 +53,7 @@ impl Modify for SecurityAddon {
         http::sources::HostStatus,
         http::sources::SourceStatus,
         http::sources::SyncHealthInfo,
+        http::views::ViewMemberStatus,
         http::cache::EvictResult,
         http::sync::SyncResult,
         http::enrichers::EnrichResult,
@@ -63,7 +64,7 @@ impl Modify for SecurityAddon {
     )),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),
-        (name = "Sources", description = "Inventory source management, sync, and cache status"),
+        (name = "Sources", description = "Inventory source management, sync, and cache status. Views — read-only composites over several sources — answer on the same routes, in the same shapes: a per-host read is served by whichever member owns that host. The write routes (sync, eviction, host PUT/DELETE) refuse a view id"),
         (name = "Enrichers", description = "Post-processing enrichment of cached data"),
         (name = "Endpoints", description = "Output endpoints for consumers (AWX, AnsibleForms)"),
         (name = "Projects", description = "Git project checkouts (admin-only operational routes)")

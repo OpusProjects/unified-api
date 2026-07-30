@@ -71,18 +71,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `dataset_is_fresh`: a source that only ever receives scoped syncs now reads
   as not fresh, which is the truth it was hiding before.
 
-### Changed
-
-- **A script enricher no longer copies the whole dataset to read it.**
-  `EnricherPort::execute` took the dataset by reference, and the returned future
-  has to own what it reads, so the adapter had no choice but to deep-copy it —
-  on a facts source that is megabytes of nested maps duplicated on every run, of
-  every enricher, on every interval. The port now takes the `Arc<Dataset>` the
-  cache already holds, so the enricher reads the cached dataset itself and the
-  copy disappears. Same signature as `OutputPort`, which never had the problem.
-
-### Fixed
-
 - **A source that takes its host list from another source no longer loses the
   race at boot.** Every source's first tick fires at once, so a source using
   `hosts_from_source` started syncing before the source it reads had any data.
@@ -122,6 +110,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   in it failed to answer — dropping it would take the retained hosts with it.
   A host upstream has stopped listing is still removed, groups included: it is
   never attempted, so it is never retained.
+
+### Changed
+
+- **A script enricher no longer copies the whole dataset to read it.**
+  `EnricherPort::execute` took the dataset by reference, and the returned future
+  has to own what it reads, so the adapter had no choice but to deep-copy it —
+  on a facts source that is megabytes of nested maps duplicated on every run, of
+  every enricher, on every interval. The port now takes the `Arc<Dataset>` the
+  cache already holds, so the enricher reads the cached dataset itself and the
+  copy disappears. Same signature as `OutputPort`, which never had the problem.
 
 ## [0.10.0] - 2026-07-30
 

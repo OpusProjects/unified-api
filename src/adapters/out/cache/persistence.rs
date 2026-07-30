@@ -39,6 +39,20 @@ struct SnapshotEntry {
     ttl_seconds: u64,
     age_seconds: u64,
     host_ages: HashMap<String, u64>,
+    // Whether a sync of the whole source ever landed in this entry. Restarting
+    // must not launder a hosts-only entry into a complete one — that would put
+    // back exactly the "the whole source looks freshly gathered" claim this
+    // flag exists to deny.
+    //
+    // Defaulted rather than version-bumped: a snapshot written before the field
+    // existed has no way to say otherwise, and `true` is how those entries
+    // already behaved, so old files keep loading unchanged.
+    #[serde(default = "complete_unless_stated")]
+    complete: bool,
+}
+
+fn complete_unless_stated() -> bool {
+    true
 }
 
 const SNAPSHOT_VERSION: u32 = 1;
@@ -64,6 +78,7 @@ pub async fn save(cache: &dyn CachePort, path: &Path) -> Result<usize, String> {
                     ttl_seconds: entry.ttl.as_secs(),
                     age_seconds: entry.age_seconds(),
                     host_ages,
+                    complete: entry.is_complete(),
                     dataset: entry.dataset,
                 },
             )
@@ -120,15 +135,16 @@ pub async fn load(cache: &dyn CachePort, path: &Path) -> Result<usize, String> {
 
     let count = snapshot.entries.len();
     for (key, entry) in snapshot.entries {
-        cache.set(
-            &key,
-            CacheEntry::restore(
-                entry.dataset,
-                entry.ttl_seconds,
-                entry.age_seconds,
-                entry.host_ages,
-            ),
+        let mut restored = CacheEntry::restore(
+            entry.dataset,
+            entry.ttl_seconds,
+            entry.age_seconds,
+            entry.host_ages,
         );
+        if !entry.complete {
+            restored.mark_partial();
+        }
+        cache.set(&key, restored);
     }
 
     Ok(count)
@@ -258,6 +274,53 @@ mod tests {
         // The data survives the restart, but its freshness does not reset
         let entry = restored.get("src-1").unwrap();
         assert!(!entry.is_fresh());
+    }
+
+    // Restarting must not launder a hosts-only entry into a complete one: that
+    // would put back the very "the whole source looks freshly gathered" claim
+    // the flag exists to deny.
+    #[tokio::test]
+    async fn a_partial_entry_is_still_partial_after_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        let cache = MemoryCache::new();
+        let mut entry = CacheEntry::new(dataset(), 3600);
+        entry.mark_partial();
+        cache.set("src-1", entry);
+
+        save(&cache, &path).await.unwrap();
+
+        let restored = MemoryCache::new();
+        load(&restored, &path).await.unwrap();
+
+        let entry = restored.get("src-1").unwrap();
+        assert!(!entry.is_complete());
+        assert!(!entry.is_fresh());
+    }
+
+    // A snapshot written before the field existed has no way to say otherwise,
+    // and `true` is how those entries already behaved.
+    #[tokio::test]
+    async fn a_snapshot_without_the_field_loads_as_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+        tokio::fs::write(
+            &path,
+            br#"{"version": 1, "entries": {"src-1": {
+                "dataset": {"hostvars": {}, "groups": {}, "remove_hosts": []},
+                "ttl_seconds": 3600, "age_seconds": 0, "host_ages": {}
+            }}}"#,
+        )
+        .await
+        .unwrap();
+
+        let cache = MemoryCache::new();
+        load(&cache, &path).await.unwrap();
+
+        let entry = cache.get("src-1").unwrap();
+        assert!(entry.is_complete());
+        assert!(entry.is_fresh());
     }
 
     #[tokio::test]

@@ -393,40 +393,53 @@ fn apply_to_cache(
                 .collect();
 
             if !updates.is_empty() {
+                // The closure runs only when the entry already existed, so it
+                // doubles as "was there anything here before?"
+                let mut occupied = false;
                 cache.merge_or_insert(
                     source_id,
                     dataset,
                     source.ttl_seconds,
                     &mut |entry, _new| {
+                        occupied = true;
                         for (hostname, vars, age) in &updates {
                             entry.update_host_aged(hostname.clone(), vars.clone(), *age);
                         }
                     },
                 );
 
-                // merge_or_insert's closure only runs when the entry already
-                // existed; its insert branch builds a CacheEntry::new, which
-                // stamps every host "now". On a cold central (no scheduled sync
-                // yet, a consumer asking for a host) that would throw away the
-                // origin's ages this whole path exists to preserve, so the
-                // timestamps are corrected in a second atomic pass. Re-stamping
-                // an already-correct entry is idempotent, and this only runs for
-                // connectors that report ages at all.
-                if ages.is_some() {
+                // Nothing was here: merge_or_insert took its insert branch and
+                // built a CacheEntry::new, which gets two things wrong for a
+                // scoped sync. It stamps every host "now" — on a cold central
+                // (no scheduled sync yet, a consumer asking for a host) that
+                // throws away the origin's ages this whole path exists to
+                // preserve. And it presents the dataset as freshly gathered,
+                // though this sync gathered hosts and not the source. Both are
+                // corrected here, in one atomic pass.
+                if !occupied {
                     cache.update(source_id, &mut |entry| {
                         for (hostname, _vars, age) in &updates {
                             if let Some(vars) = entry.dataset.hostvars.get(hostname).cloned() {
                                 entry.update_host_aged(hostname.clone(), vars, *age);
                             }
                         }
+                        entry.mark_partial();
                     });
                 }
             }
         }
         SyncScope::Group(group) => {
+            let mut occupied = false;
             cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {
+                occupied = true;
                 entry.update_group(group, new)
             });
+
+            // Same as the host scope: a group is not the source, so an entry
+            // this sync had to create has no full gather behind it.
+            if !occupied {
+                cache.update(source_id, &mut |entry| entry.mark_partial());
+            }
         }
         SyncScope::Full => match source.sync_mode {
             SyncMode::Replace if unreachable.is_empty() => {
@@ -495,7 +508,12 @@ fn apply_to_cache(
             }
             SyncMode::Merge => {
                 cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {
-                    entry.merge_dataset(new)
+                    entry.merge_dataset(new);
+                    // A full sync landed. It patched rather than replaced, so
+                    // nothing else here would say so — but the source as a whole
+                    // has now been gathered, and an entry that scoped syncs had
+                    // marked partial stops being one.
+                    entry.mark_complete();
                 });
             }
         },
@@ -772,6 +790,123 @@ mod tests {
 
         let entry = cache.get("src").expect("entry");
         assert!(!entry.dataset.groups.contains_key("oracle_version"));
+    }
+
+    // A consumer asking for one host on a cold cache creates the entry. It used
+    // to report age 0 and fresh for the whole source — one host presented as a
+    // freshly gathered datacenter, and a source that has never fully synced
+    // hidden from the gauge meant to catch exactly that.
+    #[test]
+    fn a_host_scoped_sync_on_a_cold_cache_does_not_claim_a_full_dataset() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Hosts(vec!["a.example".to_string()]),
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "web")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert!(!entry.is_complete());
+        assert!(!entry.is_fresh(), "one host is not a gathered source");
+        // The host itself was genuinely gathered, and says so
+        assert!(entry.is_host_fresh("a.example", None));
+    }
+
+    #[test]
+    fn a_group_scoped_sync_on_a_cold_cache_does_not_claim_a_full_dataset() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Group("web".to_string()),
+            ConnectorOutput {
+                dataset: dataset_of_grouped(
+                    vec![host("a.example", "web")],
+                    vec![("web", vec!["a.example"])],
+                ),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        assert!(!cache.get("src").expect("entry").is_fresh());
+    }
+
+    #[test]
+    fn a_host_scoped_sync_leaves_an_existing_full_entry_complete() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(dataset_of(vec![host("a.example", "web")]), 3600),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Hosts(vec!["a.example".to_string()]),
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "db")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        assert!(cache.get("src").expect("entry").is_fresh());
+    }
+
+    // The way out of the partial state: a sync of the whole source.
+    #[test]
+    fn a_later_full_sync_makes_the_entry_complete() {
+        for mode in ["replace", "merge"] {
+            let cache = MemoryCache::new();
+            let source: Source = serde_yaml_ng::from_str(&format!(
+                "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: {}\n",
+                mode
+            ))
+            .expect("source fixture");
+
+            apply_to_cache(
+                &cache,
+                "src",
+                &source,
+                &SyncScope::Hosts(vec!["a.example".to_string()]),
+                ConnectorOutput {
+                    dataset: dataset_of(vec![host("a.example", "web")]),
+                    ages: None,
+                    unreachable: Vec::new(),
+                },
+            );
+            assert!(!cache.get("src").expect("entry").is_fresh(), "{}", mode);
+
+            apply_to_cache(
+                &cache,
+                "src",
+                &source,
+                &SyncScope::Full,
+                ConnectorOutput {
+                    dataset: dataset_of(vec![host("a.example", "web"), host("b.example", "db")]),
+                    ages: None,
+                    unreachable: Vec::new(),
+                },
+            );
+
+            let entry = cache.get("src").expect("entry");
+            assert!(entry.is_complete(), "{} mode left the entry partial", mode);
+            assert!(entry.is_fresh(), "{}", mode);
+        }
     }
 
     #[test]

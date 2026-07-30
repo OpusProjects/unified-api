@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scoped sync no longer reports the whole source as freshly gathered.** A
+  host- or group-scoped sync landing on a cold cache creates the entry — that is
+  what lets a consumer ask a central for one host before any scheduled sync has
+  run. It created it with the dataset-level clock started, so `/status` answered
+  `dataset_age_seconds: 0` and `dataset_is_fresh: true`, and `GET /sources` said
+  the same: a single host presented as a freshly gathered datacenter.
+
+  The damage was to the one signal built to catch this. A source that has never
+  completed a full sync reported `unified_api_source_fresh = 1`, so an alert on
+  that gauge stayed quiet precisely when it had something to say.
+
+  A cache entry now records whether a sync of the *whole* source has ever landed
+  in it. Until one has, the dataset reads as not fresh — the dataset-level TTL
+  measures a full gather, and there is none to measure. The per-host timestamps
+  are untouched: those hosts really were gathered, and still say so. A later
+  full sync clears the state, in either sync mode, and it survives a restart so
+  a snapshot reload cannot launder a hosts-only entry into a complete one.
+
+  Watch for this if you alert on `unified_api_source_fresh`, `is_fresh` or
+  `dataset_is_fresh`: a source that only ever receives scoped syncs now reads
+  as not fresh, which is the truth it was hiding before.
+
 ### Changed
 
 - **A script enricher no longer copies the whole dataset to read it.**

@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A script enricher no longer copies the whole dataset to read it.**
+  `EnricherPort::execute` took the dataset by reference, and the returned future
+  has to own what it reads, so the adapter had no choice but to deep-copy it —
+  on a facts source that is megabytes of nested maps duplicated on every run, of
+  every enricher, on every interval. The port now takes the `Arc<Dataset>` the
+  cache already holds, so the enricher reads the cached dataset itself and the
+  copy disappears. Same signature as `OutputPort`, which never had the problem.
+
 ### Fixed
 
 - **A source that takes its host list from another source no longer loses the

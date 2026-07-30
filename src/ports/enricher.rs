@@ -2,6 +2,7 @@ use crate::domain::dataset::Dataset;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub type EnricherResult = Result<Dataset, EnricherError>;
 
@@ -19,6 +20,12 @@ pub trait EnricherPort: Send + Sync {
         // CLI arguments for the script (empty slice = none)
         args: &[String],
         config: &HashMap<String, String>,
-        current_dataset: &Dataset,
+        // Arc rather than &Dataset: the returned future must own what it reads,
+        // so a borrow left every adapter no choice but to deep-copy the dataset
+        // — on a facts source that is megabytes of HashMaps cloned per run, per
+        // enricher. The cache already holds this behind an Arc (see CacheEntry),
+        // so passing it on is a refcount bump and the copy disappears. Same
+        // reasoning, and the same signature, as OutputPort.
+        current_dataset: Arc<Dataset>,
     ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>>;
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -27,18 +28,19 @@ impl EnricherPort for ProcessEnricher {
         script_path: &str,
         args: &[String],
         config: &HashMap<String, String>,
-        current_dataset: &Dataset,
+        current_dataset: Arc<Dataset>,
     ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>> {
         let script_path = script_path.to_string();
         let args = args.to_vec();
         let config = config.clone();
-        let current_dataset = current_dataset.clone();
+        // No clone of the dataset: the Arc is moved into the async block, which
+        // shares the cache's copy instead of duplicating it
 
         Box::pin(async move {
             // Propagate a serialization failure instead of silently sending the
             // script an empty stdin (which would look like an empty dataset).
             let dataset_json =
-                serde_json::to_string(&current_dataset).map_err(|e| EnricherError {
+                serde_json::to_string(&*current_dataset).map_err(|e| EnricherError {
                     message: format!("Failed to serialize dataset: {}", e),
                 })?;
 

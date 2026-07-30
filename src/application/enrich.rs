@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
@@ -185,7 +186,8 @@ async fn execute_enricher(
             script_path,
             &enricher.script_args,
             &enricher.config,
-            &current_entry.dataset,
+            // An Arc clone: the enricher reads the very dataset the cache holds
+            Arc::clone(&current_entry.dataset),
         ),
     )
     .await
@@ -232,4 +234,125 @@ async fn execute_enricher(
             error: Some(e.message),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::out::cache::memory::MemoryCache;
+    use crate::domain::cache_entry::CacheEntry;
+    use crate::ports::enricher::{EnricherError, EnricherResult};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    // Keeps the dataset it was handed, so a test can prove it is the very one
+    // the cache holds rather than a copy that happens to be equal.
+    #[derive(Default)]
+    struct SpyEnricher {
+        received: Mutex<Option<Arc<Dataset>>>,
+        fail: bool,
+    }
+
+    impl EnricherPort for SpyEnricher {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _config: &HashMap<String, String>,
+            current_dataset: Arc<Dataset>,
+        ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>> {
+            *self.received.lock().expect("spy lock") = Some(Arc::clone(&current_dataset));
+            let fail = self.fail;
+            Box::pin(async move {
+                if fail {
+                    return Err(EnricherError {
+                        message: "spy failure".to_string(),
+                    });
+                }
+                Ok(Dataset {
+                    hostvars: HashMap::new(),
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn dataset() -> Dataset {
+        Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("role".to_string(), serde_json::json!("commander"))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: Vec::new(),
+        }
+    }
+
+    fn script_enricher() -> Enricher {
+        serde_yaml_ng::from_str("name: spy\ntarget_id: src-a\nscript_path: /bin/true\n")
+            .expect("enricher fixture")
+    }
+
+    // The property, not the implementation: whatever the adapter does with it,
+    // the enricher must be handed the cache's own dataset. A deep copy of a
+    // facts source is megabytes per run, per enricher, per interval.
+    #[tokio::test]
+    async fn the_enricher_is_handed_the_dataset_the_cache_holds() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        let cached = cache.get("src-a").expect("entry").dataset;
+
+        let spy = SpyEnricher::default();
+        run_enricher(&cache, &spy, &script_enricher())
+            .await
+            .expect("target is cached, so the enricher runs");
+
+        let received = spy
+            .received
+            .lock()
+            .expect("spy lock")
+            .clone()
+            .expect("the enricher was called");
+
+        assert!(
+            Arc::ptr_eq(&received, &cached),
+            "the enricher was handed a copy of the dataset instead of the cached one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_enricher_reports_the_reason() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+
+        let spy = SpyEnricher {
+            fail: true,
+            ..Default::default()
+        };
+        let outcome = run_enricher(&cache, &spy, &script_enricher())
+            .await
+            .expect("target is cached");
+
+        assert!(!outcome.success());
+        assert_eq!(outcome.error.as_deref(), Some("spy failure"));
+    }
+
+    #[tokio::test]
+    async fn an_uncached_target_does_not_run_the_enricher() {
+        let cache = MemoryCache::new();
+        let spy = SpyEnricher::default();
+
+        assert!(
+            run_enricher(&cache, &spy, &script_enricher())
+                .await
+                .is_none()
+        );
+        assert!(spy.received.lock().expect("spy lock").is_none());
+    }
 }

@@ -6,7 +6,9 @@ use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
-use crate::application::sync::{DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source};
+use crate::application::sync::{
+    DEFAULT_REFRESH_DEPTH, Enrichment, SyncRequest, SyncScope, sync_source,
+};
 use crate::domain::source::Source;
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports::cache::CachePort;
@@ -117,6 +119,9 @@ pub async fn refresh_hosts(
     source: &Source,
     hosts: &[String],
     ttl_override: Option<u64>,
+    // Forwarded to the sync: a refresh rewrites the hosts it gathers, so the
+    // derived keys on those hosts need putting back too
+    enrichment: Option<&Enrichment<'_>>,
 ) -> RefreshOutcome {
     if hosts.is_empty() {
         return RefreshOutcome::default();
@@ -179,6 +184,7 @@ pub async fn refresh_hosts(
             SyncScope::Hosts(still_stale.clone()),
             DEFAULT_REFRESH_DEPTH,
         ),
+        enrichment,
     );
 
     match timeout(coordinator.budget, sync).await {

@@ -22,6 +22,56 @@ pub struct EnrichResult {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct EnricherInfo {
+    pub enricher_id: String,
+    pub name: String,
+    pub target_id: String,
+    /// Present for a declarative merge, absent for a script enricher
+    pub source_id: Option<String>,
+    /// The top-level hostvars keys a declarative merge copies
+    pub fields: Option<Vec<String>>,
+    pub script_path: Option<String>,
+    pub sync_interval_seconds: Option<u64>,
+    /// Whether the target is in the cache. An enricher whose target has never
+    /// synced cannot run, and said so only when you tried it.
+    pub target_ready: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/enrichers",
+    tag = "Enrichers",
+    responses(
+        (status = 200, description = "List configured enrichers", body = Vec<EnricherInfo>)
+    )
+)]
+pub async fn list_enrichers(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+) -> Json<Vec<EnricherInfo>> {
+    // Same rule as running one: an enricher writes into its target, so the
+    // target's permission is the one that governs.
+    let mut enrichers: Vec<EnricherInfo> = state
+        .enrichers
+        .iter()
+        .filter(|(_, enricher)| auth.permissions.allows_source(&enricher.target_id))
+        .map(|(id, enricher)| EnricherInfo {
+            enricher_id: id.clone(),
+            name: enricher.name.clone(),
+            target_id: enricher.target_id.clone(),
+            source_id: enricher.source_id.clone(),
+            fields: enricher.fields.clone(),
+            script_path: enricher.script_path.clone(),
+            sync_interval_seconds: enricher.sync_interval_seconds,
+            target_ready: state.cache.get(&enricher.target_id).is_some(),
+        })
+        .collect();
+
+    enrichers.sort_by(|a, b| a.enricher_id.cmp(&b.enricher_id));
+    Json(enrichers)
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/enrichers/{id}/run",

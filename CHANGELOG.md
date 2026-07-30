@@ -25,6 +25,53 @@ project adheres to [Semantic Versioning](https://semver.org/).
   same. Routes whose body is script-defined (output endpoints) cannot
   paginate at all, which is why the fix had to be in the UI config and not
   only in the query string.
+- **Enrichment no longer loses keys when several enrichers share a target.**
+  A declarative enricher wrote the whole host map back — a clone of everything
+  it had read, plus its own field — and `merge_dataset` replaced the map with
+  it. Each enricher runs in its own task, so two of them on one target raced:
+  both cloned the host, both wrote, and whichever committed last erased the
+  other's key. It only stayed invisible because the intervals were long enough
+  to rarely overlap.
+
+  An enricher now writes only the keys it owns, and those keys are merged into
+  the host rather than replacing it, so the work is additive and the order of
+  two enrichers no longer decides what survives.
+
+- **Enrichment no longer resets how fresh a host looks.** The merge stamped
+  `host_timestamps`, the same timestamps a read consults to decide whether to
+  refresh before answering. Enriching a host therefore made it look freshly
+  gathered and could suppress a refresh the consumer had asked for. Derived
+  data has nothing to say about when a host was last gathered, so it no longer
+  touches those timestamps.
+
+- **A sync no longer leaves its target un-enriched.** Enrichers ran only on
+  their own timer, while a sync replaces what it writes — so every refresh of
+  a target dropped the derived keys until the next enricher tick, up to a full
+  interval later. Consumers saw the keys appear and disappear. `sync_source`
+  now re-applies the enrichers that target the source it just wrote, at the
+  one place every sync in the process passes through, so no caller can forget.
+  The enricher's own interval remains as the backstop for the write paths that
+  do not go through it.
+
+### Added
+
+- **`GET /api/v1/enrichers`** lists the configured enrichers with their
+  target, source, fields and whether the target is in the cache yet. Sources,
+  endpoints and projects could all be listed; enrichers could only be run, so
+  the only way to find out whether one was loaded was to try it.
+
+### Changed
+
+- Enrichers that share a target are applied in a stable order, sorted by id.
+  Additive merging makes concurrent writes safe, not meaningful: if two ever
+  claim the same key on the same host, the winner should be a documented rule
+  rather than whichever task finished first — the same reasoning as a view's
+  member order.
+
+- `sync_source` and `refresh_hosts` take the enrichment dependencies as one
+  optional borrowed parameter. `None` keeps the previous behaviour for a
+  caller with no enrichers configured.
+
 
 ## [0.9.0] - 2026-07-30
 

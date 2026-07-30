@@ -208,6 +208,34 @@ impl CacheEntry {
         Arc::make_mut(&mut self.host_timestamps).insert(hostname, timestamp);
     }
 
+    // Additive merge for derived data: adds or replaces only the keys that
+    // come, leaving every other key on that host untouched.
+    //
+    // Two differences from merge_dataset, both deliberate:
+    //
+    // - it patches keys, not whole hosts, so two enrichers writing different
+    //   keys onto the same host cannot lose each other's work. Each writes
+    //   only what it owns and never carries a snapshot of the rest;
+    // - it does not stamp host_timestamps. Those record when a host was last
+    //   *gathered*, and a read decides whether to refresh from them. Derived
+    //   data has nothing to say about that, and saying it would suppress
+    //   refreshes the consumer asked for.
+    //
+    // Hosts absent from the target are skipped rather than inserted:
+    // enrichment describes hosts, it does not introduce them.
+    pub fn merge_hostvar_fields(&mut self, partial: Dataset) {
+        self.invalidate_serialized();
+        let dataset = Arc::make_mut(&mut self.dataset);
+
+        for (hostname, vars) in partial.hostvars {
+            if let Some(existing) = dataset.hostvars.get_mut(&hostname) {
+                for (key, value) in vars {
+                    existing.insert(key, value);
+                }
+            }
+        }
+    }
+
     // Merge: patches the hosts that come, the rest is left alone.
     // Also processes remove_hosts if they come.
     pub fn merge_dataset(&mut self, partial: Dataset) {
@@ -417,6 +445,111 @@ mod tests {
     fn host_age_returns_none_for_unknown() {
         let entry = CacheEntry::new(dataset_with_hosts(), 3600);
         assert!(entry.host_age_seconds("togusa.section9.net").is_none());
+    }
+
+    // The property that makes several enrichers on one target safe: each
+    // writes only the key it owns, and neither erases the other's.
+    #[test]
+    fn merge_hostvar_fields_keeps_keys_it_was_not_given() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+
+        let from_first = Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [(
+                    "infinibox".to_string(),
+                    serde_json::json!({"volume": "vol-a"}),
+                )]
+                .into_iter()
+                .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        };
+        let from_second = Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("avamar".to_string(), serde_json::json!({"client": "c-1"}))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        };
+
+        entry.merge_hostvar_fields(from_first);
+        entry.merge_hostvar_fields(from_second);
+
+        let vars = &entry.dataset.hostvars["motoko.section9.net"];
+        // both derived keys survived, and so did what the connector gathered
+        assert_eq!(vars["infinibox"]["volume"], "vol-a");
+        assert_eq!(vars["avamar"]["client"], "c-1");
+        assert_eq!(vars["role"], "commander");
+    }
+
+    // Derived data must not testify to when a host was last gathered: those
+    // timestamps decide whether a read refreshes.
+    #[test]
+    fn merge_hostvar_fields_does_not_refresh_host_age() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        // backdate the host so a reset would be unmistakable
+        entry.update_host_aged(
+            "motoko.section9.net".to_string(),
+            [("role".to_string(), serde_json::json!("commander"))]
+                .into_iter()
+                .collect(),
+            900,
+        );
+        let before = entry.host_age_seconds("motoko.section9.net");
+        assert!(before.unwrap_or(0) >= 900);
+
+        entry.merge_hostvar_fields(Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [(
+                    "infinibox".to_string(),
+                    serde_json::json!({"volume": "vol-a"}),
+                )]
+                .into_iter()
+                .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        });
+
+        assert_eq!(before, entry.host_age_seconds("motoko.section9.net"));
+    }
+
+    // Enrichment describes hosts, it does not introduce them.
+    #[test]
+    fn merge_hostvar_fields_ignores_unknown_hosts() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let before = entry.dataset.hostvars.len();
+
+        entry.merge_hostvar_fields(Dataset {
+            hostvars: [(
+                "ghost.section9.net".to_string(),
+                [(
+                    "infinibox".to_string(),
+                    serde_json::json!({"volume": "vol-z"}),
+                )]
+                .into_iter()
+                .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: vec![],
+        });
+
+        assert_eq!(entry.dataset.hostvars.len(), before);
+        assert!(!entry.dataset.hostvars.contains_key("ghost.section9.net"));
     }
 
     #[test]

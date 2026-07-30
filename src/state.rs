@@ -50,6 +50,16 @@ pub struct AppState {
 }
 
 impl AppState {
+    // The enrichment dependencies a sync needs, borrowed from the state that
+    // already owns them. Handlers and the scheduler call this rather than
+    // assembling the struct themselves, so there is one place to change if it
+    // ever needs more.
+    pub fn enrichment(&self) -> crate::application::sync::Enrichment<'_> {
+        crate::application::sync::Enrichment {
+            port: &*self.enricher,
+            enrichers: &self.enrichers,
+        }
+    }
     // Chooses the appropriate connector based on the type declared in the source
     pub fn connector_for(
         &self,

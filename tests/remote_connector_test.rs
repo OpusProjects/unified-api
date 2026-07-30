@@ -225,6 +225,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         "src-madrid",
         &source,
         SyncScope::Full,
+        None,
     )
     .await;
 
@@ -257,6 +258,7 @@ async fn host_scope_only_fetches_the_named_host() {
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+        None,
     )
     .await;
 
@@ -286,6 +288,7 @@ async fn host_scope_keeps_the_origin_age_for_that_host() {
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+        None,
     )
     .await;
     assert!(outcome.success(), "sync failed: {:?}", outcome.error);
@@ -320,6 +323,7 @@ async fn successive_host_scopes_accumulate_in_the_entry() {
             "src-madrid",
             &source,
             SyncScope::Hosts(vec![host.to_string()]),
+            None,
         )
         .await;
         assert!(
@@ -354,6 +358,7 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["ghost.mad.example.com".to_string()]),
+        None,
     )
     .await;
 
@@ -441,6 +446,7 @@ async fn without_refresh_origin_the_edge_does_not_re_gather() {
         "src-central",
         &remote_source(&url),
         SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
+        None,
     )
     .await;
     assert!(outcome.success(), "sync failed: {:?}", outcome.error);
@@ -490,6 +496,7 @@ async fn refresh_origin_makes_the_edge_re_gather_the_host() {
             SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
             DEFAULT_REFRESH_DEPTH,
         ),
+        None,
     )
     .await;
     assert!(outcome.success(), "sync failed: {:?}", outcome.error);
@@ -535,6 +542,7 @@ async fn an_origin_that_cannot_re_gather_fails_the_sync() {
             SyncScope::Hosts(vec!["ghost.section9.net".to_string()]),
             DEFAULT_REFRESH_DEPTH,
         ),
+        None,
     )
     .await;
 
@@ -565,6 +573,7 @@ async fn an_exhausted_hop_budget_still_serves_the_data() {
             SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
             0,
         ),
+        None,
     )
     .await;
 

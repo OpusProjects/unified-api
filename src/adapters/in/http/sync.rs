@@ -104,6 +104,7 @@ pub async fn sync_source(
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)
     let connector = state.connector_for(&source.connector_type);
+    let enrichment = state.enrichment();
     let outcome = application_sync_source(
         &*state.cache,
         &**connector,
@@ -112,6 +113,7 @@ pub async fn sync_source(
         &id,
         source,
         request,
+        Some(&enrichment),
     )
     .await;
 

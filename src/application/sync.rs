@@ -366,7 +366,11 @@ fn apply_to_cache(
     scope: &SyncScope,
     output: ConnectorOutput,
 ) {
-    let ConnectorOutput { dataset, ages } = output;
+    let ConnectorOutput {
+        dataset,
+        ages,
+        unreachable,
+    } = output;
     match scope {
         SyncScope::Hosts(hosts) => {
             // Only the requested hosts the connector actually returned. One
@@ -425,7 +429,7 @@ fn apply_to_cache(
             });
         }
         SyncScope::Full => match source.sync_mode {
-            SyncMode::Replace => {
+            SyncMode::Replace if unreachable.is_empty() => {
                 // A connector that reports how old its data already is (the
                 // remote/federation one) gets an entry with truthful ages;
                 // everything else gathered fresh and starts at age zero.
@@ -440,6 +444,53 @@ fn apply_to_cache(
                 };
                 cache.set(source_id, entry);
             }
+            // Same replace, except the hosts the connector could not reach keep
+            // the data they already had. A gather that fails is our problem, not
+            // evidence the host is gone: one saturated batch of SSH workers used
+            // to take every host in it out of the inventory until the next run,
+            // so a healthy server would come and go on a two-hour cycle.
+            //
+            // Only hosts still offered upstream can be here — one no longer
+            // listed is never attempted, so it is absent from `unreachable` and
+            // is dropped exactly as before. That is what keeps this from
+            // accumulating ghosts.
+            //
+            // They keep their PREVIOUS age rather than being stamped now: a
+            // retained host is as stale as it truly is, so the TTL still expires
+            // it and a refresh still targets it. Stamping it fresh would turn an
+            // intermittent gap into stale data presented as current.
+            SyncMode::Replace => {
+                let ttl = source.ttl_seconds;
+                cache.merge_or_insert(source_id, dataset, ttl, &mut |entry, new| {
+                    let retained: Vec<(String, HostVars, u64)> = unreachable
+                        .iter()
+                        .filter(|host| !new.hostvars.contains_key(*host))
+                        .filter_map(|host| {
+                            let vars = entry.dataset.hostvars.get(host).cloned()?;
+                            let age = entry.host_age_seconds(host).unwrap_or(0);
+                            Some((host.clone(), vars, age))
+                        })
+                        .collect();
+
+                    // The closure replaces the entry wholesale, which is what
+                    // Replace means; merge_or_insert only lends us the previous
+                    // one first so the retained hosts can be read out of it
+                    // under the same lock.
+                    *entry = match &ages {
+                        Some(a) => CacheEntry::restore(
+                            new,
+                            ttl,
+                            a.dataset_age_seconds,
+                            a.host_ages.clone(),
+                        ),
+                        None => CacheEntry::new(new, ttl),
+                    };
+
+                    for (hostname, vars, age) in retained {
+                        entry.update_host_aged(hostname, vars, age);
+                    }
+                });
+            }
             SyncMode::Merge => {
                 cache.merge_or_insert(source_id, dataset, source.ttl_seconds, &mut |entry, new| {
                     entry.merge_dataset(new)
@@ -452,6 +503,124 @@ fn apply_to_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::out::cache::memory::MemoryCache;
+    use crate::domain::dataset::Dataset;
+
+    fn replace_source() -> Source {
+        serde_yaml_ng::from_str(
+            "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: replace\n",
+        )
+        .expect("source fixture")
+    }
+
+    fn host(name: &str, role: &str) -> (String, HostVars) {
+        (
+            name.to_string(),
+            [("role".to_string(), serde_json::json!(role))]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    fn dataset_of(hosts: Vec<(String, HostVars)>) -> Dataset {
+        Dataset {
+            hostvars: hosts.into_iter().collect(),
+            groups: std::collections::HashMap::new(),
+            remove_hosts: Vec::new(),
+        }
+    }
+
+    // A gather that fails is our problem, not evidence the host is gone.
+    #[test]
+    fn replace_keeps_a_host_that_did_not_answer() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(
+                dataset_of(vec![host("a.example", "web"), host("b.example", "db")]),
+                3600,
+            ),
+        );
+
+        // b did not answer this round, so the connector names it
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "web")]),
+                ages: None,
+                unreachable: vec!["b.example".to_string()],
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert_eq!(entry.dataset.hostvars["b.example"]["role"], "db");
+        assert_eq!(entry.dataset.hostvars["a.example"]["role"], "web");
+    }
+
+    // The other half of the distinction: upstream no longer lists the host, so
+    // it was never attempted, is absent from `unreachable`, and still goes.
+    #[test]
+    fn replace_drops_a_host_upstream_stopped_listing() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        cache.set(
+            "src",
+            CacheEntry::new(
+                dataset_of(vec![host("a.example", "web"), host("b.example", "db")]),
+                3600,
+            ),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "web")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert!(!entry.dataset.hostvars.contains_key("b.example"));
+    }
+
+    // A retained host must stay as stale as it truly is: stamping it fresh
+    // would stop the TTL expiring it and stop a refresh ever retrying it.
+    #[test]
+    fn a_retained_host_keeps_its_age() {
+        let cache = MemoryCache::new();
+        let source = replace_source();
+        let mut previous = CacheEntry::new(dataset_of(vec![host("b.example", "db")]), 3600);
+        let (name, vars) = host("b.example", "db");
+        previous.update_host_aged(name, vars, 900);
+        cache.set("src", previous);
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("a.example", "web")]),
+                ages: None,
+                unreachable: vec!["b.example".to_string()],
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert!(
+            entry.host_age_seconds("b.example").unwrap_or(0) >= 900,
+            "a retained host must not be stamped fresh"
+        );
+        assert!(!entry.is_host_fresh("b.example", Some(600)));
+    }
 
     #[test]
     fn a_single_host_keeps_the_old_label() {

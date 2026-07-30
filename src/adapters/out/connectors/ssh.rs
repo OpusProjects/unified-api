@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::source::HostSpec;
-use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
+use crate::ports::connector::{ConnectorError, ConnectorOutput, ConnectorPort, ConnectorResult};
 
 pub struct SshConnector;
 
@@ -264,12 +264,19 @@ impl ConnectorPort for SshConnector {
                 );
             }
 
-            Ok(Dataset {
-                hostvars,
-                groups,
-                remove_hosts: Vec::new(),
-            }
-            .into())
+            Ok(ConnectorOutput {
+                dataset: Dataset {
+                    hostvars,
+                    groups,
+                    remove_hosts: Vec::new(),
+                },
+                ages: None,
+                // Named here so a full sync can keep their last-known data
+                // rather than dropping them for a failure that is ours, not
+                // theirs: one saturated batch of workers took every host in it
+                // out of the inventory until the next run.
+                unreachable: failed,
+            })
         })
     }
 }

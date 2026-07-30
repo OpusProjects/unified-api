@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Interval, MissedTickBehavior, interval};
 use tracing::{error, info, warn};
 
 use crate::AppState;
@@ -15,6 +15,23 @@ use crate::ports::secrets::SecretsPort;
 // The scheduler is another "driving adapter", just like HTTP handlers:
 // it triggers the same use cases from application/, just by time instead
 // of by request. There is no business logic here — only timers and logs.
+
+// Every loop below awaits its work inline, so a run that outlasts its interval
+// leaves ticks behind it. tokio's default (`Burst`) then fires those ticks
+// back-to-back to catch up: a sync that took an hour on a ten-minute interval
+// is followed by five more with no pause between them — hammering, at exactly
+// the moment the thing being synced is already struggling.
+//
+// `Skip` drops the ticks that were missed and resumes on the original schedule,
+// so a slow run costs the runs it displaced and nothing more. `Delay` would
+// also avoid the burst, but it shifts every later tick by the overrun, and a
+// source configured to sync on the hour should stay on the hour.
+fn ticker(interval_seconds: u64) -> Interval {
+    let mut ticker = interval(Duration::from_secs(interval_seconds));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker
+}
+
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
@@ -27,7 +44,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
         let source = source.clone();
 
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(interval_secs));
+            let mut ticker = ticker(interval_secs);
 
             info!(source = %source_id, interval_secs, "Source scheduled");
 
@@ -89,7 +106,7 @@ pub fn start_project_sync_tasks(
         let projects_dir = projects_dir.clone();
 
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(interval_secs));
+            let mut ticker = ticker(interval_secs);
             // The boot sequence already cloned; skip the immediate first tick
             ticker.tick().await;
 
@@ -118,7 +135,7 @@ fn start_enricher_tasks(state: Arc<AppState>) {
         let enricher = enricher.clone();
 
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(interval_secs));
+            let mut ticker = ticker(interval_secs);
 
             info!(
                 enricher = %enricher_id,
@@ -155,5 +172,52 @@ fn start_enricher_tasks(state: Arc<AppState>) {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `start_paused` runs the test on a virtual clock that jumps straight to
+    // the next timer, so a 40-second schedule is exercised in microseconds
+    // rather than making the suite wait for it.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_that_overruns_its_interval_does_not_burst() {
+        let mut ticker = ticker(10);
+        ticker.tick().await; // the first tick always fires immediately
+
+        // The work took three and a half intervals
+        tokio::time::sleep(Duration::from_secs(35)).await;
+
+        // One tick is overdue and fires at once under any behaviour
+        let start = tokio::time::Instant::now();
+        ticker.tick().await;
+        assert_eq!(start.elapsed(), Duration::ZERO);
+
+        // Here is the difference. Burst would fire the ticks missed while the
+        // work ran, one immediately after another; Skip drops them and resumes
+        // on the original schedule, which puts the next tick at t=40 — five
+        // seconds away, not zero (Burst) and not ten (Delay, which would shift
+        // every later tick by the overrun).
+        let start = tokio::time::Instant::now();
+        ticker.tick().await;
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(5),
+            "missed ticks should be skipped and the original schedule resumed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_run_inside_its_interval_keeps_the_schedule() {
+        let mut ticker = ticker(10);
+        ticker.tick().await;
+
+        tokio::time::sleep(Duration::from_secs(4)).await;
+
+        let start = tokio::time::Instant::now();
+        ticker.tick().await;
+        assert_eq!(start.elapsed(), Duration::from_secs(6));
     }
 }

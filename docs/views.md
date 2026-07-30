@@ -248,8 +248,9 @@ can answer "nothing" need different fixes:
 - The view's own `sync_health` is always absent: a view never syncs. The
   members' health is where "why is this stale" is answerable.
 - `dataset_age_seconds` is the **stalest** member's, and `dataset_is_fresh` is
-  true only when every member is cached and inside its TTL. A view is no more
-  current than the least current thing it serves.
+  true only when every member is cached and inside its TTL — a member that has
+  only ever received scoped syncs counts as not fresh, since no full gather has
+  landed in it. A view is no more current than the least current thing it serves.
 
 ---
 

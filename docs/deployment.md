@@ -629,7 +629,18 @@ Background sync tasks start at boot for every source with
 with an interval likewise. A failed run logs the error and waits for the next tick —
 there is no retry/backoff beyond the interval itself. Every script execution is
 bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
-cannot wedge its scheduler task. Shutdown is graceful for
+cannot wedge its scheduler task.
+
+A run that outlasts its own interval **skips** the ticks it missed and resumes on
+the original schedule, rather than firing them back to back to catch up. A sync
+that took an hour on a ten-minute interval therefore costs the runs it displaced
+and nothing more — it does not come back as five immediate syncs against a source
+that is evidently already struggling. The same applies to enricher runs and project
+pulls. A source using `hosts_from_source` additionally waits, once, for the source
+it reads to have data before its first sync (up to five minutes) — see
+[connectors](connectors.md#dynamic-host-lists-hosts_from_source).
+
+Shutdown is graceful for
 in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
 
 ## Observability
@@ -654,7 +665,7 @@ probes — scrapers don't carry the API key):
 | `unified_api_source_cached` | `source` | 1 if the configured source has a cache entry, 0 if it has never synced |
 | `unified_api_source_age_seconds` | `source` | Seconds since the dataset was last fetched |
 | `unified_api_source_ttl_seconds` | `source` | The source's dataset TTL |
-| `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired |
+| `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired — and 0 for a source that has only ever received host- or group-scoped syncs, which have no full gather for the TTL to be measured against |
 | `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
 | `unified_api_source_groups` | `source` | Groups in the cached dataset |
 

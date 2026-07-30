@@ -11,9 +11,23 @@ Each cached source is a `CacheEntry`: the Dataset plus timestamps.
 
 | Level | Tracked how | Fresh when |
 |---|---|---|
-| Dataset | `fetched_at` set on full sync | `age < ttl_seconds` |
-| Host | one timestamp per host, refreshed whenever that host is written (host-scoped sync, merge, enricher, `PUT /hosts`) | `age < effective TTL` |
+| Dataset | `fetched_at`, renewed by every sync of the **whole** source (both sync modes) | `age < ttl_seconds`, **and** a full sync has landed at all |
+| Host | one timestamp per host, renewed whenever that host is **gathered** (full sync, host-scoped sync, `PUT /hosts`) | `age < effective TTL` |
 | Group | derived — a group is as fresh as its member hosts | — |
+
+Two rules behind that table are worth stating outright, because both used to be
+got wrong in ways that were invisible:
+
+- **Only a gather renews a timestamp.** Enrichment derives from data already in
+  the cache, so it does not touch the per-host timestamps of hosts already
+  there — those record when a host was last *collected*, and a read consults
+  them to decide whether to refresh. A host an enricher introduces is stamped,
+  because it becomes known at that moment.
+- **A scoped sync is not a full sync.** A host- or group-scoped sync that has to
+  *create* the entry (a consumer asking a cold central for one host) marks it
+  partial: the hosts it gathered are genuinely fresh, but the dataset level
+  reports not fresh, because there is no full gather for `ttl_seconds` to be
+  measured against. The next full sync clears that state, in either sync mode.
 
 The **effective TTL** for a host is resolved in order: a `ttl_overrides.hosts` entry
 for that hostname → a `ttl_overrides.groups` entry for a group containing it → the
@@ -28,17 +42,31 @@ the status endpoint or trigger a scoped sync.
 
 A **full sync** applies the source's `sync_mode`:
 
-- `replace` (default) — the new dataset swaps in wholesale; all host timestamps reset
+- `replace` (default) — the new dataset swaps in wholesale; all host timestamps reset.
+  The exception is a host the connector **reported as unreachable**: a gather that
+  failed is our problem, not evidence the host is gone, so it keeps its previous
+  vars, its previous age and its group memberships. A host upstream has simply
+  stopped listing is never attempted, never reported unreachable, and so still
+  disappears — which is what tells a decommissioned host from one that did not answer
 - `merge` — incoming `hostvars` patch over existing ones (their timestamps refresh),
   incoming groups replace their counterparts, everything else is untouched
+
+Either mode renews the dataset-level `fetched_at`: both are syncs of the whole
+source, and `merge` preserving hosts upstream dropped is a statement about what the
+entry *contains*, not about when it was gathered.
 
 A **host-scoped sync** (`?host=x`) updates just that host's vars and timestamp.
 A **group-scoped sync** (`?group=y`) updates the vars of the hosts that belong to
 that group, and the group's own vars. In both cases, if the source wasn't cached at
-all yet, the full returned dataset seeds the entry.
+all yet, the full returned dataset seeds the entry — and that entry is marked
+partial, so it reports `dataset_is_fresh: false` until a full sync lands (see the
+freshness model above).
 
-**Enrichers** merge their partial output; their `remove_hosts` deletes hosts from
-`hostvars`, the per-host timestamps, and every group's member list.
+**Enrichers** merge their partial output *without* renewing the per-host timestamps
+of hosts already in the entry — enrichment gathers nothing, and stamping would
+suppress a refresh a consumer asked for. Hosts the enricher introduces are stamped.
+Their `remove_hosts` deletes hosts from `hostvars`, the per-host timestamps, and
+every group's member list.
 
 ## The read path: shared data, serialize-once JSON
 

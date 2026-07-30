@@ -25,7 +25,9 @@ and every one of them sees the same inventory.
 - **Gzip responses**: inventory JSON compresses ~10× for clients sending `Accept-Encoding: gzip`
 - **Enrichers**: post-process cached data on a schedule or on demand
 - **Output endpoints**: turn cached datasets into the format each consumer needs
+- **Federation**: one instance per datacenter doing the local work, one central aggregating them, with the data's real age travelling along
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
+- **On-demand refresh**: a read can bring the hosts it names up to date at the origin, bounded by the source's TTL so consumers cannot outrun the operator's policy
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
 
@@ -42,6 +44,7 @@ and every one of them sees the same inventory.
 | [Configuration](docs/configuration.md) | Every YAML file field by field, environment variables and startup validation |
 | [Connectors](docs/connectors.md) | The script contracts for source connectors, enrichers and output transformers |
 | [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
+| [On-demand refresh](docs/on-demand-refresh.md) | Getting current facts for a named host across a federated mesh, and the limits that keep consumers from overloading a datacenter |
 | [Testing](docs/testing.md) | How to run the suite, what the unit and integration tests cover, and how to add more |
 
 ---

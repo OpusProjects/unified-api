@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-30
+
 ### Added
 
 - `refresh=true` on `GET /sources/{id}/dataset`: bring the requested hosts up to
@@ -63,6 +65,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the source id they were given is local or federated. An origin that cannot
   re-gather fails the sync naming its own error, rather than quietly returning
   older data as a success.
+- `server.readyz_require_all_sources` (default `false`): make `/readyz` turn
+  green only once every configured source has synced. The default stays "ready
+  when at least one source has synced", under which a deployment with ten
+  sources reports ready with nine of them broken — fine when a partial
+  inventory beats none, wrong when a job template would then run against half
+  a datacenter.
+- `server.metrics_require_auth` (default `false`): require an API key on
+  `GET /metrics`. The endpoint is public by default because that is what a
+  Prometheus scrape config expects, but its exposition labels every source id
+  and host count — a description of the inventory topology available to
+  anything that can reach the port. `/healthz` and `/readyz` stay public
+  either way; with no API keys configured the flag has no effect, since
+  authentication is off entirely.
+
+### Changed
+
+- `?host=` on `POST /sources/{id}/sync` accepts a comma-separated list, like
+  every other `?host=` in the API. Previously the whole value was treated as
+  one hostname: `?host=a,b` gathered everything and then cached nothing,
+  because no host is named "a,b". A consumer refreshing the five hosts a form
+  displays now pays for one gather instead of five. Connector scripts receive
+  the list verbatim in `target` and should split it on commas (both sample
+  scripts under `tests/` show the shape); a value that names no host at all
+  falls back to a full sync rather than gathering and discarding.
 
 ### Fixed
 
@@ -83,33 +109,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   six-hour-old facts as fresh — the exact lie federation exists to avoid.
   Host timestamps are now backdated by the age the origin reported
   (`CacheEntry::update_host_aged`), including on the entry's first write.
-
-### Changed
-
-- `?host=` on `POST /sources/{id}/sync` accepts a comma-separated list, like
-  every other `?host=` in the API. Previously the whole value was treated as
-  one hostname: `?host=a,b` gathered everything and then cached nothing,
-  because no host is named "a,b". A consumer refreshing the five hosts a form
-  displays now pays for one gather instead of five. Connector scripts receive
-  the list verbatim in `target` and should split it on commas (both sample
-  scripts under `tests/` show the shape); a value that names no host at all
-  falls back to a full sync rather than gathering and discarding.
-
-### Added
-
-- `server.readyz_require_all_sources` (default `false`): make `/readyz` turn
-  green only once every configured source has synced. The default stays "ready
-  when at least one source has synced", under which a deployment with ten
-  sources reports ready with nine of them broken — fine when a partial
-  inventory beats none, wrong when a job template would then run against half
-  a datacenter.
-- `server.metrics_require_auth` (default `false`): require an API key on
-  `GET /metrics`. The endpoint is public by default because that is what a
-  Prometheus scrape config expects, but its exposition labels every source id
-  and host count — a description of the inventory topology available to
-  anything that can reach the port. `/healthz` and `/readyz` stay public
-  either way; with no API keys configured the flag has no effect, since
-  authentication is off entirely.
 
 ## [0.7.0] - 2026-07-29
 
@@ -527,7 +526,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/OpusProjects/unified-api/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OpusProjects/unified-api/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OpusProjects/unified-api/compare/v0.4.0...v0.5.0

@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-31
+
 ### Fixed
 
 - **A `sync_mode: merge` source no longer ages forever.** A merge sync patches
@@ -801,7 +803,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/OpusProjects/unified-api/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/OpusProjects/unified-api/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...v0.8.0

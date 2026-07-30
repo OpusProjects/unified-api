@@ -192,10 +192,17 @@ impl CacheEntry {
         self.complete = false;
     }
 
-    // A sync of the whole source has landed, so the dataset-level fields mean
-    // something again. Needed on the merge path, which patches the entry in
-    // place instead of replacing it.
-    pub fn mark_complete(&mut self) {
+    // A sync of the WHOLE source has just landed here: it was gathered now, and
+    // it is complete.
+    //
+    // The replace path says both of those by building a fresh CacheEntry. The
+    // merge path patches the entry in place, so nothing else says either — and
+    // until this existed, nothing did: a merge-mode source kept the `fetched_at`
+    // of its very first sync forever. Its age grew without bound and it read as
+    // stale from one TTL after boot, however faithfully it had been syncing
+    // since.
+    pub fn mark_gathered(&mut self) {
+        self.fetched_at = Instant::now();
         self.complete = true;
     }
 
@@ -539,10 +546,41 @@ mod tests {
         let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
         entry.mark_partial();
 
-        entry.mark_complete();
+        entry.mark_gathered();
 
         assert!(entry.is_complete());
         assert!(entry.is_fresh());
+    }
+
+    // The other half: a gather restarts the dataset clock. Without it an entry
+    // that is only ever patched in place ages forever from its first sync.
+    //
+    // The fixture is backdated by seconds rather than hours on purpose: Instant
+    // is monotonic from boot, so subtracting more than the machine's uptime is
+    // not representable and CacheEntry::restore falls back (see its comment).
+    #[test]
+    fn mark_gathered_restarts_the_dataset_clock() {
+        let mut entry = CacheEntry::restore(dataset_with_hosts(), 1, 5, HashMap::new());
+        assert_eq!(entry.age_seconds(), 5);
+        assert!(!entry.is_fresh());
+
+        entry.mark_gathered();
+
+        assert_eq!(entry.age_seconds(), 0);
+        assert!(entry.is_fresh());
+    }
+
+    // Host-level timestamps answer a different question — when was this host
+    // gathered — and the merge that carries the data is what stamps those.
+    #[test]
+    fn mark_gathered_leaves_the_host_timestamps_alone() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let (name, vars) = host_vars("motoko.section9.net", "commander");
+        entry.update_host_aged(name, vars, 900);
+
+        entry.mark_gathered();
+
+        assert!(entry.host_age_seconds("motoko.section9.net").unwrap_or(0) >= 900);
     }
 
     #[test]

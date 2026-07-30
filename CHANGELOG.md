@@ -8,6 +8,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A `sync_mode: merge` source no longer ages forever.** A merge sync patches
+  its cache entry in place instead of replacing it, and nothing renewed the
+  dataset-level timestamp — that is set when the entry is *created* and was
+  never touched again. So a merge-mode source kept the `fetched_at` of its very
+  first sync for the life of the process: `dataset_age_seconds` grew without
+  bound, and `dataset_is_fresh` went false one TTL after boot and stayed false,
+  however faithfully the source had been syncing every interval since.
+
+  An operator alerting on `unified_api_source_fresh` or
+  `unified_api_source_age_seconds` therefore got a permanent alarm for a
+  perfectly healthy source — and a view with a merge-mode member was reported
+  stale for the same reason. A merge sync now restarts the dataset clock, which
+  is the truth: merge preserves hosts upstream has stopped listing, and that is
+  a statement about what the entry *contains*, not about when it was gathered.
+
+  Per-host timestamps are unaffected — they were already being stamped by the
+  merge itself.
+
 - **A script enricher no longer resets how fresh a host looks.** 0.10.0 fixed
   this for the declarative merge, but the script path wrote through
   `merge_dataset` — which exists for data a connector *gathered*, and stamps the

@@ -9,6 +9,7 @@ use crate::application::enrich::run_enricher;
 use crate::application::projects::sync_project;
 use crate::application::sync::{SyncScope, sync_source};
 use crate::domain::project::GitProject;
+use crate::ports::cache::CachePort;
 use crate::ports::git::GitPort;
 use crate::ports::secrets::SecretsPort;
 
@@ -32,6 +33,27 @@ fn ticker(interval_seconds: u64) -> Interval {
     ticker
 }
 
+// How long a source that takes its host list from another source waits for that
+// source to have data before syncing anyway.
+//
+// Bounded rather than indefinite, because a dependency with no schedule of its
+// own may never arrive and a task that waits forever is a task that never says
+// why. When the budget runs out the sync goes ahead and fails exactly as it did
+// before, which puts the reason in `sync_health` where an operator looks for it.
+const DEPENDENCY_WAIT_SECONDS: u64 = 300;
+const DEPENDENCY_POLL_SECONDS: u64 = 1;
+
+// Returns true if the dependency turned up within the budget.
+async fn wait_for_dependency(cache: &dyn CachePort, dependency: &str, budget: Duration) -> bool {
+    tokio::time::timeout(budget, async {
+        while cache.get(dependency).is_none() {
+            tokio::time::sleep(Duration::from_secs(DEPENDENCY_POLL_SECONDS)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
@@ -44,9 +66,31 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
         let source = source.clone();
 
         tokio::spawn(async move {
-            let mut ticker = ticker(interval_secs);
-
             info!(source = %source_id, interval_secs, "Source scheduled");
+
+            // A source that resolves its host list from another source's cache
+            // cannot sync until that source has data. Every source's first tick
+            // fires at once, so at boot this one raced its dependency and lost:
+            // it failed with "not in the cache yet — sync it first" and then
+            // said nothing until its next interval, which on an hourly source
+            // is an hour of a datacenter missing for no reason but start order.
+            //
+            // Waited for here, before the ticker exists, so it applies to the
+            // first sync only. After boot an absent dependency is a real
+            // failure and belongs in sync_health immediately, not behind a wait.
+            if let Some(hosts_from) = &source.hosts_from_source {
+                let budget = Duration::from_secs(DEPENDENCY_WAIT_SECONDS);
+                if !wait_for_dependency(&*state.cache, &hosts_from.source, budget).await {
+                    warn!(
+                        source = %source_id,
+                        dependency = %hosts_from.source,
+                        waited_seconds = DEPENDENCY_WAIT_SECONDS,
+                        "Source providing the host list has not synced — syncing anyway to record why"
+                    );
+                }
+            }
+
+            let mut ticker = ticker(interval_secs);
 
             loop {
                 ticker.tick().await;
@@ -178,6 +222,58 @@ fn start_enricher_tasks(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::out::cache::memory::MemoryCache;
+    use crate::domain::cache_entry::CacheEntry;
+    use crate::domain::dataset::Dataset;
+
+    fn empty_dataset() -> Dataset {
+        Dataset {
+            hostvars: HashMap::new(),
+            groups: HashMap::new(),
+            remove_hosts: Vec::new(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_ends_as_soon_as_the_dependency_has_data() {
+        let cache = Arc::new(MemoryCache::new());
+
+        let writer = Arc::clone(&cache);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            writer.set("src-inventory", CacheEntry::new(empty_dataset(), 60));
+        });
+
+        let start = tokio::time::Instant::now();
+        let arrived = wait_for_dependency(&*cache, "src-inventory", Duration::from_secs(300)).await;
+
+        assert!(arrived);
+        // It returned when the data landed, not when the budget expired
+        assert!(start.elapsed() < Duration::from_secs(30));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dependency_already_in_cache_is_not_waited_for() {
+        let cache = MemoryCache::new();
+        cache.set("src-inventory", CacheEntry::new(empty_dataset(), 60));
+
+        let start = tokio::time::Instant::now();
+        assert!(wait_for_dependency(&cache, "src-inventory", Duration::from_secs(300)).await);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    // Giving up is the point: the sync then runs and records why it failed,
+    // instead of the task waiting forever and never reporting anything.
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_gives_up_so_the_sync_can_report_the_failure() {
+        let cache = MemoryCache::new();
+
+        let start = tokio::time::Instant::now();
+        let arrived = wait_for_dependency(&cache, "src-inventory", Duration::from_secs(300)).await;
+
+        assert!(!arrived);
+        assert!(start.elapsed() >= Duration::from_secs(300));
+    }
 
     // `start_paused` runs the test on a virtual clock that jumps straight to
     // the next timer, so a 40-second schedule is exercised in microseconds

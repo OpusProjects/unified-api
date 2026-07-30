@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Swagger UI no longer freezes on an enterprise-sized response.** Pagination
+  (0.4.0) only ever helped the caller who remembered to ask for it, and it
+  addressed the wrong half of the problem: the server was answering in
+  milliseconds and the browser was dying afterwards. Swagger renders a
+  response through highlight.js, which wraps every token in its own DOM
+  element — a 2000-host dataset is ~10MB of JSON and millions of elements, so
+  the tab locks up. Syntax highlighting is now disabled in the UI config, and
+  the body renders as plain text.
+
+  On top of that, the `limit` parameter of `GET /sources/{id}/dataset` carries
+  an example of `50`, which is what Swagger prefills into the input box — so
+  pressing *Execute* asks for a page instead of a whole datacenter. It is an
+  example, not a server-side default: a client that omits `limit` still gets
+  the raw, unpaginated Dataset, and clearing the field in the UI does the
+  same. Routes whose body is script-defined (output endpoints) cannot
+  paginate at all, which is why the fix had to be in the UI config and not
+  only in the query string.
+
 ## [0.9.0] - 2026-07-30
 
 ### Added

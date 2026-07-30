@@ -171,10 +171,9 @@ cached. `host_count` counts unique members.
 ### Dataset pagination
 
 Without query parameters, `/dataset` returns the **raw Dataset** — the exact
-shape consumers parse, unchanged. But a large inventory (1000 hosts ≈ 8-10MB
-of JSON) will hang a browser UI like Swagger if rendered whole; add any of
-`limit`, `offset`, `host` or `group` and the response becomes a paginated
-envelope instead:
+shape consumers parse, unchanged. That is a lot of JSON for an enterprise
+inventory (1000 hosts ≈ 8-10MB), so add any of `limit`, `offset`, `host` or
+`group` and the response becomes a paginated envelope instead:
 
 ```
 GET /api/v1/sources/src-d42/dataset?limit=50&offset=100

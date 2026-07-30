@@ -256,7 +256,14 @@ pub struct DatasetParams {
     pub host: Option<String>,
     /// Return only the hosts of this group
     pub group: Option<String>,
-    /// Max hosts to return (hosts are sorted by name for stable pages)
+    /// Max hosts to return (hosts are sorted by name for stable pages).
+    /// Omitting it returns every host — Swagger prefills 50 from the example
+    /// below so that clicking Execute doesn't hand the browser a whole
+    /// datacenter; clear the field there to get the raw, unpaginated Dataset.
+    // The example is not a server-side default (that would be a `default`, and
+    // the server has none): it is what Swagger UI puts in the input box, which
+    // is the only place the accidental 10MB request comes from.
+    #[param(example = 50)]
     pub limit: Option<usize>,
     /// How many hosts to skip (use with limit to page)
     pub offset: Option<usize>,

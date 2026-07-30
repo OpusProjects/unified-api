@@ -1282,3 +1282,59 @@ async fn dataset_compresses_when_client_accepts_gzip() {
         Some("gzip")
     );
 }
+
+// =========================================================================
+// Swagger UI on enterprise-sized responses
+// =========================================================================
+
+// highlight.js builds one DOM node per token, so a 2000-host dataset (~10MB
+// of JSON) freezes the browser tab while the server has already answered.
+// The switch lives in the initializer the UI loads, so that is what we assert.
+#[tokio::test]
+async fn swagger_ui_serves_syntax_highlighting_disabled() {
+    let app = app_with_demo_data();
+
+    let (status, body) = get(app, "/swagger-ui/swagger-initializer.js").await;
+
+    assert_eq!(status, StatusCode::OK);
+    // The config is pretty-printed into the file, so compare without spacing.
+    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        compact.contains(r#""syntaxHighlight":{"activated":false}"#),
+        "swagger-initializer.js must turn syntax highlighting off, got: {body}"
+    );
+}
+
+// Swagger prefills a parameter input from its example, so this is what stops
+// a plain Execute from pulling the whole inventory into the browser.
+#[tokio::test]
+async fn dataset_limit_parameter_carries_a_swagger_example() {
+    let app = app_with_demo_data();
+
+    let (status, body) = get(app, "/api-docs/openapi.json").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let spec: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let params = spec["paths"]["/api/v1/sources/{id}/dataset"]["get"]["parameters"]
+        .as_array()
+        .expect("dataset GET must declare parameters");
+    let limit = params
+        .iter()
+        .find(|p| p["name"] == "limit")
+        .expect("limit parameter must be documented");
+
+    // The example may hang off the parameter or its schema depending on how
+    // utoipa renders it; either position is what Swagger UI reads.
+    let example = limit
+        .get("example")
+        .or_else(|| limit["schema"].get("example"))
+        .expect("limit must carry an example so Swagger prefills a small page");
+    assert_eq!(example, &serde_json::json!(50));
+
+    // An example is a suggestion, not a server-side default: a caller that
+    // omits limit still gets every host.
+    assert!(
+        limit.get("default").is_none() && limit["schema"].get("default").is_none(),
+        "limit must not declare a default — the server applies none"
+    );
+}

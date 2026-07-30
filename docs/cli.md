@@ -173,3 +173,22 @@ xdg-open http://localhost:8182/swagger-ui/
 # Fetch the raw spec
 curl localhost:8182/api-docs/openapi.json
 ```
+
+### Large responses in the browser
+
+Two things keep the UI usable against an enterprise inventory, where a single
+dataset is megabytes of JSON:
+
+- **Syntax highlighting is off.** Swagger colours a response by wrapping every
+  token in its own DOM element; on a 2000-host dataset that is millions of
+  elements and the tab locks up long after the server has answered. The body
+  is rendered as plain text instead, which paints. Nothing is truncated, and
+  the `Download` link is unaffected.
+- **`limit` is prefilled with 50** on `GET /sources/{id}/dataset`, so pressing
+  *Execute* out of curiosity asks for a page rather than the whole
+  datacenter. It is an example, not a server-side default: clear the field in
+  the UI (or just omit `limit` from your own client) and you get the raw,
+  unpaginated Dataset as before.
+
+For dumping a whole inventory, use `curl` and redirect to a file — a browser
+is the wrong tool for 10MB of JSON no matter how it is rendered.

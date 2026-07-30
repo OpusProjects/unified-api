@@ -11,7 +11,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::{Level, warn};
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
+use utoipa_swagger_ui::{Config, SwaggerUi};
 
 use crate::AppState;
 use crate::adapters::r#in::http;
@@ -89,7 +89,11 @@ pub fn create_router(
 
     let router = router
         .merge(api_routes)
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(
+            SwaggerUi::new("/swagger-ui")
+                .url("/api-docs/openapi.json", ApiDoc::openapi())
+                .config(swagger_config()),
+        )
         .with_state(state);
 
     // No configured origins = no CORS layer: the browser same-origin policy
@@ -115,6 +119,22 @@ pub fn create_router(
             .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
             .on_response(DefaultOnResponse::new().level(Level::INFO)),
     )
+}
+
+// Swagger UI colours every response with highlight.js, which turns the body
+// into one DOM node per token. An enterprise dataset (2000 hosts is ~10MB of
+// JSON) becomes millions of nodes and the tab stops responding — the server
+// answered in milliseconds and the browser never finishes painting it. With
+// highlighting off the body is a single <pre>: no colours, but it renders.
+//
+// This is a property of the UI, not of the response, so it has to be fixed
+// here: pagination (?limit=) only helps the caller who remembers to ask for
+// it, and routes whose body is script-defined (output endpoints) can't
+// paginate at all.
+fn swagger_config() -> Config<'static> {
+    // Urls are left empty on purpose: the axum adapter fills them in from
+    // SwaggerUi::url(), so the spec URL stays declared in one place above.
+    Config::default().with_syntax_highlight(false)
 }
 
 fn cors_layer(origins: &[String]) -> Option<CorsLayer> {

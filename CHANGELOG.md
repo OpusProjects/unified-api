@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A source that takes its host list from another source no longer loses the
+  race at boot.** Every source's first tick fires at once, so a source using
+  `hosts_from_source` started syncing before the source it reads had any data.
+  It failed with *"not in the cache yet — sync it first"* and then said nothing
+  until its next interval: on an hourly source, an hour of a datacenter missing
+  from the inventory for no reason but startup order.
+
+  Such a source now waits for its dependency to have data before its first
+  sync, up to five minutes. The wait is bounded on purpose — a dependency with
+  no schedule of its own may never arrive, and a task that waits forever is a
+  task that never reports why. When the budget runs out the sync proceeds and
+  fails exactly as before, so the reason still lands in `sync_health`. Only the
+  first sync waits; after boot, an absent dependency is a real failure and
+  belongs in `sync_health` immediately.
+
 - **A slow sync no longer triggers a burst of catch-up syncs.** Each scheduled
   loop awaits its work inline, so a run that outlasts its interval leaves ticks
   behind it — and tokio's default behaviour is to fire those back-to-back until

@@ -111,6 +111,7 @@ async fn refresh_before_reading(
     }
 
     let connector = state.connector_for(&source.connector_type);
+    let enrichment = state.enrichment();
     Ok(refresh_hosts(
         &*state.cache,
         &**connector,
@@ -122,6 +123,7 @@ async fn refresh_before_reading(
         &hosts,
         // No view in play: the source's own TTL is the gate
         None,
+        Some(&enrichment),
     )
     .await)
 }

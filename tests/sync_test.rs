@@ -1243,6 +1243,7 @@ mod hosts_from_source {
             "src-ssh",
             &ssh_source_from("src-origin"),
             SyncScope::Full,
+            None,
         )
         .await;
 
@@ -1277,6 +1278,7 @@ mod hosts_from_source {
             "src-ssh",
             &ssh_source_from("src-missing"),
             SyncScope::Full,
+            None,
         )
         .await;
 

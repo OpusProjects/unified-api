@@ -36,6 +36,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                 info!(source = %source_id, "Syncing");
 
                 let connector = state.connector_for(&source.connector_type);
+                let enrichment = state.enrichment();
                 let outcome = sync_source(
                     &*state.cache,
                     &**connector,
@@ -44,6 +45,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     &source_id,
                     &source,
                     SyncScope::Full,
+                    Some(&enrichment),
                 )
                 .await;
 

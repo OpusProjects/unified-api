@@ -1,15 +1,19 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
 
 use crate::application::credentials::resolve_credentials;
+use crate::application::enrich::run_enrichers_for_target;
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::HostVars;
+use crate::domain::enricher::Enricher;
 use crate::domain::source::Source;
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
 use crate::ports::connector::{ConnectorOutput, ConnectorPort};
+use crate::ports::enricher::EnricherPort;
 use crate::ports::secrets::SecretsPort;
 
 // Scope of a sync: the complete inventory, a named set of hosts, or a group.
@@ -133,6 +137,17 @@ impl SyncOutcome {
 // The caller chooses the connector (ProcessConnector or SshConnector, based on
 // source.connector_type) and passes it already resolved — this way this function only
 // depends on ports, not on AppState.
+// What a sync needs to put enrichment back after it writes.
+//
+// Bundled so sync_source grows by one parameter instead of two, and optional
+// because a deployment with no enrichers configured should not have to build
+// one. Borrowed rather than owned: the caller already holds both in AppState.
+pub struct Enrichment<'a> {
+    pub port: &'a dyn EnricherPort,
+    pub enrichers: &'a HashMap<String, Enricher>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_source(
     cache: &dyn CachePort,
     connector: &dyn ConnectorPort,
@@ -144,6 +159,9 @@ pub async fn sync_source(
     // every existing caller does) and a full SyncRequest, so adding the refresh
     // intent did not have to touch the scheduler or any test
     request: impl Into<SyncRequest>,
+    // None = do not re-apply enrichment (a caller with none configured, or a
+    // test that only cares about the gather)
+    enrichment: Option<&Enrichment<'_>>,
 ) -> SyncOutcome {
     let outcome = run_sync(cache, connector, secrets, source_id, source, request.into()).await;
 
@@ -151,6 +169,24 @@ pub async fn sync_source(
     // handler cannot drift: every sync in the process goes through this
     // function. Until now a failed scheduled sync left nothing behind but a log
     // line, so a stale dataset could not be told apart from a slow one.
+    // A sync replaces what it wrote, so whatever an enricher had added to
+    // those hosts went with it. Re-apply here, at the one place every sync in
+    // the process passes through, so no caller can forget — the same reason
+    // sync health is recorded here and not at the call sites. The enricher's
+    // own interval stays as the backstop for the write paths that do not come
+    // through this function.
+    if let Some(enrichment) = enrichment.filter(|_| outcome.success()) {
+        let applied =
+            run_enrichers_for_target(cache, enrichment.port, enrichment.enrichers, source_id).await;
+        if applied > 0 {
+            tracing::debug!(
+                source = source_id,
+                enrichers = applied,
+                "Re-applied enrichment after sync"
+            );
+        }
+    }
+
     match &outcome.error {
         None => health.record_success(source_id),
         Some(error) => health.record_failure(source_id, error),

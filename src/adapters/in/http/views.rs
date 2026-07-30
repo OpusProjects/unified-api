@@ -373,6 +373,7 @@ async fn refresh_before_reading(
     for (member, member_hosts) in routed {
         let source = member.source.expect("validated above");
         let connector = state.connector_for(&source.connector_type);
+        let enrichment = state.enrichment();
 
         let outcome = refresh_hosts(
             &*state.cache,
@@ -388,6 +389,7 @@ async fn refresh_before_reading(
             // leaves the member's own TTL governing, which is what "inherit"
             // has to mean for the answer to stay predictable.
             view.ttl_seconds,
+            Some(&enrichment),
         )
         .await;
 

@@ -50,6 +50,7 @@ pub fn create_router(
             "/api/v1/sources/{id}/hosts/{hostname}",
             put(http::hosts::put_host).delete(http::hosts::delete_host),
         )
+        .route("/api/v1/enrichers", get(http::enrichers::list_enrichers))
         .route(
             "/api/v1/enrichers/{id}/run",
             post(http::enrichers::run_enricher),

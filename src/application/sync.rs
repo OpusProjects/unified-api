@@ -511,9 +511,13 @@ fn apply_to_cache(
                     entry.merge_dataset(new);
                     // A full sync landed. It patched rather than replaced, so
                     // nothing else here would say so — but the source as a whole
-                    // has now been gathered, and an entry that scoped syncs had
-                    // marked partial stops being one.
-                    entry.mark_complete();
+                    // has now been gathered: the dataset clock restarts, and an
+                    // entry that scoped syncs had marked partial stops being one.
+                    //
+                    // Merge preserves hosts upstream no longer lists, which is
+                    // about what the entry CONTAINS. It says nothing about when
+                    // the gather happened, and the gather happened now.
+                    entry.mark_gathered();
                 });
             }
         },
@@ -790,6 +794,56 @@ mod tests {
 
         let entry = cache.get("src").expect("entry");
         assert!(!entry.dataset.groups.contains_key("oracle_version"));
+    }
+
+    // A merge-mode source patches its entry in place, so nothing renewed the
+    // dataset-level clock: the age grew from the first sync forever and the
+    // source read as stale one TTL after boot, however faithfully it had been
+    // syncing since. An operator alerting on `unified_api_source_fresh` got a
+    // permanent alarm for a perfectly healthy source.
+    //
+    // Backdated by seconds rather than hours because Instant is monotonic from
+    // boot: a CI runner has not been up for two hours.
+    #[test]
+    fn a_merge_sync_renews_the_dataset_clock() {
+        let cache = MemoryCache::new();
+        let source: Source = serde_yaml_ng::from_str(
+            "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 1\nsync_mode: merge\n",
+        )
+        .expect("source fixture");
+
+        cache.set(
+            "src",
+            CacheEntry::restore(
+                dataset_of(vec![host("a.example", "web")]),
+                1,
+                5,
+                std::collections::HashMap::new(),
+            ),
+        );
+        assert!(!cache.get("src").expect("entry").is_fresh());
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("b.example", "db")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        let entry = cache.get("src").expect("entry");
+        assert_eq!(entry.age_seconds(), 0);
+        assert!(
+            entry.is_fresh(),
+            "a merge sync must renew the dataset clock"
+        );
+        // and it merged rather than replaced: both hosts are here
+        assert!(entry.dataset.hostvars.contains_key("a.example"));
+        assert!(entry.dataset.hostvars.contains_key("b.example"));
     }
 
     // A consumer asking for one host on a cold cache creates the entry. It used

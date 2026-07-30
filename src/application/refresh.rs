@@ -100,6 +100,12 @@ impl RefreshOutcome {
 // triggered by opening a page, and the caller who genuinely wants that can
 // POST a full sync. Naming the hosts is what keeps the cost of a read
 // proportional to what the read returns.
+// `ttl_override` replaces the source's DEFAULT TTL for this refresh — what a
+// view passes when it declares a freshness policy of its own. It does not
+// replace the source's per-host and per-group `ttl_overrides`, which keep
+// winning: "an override beats the default" is the rule everywhere else, and a
+// view must not be able to silently cancel the five-minute TTL somebody put on
+// a critical host. None = the source's own TTL governs, as before.
 #[allow(clippy::too_many_arguments)]
 pub async fn refresh_hosts(
     cache: &dyn CachePort,
@@ -110,12 +116,13 @@ pub async fn refresh_hosts(
     source_id: &str,
     source: &Source,
     hosts: &[String],
+    ttl_override: Option<u64>,
 ) -> RefreshOutcome {
     if hosts.is_empty() {
         return RefreshOutcome::default();
     }
 
-    let stale = stale_hosts(cache, source, source_id, hosts);
+    let stale = stale_hosts(cache, source, source_id, hosts, ttl_override);
     if stale.is_empty() {
         record(source_id, "fresh");
         return RefreshOutcome {
@@ -138,7 +145,7 @@ pub async fn refresh_hosts(
     // these very hosts, in which case this request has nothing left to do. This
     // is the half of the coalescing that saves the work — the lock alone would
     // only serialise it.
-    let still_stale = stale_hosts(cache, source, source_id, &stale);
+    let still_stale = stale_hosts(cache, source, source_id, &stale, ttl_override);
     if still_stale.is_empty() {
         debug!(
             source = %source_id,
@@ -225,6 +232,7 @@ fn stale_hosts(
     source: &Source,
     source_id: &str,
     hosts: &[String],
+    ttl_override: Option<u64>,
 ) -> Vec<String> {
     let Some(entry) = cache.get(source_id) else {
         // Nothing cached for this source yet: every named host needs fetching
@@ -232,7 +240,7 @@ fn stale_hosts(
     };
 
     let group_ttls = source.group_ttl_by_host(&entry.dataset);
-    let default_ttl = entry.ttl.as_secs();
+    let default_ttl = ttl_override.unwrap_or(entry.ttl.as_secs());
 
     hosts
         .iter()

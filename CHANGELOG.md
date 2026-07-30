@@ -6,6 +6,79 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-30
+
+### Added
+
+- **Views** (`views.yaml`): a read-only composite that presents several sources
+  as one id, routes a per-host read to whichever member *owns* that host, and
+  delegates an on-demand refresh to that member. It gathers nothing itself.
+
+  Federation solved this at one end and not the other. `connector_type: remote`
+  means a central needs no credentials and no SSH path into a datacenter,
+  because the edge that owns the hosts does the gathering — but the *consumer*
+  still had to know the topology, since the facts of a DC4 host lived under a
+  different source id than those of an aa1 host. Every consumer learned the
+  split and relearned it whenever an edge was added. A view is one address for
+  "the facts".
+
+  It answers on the **source routes**, in the same shapes — `/dataset`,
+  `/status`, `/groups`, `/hosts` — and shares the source id space, so migrating
+  a consumer is a one-word change to an id and its parsing is untouched. Views
+  appear in `GET /sources` with `kind: "view"`.
+
+  **Ownership is declared, not inferred from what a member has cached.** The
+  obvious implementation is wrong in two ways, both found in production: facts
+  sources are often synced daily on purpose (the bulk is a floor, freshness
+  comes from on-demand), so a host provisioned this morning is in no cache
+  until tomorrow; and some hosts — appliances that take no SSH — never enter
+  any cache at all. Both are exactly the hosts on-demand refresh exists for.
+  Declared ownership is also the only rule that works for both member kinds: a
+  `remote` member has no `hosts_from_source` at the central, so there is
+  nothing else to ask about what it owns.
+
+  A host **no** member claims answers `404` naming the fact, never a silent
+  empty result and never a default member — a default member turns a config
+  error into empty data nobody investigates. A host that *is* claimed but whose
+  owner has no data for it routes normally, so a refresh can go and get it.
+
+- `ttl_seconds` on a view: its own freshness policy, which is also the **gate**
+  for `refresh=true` (a read only gathers hosts older than the TTL). Absent =
+  each host inherits its owning member's TTL. A member's per-host and per-group
+  `ttl_overrides` win either way, so a view cannot silently cancel the
+  five-minute TTL somebody put on a critical host.
+
+- `members` on `GET /sources/{view}/status`: per member, whether its data is
+  cached, whether the source its ownership resolves against is cached, its age,
+  TTL, host count and sync health. The second flag is the one that distinguishes
+  "this member has no data" from "the routing table has not loaded", which are
+  the two ways a view answers nothing.
+
+- `kind` on `GET /sources` entries (`"source"` or `"view"`), and
+  `unified_api_view_unclaimed_hosts_total{view}` so a routing gap shows on a
+  dashboard before somebody reports it.
+
+- `docs/views.md`.
+
+### Changed
+
+- Restricted API keys may name a view id under `sources:`. A key granted the
+  view needs **no** access to the members: the view is the contract, the
+  members are internal topology.
+
+- The write routes refuse a view id with `400` and a body naming the members —
+  `POST /sync`, `DELETE /sources/{id}`, and host `PUT`/`DELETE`. A view gathers
+  nothing and holds no cache entry, and the tempting reading of a view sync
+  ("sync every member") would let a request aimed at one consumer's view
+  quietly re-gather somebody else's datacenter. Endpoints and enrichers
+  pointed at a view fail startup for the same reason, with a message that says
+  which members to target instead.
+
+- Unknown keys inside a `views.yaml` entry are a hard startup error, unlike the
+  rest of the config. Ownership is the routing table: `grups:` instead of
+  `groups:` would otherwise parse as an empty pattern, and an empty pattern
+  claims everything.
+
 ## [0.8.0] - 2026-07-30
 
 ### Added
@@ -526,7 +599,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/OpusProjects/unified-api/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/OpusProjects/unified-api/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OpusProjects/unified-api/compare/v0.5.0...v0.6.0

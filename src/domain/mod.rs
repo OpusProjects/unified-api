@@ -9,6 +9,7 @@ pub mod source;
 pub mod static_inventory;
 pub mod sync_health;
 pub mod sync_mode;
+pub mod view;
 
 // Default execution timeout for connector/enricher/output scripts.
 // Shared by the three config types via #[serde(default = "...")].

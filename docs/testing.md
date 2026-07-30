@@ -41,6 +41,11 @@ The integration files:
 | `tests/api_integration_test.rs` | HTTP surface: routes, status codes, auth, endpoints driven over axum |
 | `tests/connector_test.rs` | The process/SSH connector and output adapters against real scripts |
 | `tests/sync_test.rs` | Sync and enrich use cases — scopes, sync modes, TTLs, timeouts |
+| `tests/on_demand_refresh_test.rs` | `?refresh=true`: the TTL gate, coalescing and the load ceiling, counted in real gathers |
+| `tests/views_test.rs` | Views: which member pays for a gather, the unclaimed-host 404, the read-only refusals |
+| `tests/remote_connector_test.rs` | Federation: the remote connector against a stub upstream |
+| `tests/static_inventory_test.rs` | Ansible YAML inventories read from disk |
+| `tests/git_test.rs` | Project checkouts through the git CLI adapter |
 
 Integration tests build a real `AppState` via `AppBuilder`, which defaults to the
 `MockSecrets` adapter, and point sources at the sample scripts under `tests/`

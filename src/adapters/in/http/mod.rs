@@ -13,3 +13,4 @@ pub mod projects;
 pub mod routes;
 pub mod sources;
 pub mod sync;
+pub mod views;

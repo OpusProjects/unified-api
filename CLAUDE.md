@@ -53,11 +53,13 @@ src/
 │   ├── sync_mode.rs          # SyncMode (replace/merge)
 │   ├── static_inventory.rs   # Ansible YAML inventory parsing (native, no process)
 │   ├── project.rs            # GitProject
-│   └── endpoint.rs           # OutputEndpoint
+│   ├── endpoint.rs           # OutputEndpoint
+│   └── view.rs               # View, ViewMember, Ownership (read-only composite)
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
 │   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
 │   ├── enrich.rs             # run_enricher, EnrichOutcome
 │   ├── projects.rs           # sync_project (git checkout up to date)
+│   ├── views.rs              # ViewSnapshot: owner resolution + merged reads
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
 │   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
@@ -73,6 +75,7 @@ src/
 │   │   │   ├── openapi.rs    # utoipa ApiDoc (register new handlers here)
 │   │   │   ├── error.rs      # ApiError / ErrorBody — the JSON shape of every failure
 │   │   │   ├── sources.rs    # Reads: list/dataset/status/groups/hosts
+│   │   │   ├── views.rs      # Same reads for a view id (sources.rs dispatches here)
 │   │   │   ├── cache.rs      # DELETE a source's cache entry (eviction)
 │   │   │   ├── sync.rs       # POST sync
 │   │   │   ├── enrichers.rs  # POST enricher run
@@ -132,6 +135,16 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   "0 seconds old" exactly when a source stops syncing. The recorder is a
   process global installed once via `OnceLock`, so tests building many apps
   share it.
+- **Views:** `views.yaml` declares read-only composites over several sources.
+  A view is served on the SOURCE routes and shares their id space (config
+  validation rejects a collision) — that is what makes migrating a consumer a
+  one-word change. It holds no cache entry: `application::views::snapshot`
+  resolves it from its members on every read, per host, by DECLARED ownership
+  (`owns.groups` resolved against another source's dataset) rather than by
+  which member happens to have the host cached — see `docs/views.md` for why
+  cache-membership routing is wrong. Writes (sync, evict, host PUT/DELETE)
+  refuse a view id. A view's `ttl_seconds` is the on-demand refresh GATE, not a
+  label, which is why `refresh_hosts` takes a `ttl_override`.
 - **Sync health:** every sync goes through `application::sync`, which records
   last attempt / last success / last error / consecutive failures into the
   `SyncHealthRegistry` on `AppState`. `GET /sources` and `/status` expose it as

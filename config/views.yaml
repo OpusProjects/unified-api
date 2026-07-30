@@ -1,0 +1,68 @@
+# Views: read-only composites over several sources.
+#
+# A view presents its members as ONE id, routes a per-host read to whichever
+# member OWNS that host, and delegates an on-demand refresh to that member. It
+# gathers nothing itself, so it has no connector, no schedule and no sync.
+#
+# It answers on the SOURCE routes — /api/v1/sources/{id}/dataset, /status,
+# /groups, /hosts — in the same shapes, which is what makes migrating a consumer
+# a one-word change to an id. The write routes (POST /sync, DELETE, host
+# PUT/DELETE) refuse a view id and say why.
+#
+# Why it exists: federation (connector_type: remote) means a central needs no
+# credentials into a datacenter, because the edge that owns the hosts does the
+# gathering. But the CONSUMER still had to know the topology, since the facts of
+# a DC4 host lived under a different source id than those of an aa1 host — and
+# every new edge made every consumer relearn the split.
+#
+# vw-facts-all:
+#   name: "Facts, both datacenters"
+#
+#   # Order matters: the FIRST member that claims a host wins it. Overlap is
+#   # normal (a multi-homed host legitimately sits in two datacenter groups) and
+#   # needs a rule that is stable rather than clever.
+#   members:
+#     - source: "src-ssh-aa1"           # where the facts come from
+#       owns:
+#         source: "src-d42"             # inventory the pattern resolves against
+#         groups: ["datacenter_aa1"]    # this member owns those groups' members
+#     - source: "src-edge-dc4"          # a remote (federated) member works too
+#       owns:
+#         source: "src-d42"
+#         groups: ["datacenter_dc4"]
+#         # hosts: ["appliance01.dc4.example"]   # claimed literally, whether or
+#         #                                      # not the inventory knows them
+#
+#   # Optional. Absent = each host inherits its owning member's TTL, so the
+#   # member keeps governing. Set it and the view has a freshness policy of its
+#   # own — which is also the GATE for on-demand refresh, since a read only
+#   # gathers hosts older than the TTL. Two doors onto the same data with
+#   # different refresh rules is fine as a deliberate consumer-facing policy;
+#   # what it must never be is an accident.
+#   #
+#   # A member's per-host and per-group ttl_overrides still win over this: an
+#   # override beats the default, here as everywhere else.
+#   # ttl_seconds: 30
+#
+# Ownership is DECLARED, not inferred from what a member happens to have cached.
+# Two reasons, both found the hard way:
+#
+#   - Facts sources are often synced daily on purpose (the bulk is a floor,
+#     freshness comes from on-demand), so a host provisioned this morning is in
+#     no cache until tomorrow — which is exactly the case on-demand refresh
+#     exists for. Routing by cache membership would refuse to route it.
+#   - Some hosts never enter a cache at all (appliances that take no SSH). They
+#     are permanently the edge's responsibility and permanently absent from its
+#     data.
+#
+# It also happens to be the only rule that works for both member kinds: a
+# `remote` member has no hosts_from_source at the central, so there is nothing
+# else to ask about who it owns.
+#
+# A host that NO member claims is a 404 naming the fact, never a silent empty
+# result: no default member, because that turns a config error into empty data
+# nobody investigates.
+#
+# API keys grant a view exactly like a source, by its id under `sources:` in
+# api_keys.yaml. A key granted the view needs no access to the members — the
+# view is the contract, the members are internal topology.

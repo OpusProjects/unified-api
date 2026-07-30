@@ -57,6 +57,16 @@ pub struct CacheEntry {
     // on every read, and cloning one String per host on a large source is
     // real allocation work the read path doesn't need.
     pub host_timestamps: Arc<HashMap<String, Instant>>,
+    // Whether this entry has ever come from a sync of the WHOLE source, as
+    // opposed to one scoped to individual hosts or a group.
+    //
+    // The dataset-level fields answer "how old is the full inventory", and a
+    // scoped sync has no answer to give: it gathered the hosts it was asked
+    // for, not the source. An entry created by one used to report age 0 and
+    // fresh — telling a consumer the whole datacenter had just been collected
+    // when a single host had, and hiding a source that has never fully synced
+    // from the very gauge meant to catch it.
+    complete: bool,
     // Lazily-built JSON of the dataset, shared through the Arc<OnceLock> by
     // every clone of this entry: the first reader serializes, later readers
     // (and clones taken before a mutation) reuse the same bytes. OnceLock is
@@ -86,6 +96,8 @@ impl CacheEntry {
             fetched_at: now,
             ttl: Duration::from_secs(ttl_seconds),
             host_timestamps: Arc::new(host_timestamps),
+            // A full gather is the default; the scoped sync paths say otherwise
+            complete: true,
             serialized: Arc::new(OnceLock::new()),
         }
     }
@@ -125,6 +137,7 @@ impl CacheEntry {
             fetched_at,
             ttl,
             host_timestamps: Arc::new(host_timestamps),
+            complete: true,
             serialized: Arc::new(OnceLock::new()),
         }
     }
@@ -160,9 +173,30 @@ impl CacheEntry {
         self.serialized = Arc::new(OnceLock::new());
     }
 
-    // Is the complete dataset fresh?
+    // Is the complete dataset fresh? An entry that has only ever been filled by
+    // scoped syncs is never fresh at dataset level, whatever its clock says —
+    // there is no full gather for the TTL to be measured against.
     pub fn is_fresh(&self) -> bool {
-        self.fetched_at.elapsed() < self.ttl
+        self.complete && self.fetched_at.elapsed() < self.ttl
+    }
+
+    // Whether a sync of the whole source has ever landed here.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    // Record that this entry holds hosts rather than a source: it exists
+    // because a host- or group-scoped sync created it (a consumer asking for
+    // one host on a cold cache), not because anything gathered the whole thing.
+    pub fn mark_partial(&mut self) {
+        self.complete = false;
+    }
+
+    // A sync of the whole source has landed, so the dataset-level fields mean
+    // something again. Needed on the merge path, which patches the entry in
+    // place instead of replacing it.
+    pub fn mark_complete(&mut self) {
+        self.complete = true;
     }
 
     // Age of the complete dataset in seconds
@@ -446,6 +480,37 @@ mod tests {
 
         assert_eq!(entry.host_age_seconds("motoko.section9.net"), Some(300));
         assert_eq!(entry.host_age_seconds("batou.section9.net"), Some(0));
+    }
+
+    #[test]
+    fn a_new_entry_is_a_complete_one() {
+        let entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        assert!(entry.is_complete());
+        assert!(entry.is_fresh());
+    }
+
+    // The dataset-level TTL measures a full gather, and a partial entry has
+    // none to measure — so no clock makes it fresh.
+    #[test]
+    fn a_partial_entry_is_never_fresh_however_new() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        entry.mark_partial();
+
+        assert!(!entry.is_complete());
+        assert!(!entry.is_fresh());
+        // Its hosts are another matter: those really were gathered
+        assert!(entry.is_host_fresh("motoko.section9.net", None));
+    }
+
+    #[test]
+    fn a_full_sync_makes_a_partial_entry_complete_again() {
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        entry.mark_partial();
+
+        entry.mark_complete();
+
+        assert!(entry.is_complete());
+        assert!(entry.is_fresh());
     }
 
     #[test]

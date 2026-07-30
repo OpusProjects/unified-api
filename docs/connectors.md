@@ -167,11 +167,14 @@ Semantics:
 - `match_pattern` selects the **union** of the listed groups' members and the
   individually listed hosts; names match exactly. A group or host that doesn't
   exist in the origin dataset logs a warning naming it.
-- The list is resolved against the **cache** at each sync. If the origin
-  source hasn't synced yet, the SSH sync fails with a clear error and recovers
-  on the next tick once the origin is cached (with disk persistence this only
-  happens on the very first boot). `hosts_from_source` and `config.hosts` are
-  mutually exclusive (startup validation).
+- The list is resolved against the **cache** at each sync. At startup this source
+  waits for the origin to have data before its first sync — up to five minutes —
+  rather than racing it and failing, since every source's first tick fires at
+  once. If the origin still has not synced by then, the sync runs and fails with
+  a clear error (which lands in `sync_health`), and recovers on the next tick
+  once the origin is cached. Only the first sync waits: after startup an absent
+  origin is a real failure and is reported immediately. `hosts_from_source` and
+  `config.hosts` are mutually exclusive (startup validation).
 - `connect_via` picks the address to dial per host: `hostname` (default, the
   inventory name via DNS), `ansible_host` (the variable; hosts without it are
   skipped with a warning), or the fallback combos `ansible_host_then_hostname`
@@ -298,12 +301,25 @@ stdin** as JSON.
 
 **Output:** a *partial* Dataset on stdout — only what changed:
 
-- `hostvars` entries are merged over the existing ones (per-host timestamps refresh)
+- `hostvars` entries are merged over the existing ones
 - `groups` entries replace their counterparts
 - `remove_hosts` lists hostnames to delete (they're also pulled out of groups)
 
+**Enrichment does not make a host look freshly gathered.** The per-host timestamps
+record when a host was last *collected*, and a read consults them to decide whether
+to refresh before answering — so a host already in the entry keeps the age it had.
+A host the enricher *introduces* is stamped, because that is when it became known.
+Returning a host is therefore not a way to suppress a refresh, and enriching a stale
+host leaves it stale.
+
 The merge into the cache is atomic; concurrent writes that land while the enricher
 script is running are not lost (the enricher only overwrites hosts it returns).
+
+> **Return the host's full variable map, not only your own keys.** A script
+> enricher's `hostvars` entry *replaces* the host's map rather than patching it key
+> by key, so any key you omit is dropped. The dataset arrives on stdin precisely so
+> you can carry the rest through. (A *declarative* enricher — `source_id` +
+> `fields` — has no such constraint: it writes only the fields it owns.)
 
 ## Output endpoints
 

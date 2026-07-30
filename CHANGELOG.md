@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A slow sync no longer triggers a burst of catch-up syncs.** Each scheduled
+  loop awaits its work inline, so a run that outlasts its interval leaves ticks
+  behind it — and tokio's default behaviour is to fire those back-to-back until
+  the schedule has caught up. A sync that took an hour on a ten-minute interval
+  was followed by five more with no pause between them, hammering the source at
+  exactly the moment it was already struggling. Missed ticks are now skipped and
+  the original schedule resumes, so a slow run costs the runs it displaced and
+  nothing more. Applies to source syncs, enricher runs and project pulls alike.
+
 - **A host that fails to answer keeps its groups, not just its variables.**
   0.10.0 stopped a `replace` sync from deleting hosts the connector could not
   reach, but it put back only their hostvars. Group membership is derived from

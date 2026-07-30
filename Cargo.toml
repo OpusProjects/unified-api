@@ -37,6 +37,10 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # [dev-dependencies] = compiled only for tests, never shipped in the production binary
 [dev-dependencies]
+# test-util adds virtual time (tokio::time::pause): the scheduler's tick
+# behaviour is a property of a 40-second schedule, and this exercises it in
+# microseconds instead of making the suite wait
+tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 tower = "0.5"            # to call the app as a service (no TCP)
 http-body-util = "0.1"   # to read the body of responses

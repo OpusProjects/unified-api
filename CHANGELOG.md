@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-30
+
 ### Fixed
 
 - **Swagger UI no longer freezes on an enterprise-sized response.** Pagination
@@ -53,25 +55,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   The enricher's own interval remains as the backstop for the write paths that
   do not go through it.
 
-### Added
-
-- **`GET /api/v1/enrichers`** lists the configured enrichers with their
-  target, source, fields and whether the target is in the cache yet. Sources,
-  endpoints and projects could all be listed; enrichers could only be run, so
-  the only way to find out whether one was loaded was to try it.
-
-### Changed
-
-- Enrichers that share a target are applied in a stable order, sorted by id.
-  Additive merging makes concurrent writes safe, not meaningful: if two ever
-  claim the same key on the same host, the winner should be a documented rule
-  rather than whichever task finished first — the same reasoning as a view's
-  member order.
-
-- `sync_source` and `refresh_hosts` take the enrichment dependencies as one
-  optional borrowed parameter. `None` keeps the previous behaviour for a
-  caller with no enrichers configured.
-
 - **A host that fails to answer is no longer dropped from the inventory.** The
   SSH connector gathers through a bounded worker pool, and a host that misses
   its connect timeout was simply absent from the dataset it returned. A full
@@ -90,6 +73,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the age they already had rather than being stamped fresh, so the TTL still
   expires them and a refresh still targets them: the data is last-known-good
   and says so, instead of looking current.
+
+### Added
+
+- **`GET /api/v1/enrichers`** lists the configured enrichers with their
+  target, source, fields and whether the target is in the cache yet. Sources,
+  endpoints and projects could all be listed; enrichers could only be run, so
+  the only way to find out whether one was loaded was to try it.
+
+### Changed
+
+- Enrichers that share a target are applied in a stable order, sorted by id.
+  Additive merging makes concurrent writes safe, not meaningful: if two ever
+  claim the same key on the same host, the winner should be a documented rule
+  rather than whichever task finished first — the same reasoning as a view's
+  member order.
+
+- `sync_source` and `refresh_hosts` take the enrichment dependencies as one
+  optional borrowed parameter. `None` keeps the previous behaviour for a
+  caller with no enrichers configured.
 
 ## [0.9.0] - 2026-07-30
 
@@ -685,6 +687,7 @@ First tagged release.
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
 [Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...HEAD
+[0.10.0]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/OpusProjects/unified-api/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/OpusProjects/unified-api/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/OpusProjects/unified-api/compare/v0.6.0...v0.7.0

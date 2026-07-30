@@ -16,6 +16,11 @@ pub type ConnectorResult = Result<ConnectorOutput, ConnectorError>;
 pub struct ConnectorOutput {
     pub dataset: Dataset,
     pub ages: Option<DatasetAges>,
+    // Hosts the connector was asked to gather and could not reach. Distinct
+    // from "absent from the dataset": a host that upstream no longer lists is
+    // never attempted and never appears here, so a full sync can tell a
+    // decommissioned host from one that simply did not answer.
+    pub unreachable: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -30,6 +35,7 @@ impl From<Dataset> for ConnectorOutput {
         Self {
             dataset,
             ages: None,
+            unreachable: Vec::new(),
         }
     }
 }

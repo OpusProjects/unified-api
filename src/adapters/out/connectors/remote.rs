@@ -164,7 +164,14 @@ impl ConnectorPort for RemoteConnector {
                 "Remote dataset fetched"
             );
 
-            Ok(ConnectorOutput { dataset, ages })
+            Ok(ConnectorOutput {
+                dataset,
+                ages,
+                // The edge reports what it gathered; a host it could not reach
+                // is already absent from the dataset it federates to us, and we
+                // have no way to tell which from here.
+                unreachable: Vec::new(),
+            })
         })
     }
 }

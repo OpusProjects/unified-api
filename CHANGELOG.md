@@ -72,6 +72,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
   optional borrowed parameter. `None` keeps the previous behaviour for a
   caller with no enrichers configured.
 
+- **A host that fails to answer is no longer dropped from the inventory.** The
+  SSH connector gathers through a bounded worker pool, and a host that misses
+  its connect timeout was simply absent from the dataset it returned. A full
+  sync in `replace` mode then swapped the entry wholesale, so one saturated
+  batch of workers took every host in it out of the inventory until the next
+  run — a healthy server would come and go on the sync interval, and consumers
+  saw it disappear for no reason of its own.
+
+  The connector already knew which hosts had failed; it named them in its
+  summary log and then discarded the list. It now reports them, and a replace
+  keeps their previous data instead of deleting it.
+
+  A host that upstream has stopped listing is never attempted, so it never
+  appears in that list and is still removed — which is what tells a
+  decommissioned host from one that merely did not answer. Retained hosts keep
+  the age they already had rather than being stamped fresh, so the TTL still
+  expires them and a refresh still targets them: the data is last-known-good
+  and says so, instead of looking current.
 
 ## [0.9.0] - 2026-07-30
 

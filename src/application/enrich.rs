@@ -216,7 +216,10 @@ async fn execute_enricher(
             let mut partial = Some(partial_dataset);
             cache.update(&enricher.target_id, &mut |entry| {
                 if let Some(p) = partial.take() {
-                    entry.merge_dataset(p);
+                    // Not merge_dataset: that one is for data a connector
+                    // gathered, and stamps the hosts it carries as collected
+                    // now. An enricher gathers nothing.
+                    entry.merge_enrichment(p);
                 }
             });
 
@@ -252,6 +255,7 @@ mod tests {
     struct SpyEnricher {
         received: Mutex<Option<Arc<Dataset>>>,
         fail: bool,
+        returns: Option<Dataset>,
     }
 
     impl EnricherPort for SpyEnricher {
@@ -264,17 +268,18 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = EnricherResult> + Send + '_>> {
             *self.received.lock().expect("spy lock") = Some(Arc::clone(&current_dataset));
             let fail = self.fail;
+            let returns = self.returns.clone();
             Box::pin(async move {
                 if fail {
                     return Err(EnricherError {
                         message: "spy failure".to_string(),
                     });
                 }
-                Ok(Dataset {
+                Ok(returns.unwrap_or(Dataset {
                     hostvars: HashMap::new(),
                     groups: HashMap::new(),
                     remove_hosts: Vec::new(),
-                })
+                }))
             })
         }
     }
@@ -324,6 +329,61 @@ mod tests {
             Arc::ptr_eq(&received, &cached),
             "the enricher was handed a copy of the dataset instead of the cached one"
         );
+    }
+
+    // The bug, end to end: enriching a host made it look freshly gathered, so
+    // the on-demand refresh a consumer asked for found nothing stale and did
+    // nothing. 0.10.0 fixed this for declarative enrichers only.
+    #[tokio::test]
+    async fn a_script_enricher_does_not_reset_how_fresh_a_host_looks() {
+        let cache = MemoryCache::new();
+        let mut entry = CacheEntry::new(dataset(), 3600);
+        entry.update_host_aged(
+            "motoko.section9.net".to_string(),
+            [("role".to_string(), serde_json::json!("commander"))]
+                .into_iter()
+                .collect(),
+            900,
+        );
+        cache.set("src-a", entry);
+
+        let spy = SpyEnricher {
+            returns: Some(Dataset {
+                hostvars: [(
+                    "motoko.section9.net".to_string(),
+                    [
+                        ("role".to_string(), serde_json::json!("commander")),
+                        ("infinibox".to_string(), serde_json::json!("vol-a")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )]
+                .into_iter()
+                .collect(),
+                groups: HashMap::new(),
+                remove_hosts: Vec::new(),
+            }),
+            ..Default::default()
+        };
+
+        let outcome = run_enricher(&cache, &spy, &script_enricher())
+            .await
+            .expect("target is cached");
+        assert!(outcome.success());
+
+        let entry = cache.get("src-a").expect("entry");
+        // The derived key landed...
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["infinibox"],
+            "vol-a"
+        );
+        // ...without the host claiming to have just been gathered, so a read
+        // that asked for a refresh still gets one
+        assert!(
+            entry.host_age_seconds("motoko.section9.net").unwrap_or(0) >= 900,
+            "enrichment reset the host's gathered-at timestamp"
+        );
+        assert!(!entry.is_host_fresh("motoko.section9.net", Some(600)));
     }
 
     #[tokio::test]

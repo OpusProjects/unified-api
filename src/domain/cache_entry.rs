@@ -18,6 +18,24 @@ pub struct SerializedJson {
     pub etag: String,
 }
 
+// Everything the cache knows about one host, captured so it can be put back
+// after a replace that could not reach it: its variables, how old they truly
+// are, and the groups it belongs to.
+//
+// Group membership is part of a host's state, not decoration around it. A
+// connector derives its groups from the hosts it managed to gather, so keeping
+// a host's variables but not its memberships leaves it in the dataset and in
+// no group at all — invisible to every consumer that renders an inventory from
+// `groups`, which is precisely the disappearance the retention exists to
+// prevent.
+#[derive(Debug)]
+pub struct RetainedHost {
+    hostname: String,
+    vars: HostVars,
+    age_seconds: u64,
+    groups: Vec<String>,
+}
+
 // CacheEntry wraps a Dataset with cache metadata at three levels:
 // - dataset level: when was the last full sync performed
 // - host level: when was each individual host refreshed
@@ -208,6 +226,53 @@ impl CacheEntry {
         Arc::make_mut(&mut self.host_timestamps).insert(hostname, timestamp);
     }
 
+    // Capture a host's complete state before an operation that would drop it.
+    // Returns None when the host is not in this entry — there is nothing to keep.
+    pub fn capture_host(&self, hostname: &str) -> Option<RetainedHost> {
+        let vars = self.dataset.hostvars.get(hostname)?.clone();
+
+        let groups = self
+            .dataset
+            .groups
+            .iter()
+            .filter(|(_, group)| group.hosts.iter().any(|host| host == hostname))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        Some(RetainedHost {
+            hostname: hostname.to_string(),
+            vars,
+            // A host with no timestamp is one nothing ever stamped; treating it
+            // as gathered "now" would be the one direction that lies in the
+            // host's favour, so it counts as brand new only when it truly is.
+            age_seconds: self.host_age_seconds(hostname).unwrap_or(0),
+            groups,
+        })
+    }
+
+    // Put a captured host back: its variables and true age, then every group it
+    // belonged to. A group the new dataset no longer carries is recreated,
+    // because a group that vanished did so exactly when every host in it failed
+    // to answer — dropping it would take the retained hosts with it.
+    pub fn restore_host(&mut self, retained: RetainedHost) {
+        let RetainedHost {
+            hostname,
+            vars,
+            age_seconds,
+            groups,
+        } = retained;
+
+        self.update_host_aged(hostname.clone(), vars, age_seconds);
+
+        let dataset = Arc::make_mut(&mut self.dataset);
+        for name in groups {
+            let group = dataset.groups.entry(name).or_default();
+            if !group.hosts.iter().any(|host| host == &hostname) {
+                group.hosts.push(hostname.clone());
+            }
+        }
+    }
+
     // Additive merge for derived data: adds or replaces only the keys that
     // come, leaving every other key on that host untouched.
     //
@@ -313,6 +378,15 @@ mod tests {
             groups: HashMap::new(),
             remove_hosts: vec![],
         }
+    }
+
+    fn host_vars(name: &str, role: &str) -> (String, HostVars) {
+        (
+            name.to_string(),
+            [("role".to_string(), serde_json::json!(role))]
+                .into_iter()
+                .collect(),
+        )
     }
 
     fn dataset_with_hosts() -> Dataset {
@@ -643,6 +717,134 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&entry.serialized_json().unwrap().bytes).unwrap();
         assert!(json["hostvars"]["togusa.section9.net"].is_object());
+    }
+
+    fn dataset_with_groups() -> Dataset {
+        use crate::domain::dataset::Group;
+
+        let mut dataset = dataset_with_hosts();
+        dataset.groups.insert(
+            "section9".to_string(),
+            Group {
+                hosts: vec![
+                    "motoko.section9.net".to_string(),
+                    "batou.section9.net".to_string(),
+                ],
+                children: vec![],
+                vars: None,
+            },
+        );
+        dataset.groups.insert(
+            "commanders".to_string(),
+            Group {
+                hosts: vec!["motoko.section9.net".to_string()],
+                children: vec![],
+                vars: None,
+            },
+        );
+        dataset
+    }
+
+    #[test]
+    fn capture_takes_the_hosts_vars_age_and_groups() {
+        let mut entry = CacheEntry::new(dataset_with_groups(), 3600);
+        let (name, vars) = host_vars("motoko.section9.net", "commander");
+        entry.update_host_aged(name, vars, 900);
+
+        let captured = entry.capture_host("motoko.section9.net").expect("captured");
+        let mut groups = captured.groups.clone();
+        groups.sort();
+        assert_eq!(groups, vec!["commanders", "section9"]);
+        assert!(captured.age_seconds >= 900);
+        assert_eq!(captured.vars["role"], "commander");
+    }
+
+    #[test]
+    fn capturing_an_unknown_host_returns_nothing() {
+        let entry = CacheEntry::new(dataset_with_groups(), 3600);
+        assert!(entry.capture_host("togusa.section9.net").is_none());
+    }
+
+    // The whole point: a restored host is back in its groups, not just in
+    // hostvars, so an inventory rendered from `groups` still contains it.
+    #[test]
+    fn restore_puts_the_host_back_in_its_groups() {
+        let previous = CacheEntry::new(dataset_with_groups(), 3600);
+        let captured = previous
+            .capture_host("motoko.section9.net")
+            .expect("captured");
+
+        // A fresh gather that reached nobody but batou
+        let mut gathered = dataset_with_groups();
+        gathered.hostvars.remove("motoko.section9.net");
+        for group in gathered.groups.values_mut() {
+            group.hosts.retain(|host| host != "motoko.section9.net");
+        }
+        let mut entry = CacheEntry::new(gathered, 3600);
+
+        entry.restore_host(captured);
+
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["role"],
+            "commander"
+        );
+        assert!(
+            entry.dataset.groups["section9"]
+                .hosts
+                .contains(&"motoko.section9.net".to_string())
+        );
+        assert_eq!(
+            entry.dataset.groups["commanders"].hosts,
+            vec!["motoko.section9.net"]
+        );
+    }
+
+    // A group vanishes exactly when every host in it failed to answer, so
+    // dropping it would take the retained hosts with it.
+    #[test]
+    fn restore_recreates_a_group_the_new_dataset_lost() {
+        let previous = CacheEntry::new(dataset_with_groups(), 3600);
+        let captured = previous
+            .capture_host("motoko.section9.net")
+            .expect("captured");
+
+        let mut entry = CacheEntry::new(empty_dataset(), 3600);
+        entry.restore_host(captured);
+
+        assert_eq!(
+            entry.dataset.groups["commanders"].hosts,
+            vec!["motoko.section9.net"]
+        );
+    }
+
+    #[test]
+    fn restore_does_not_list_a_host_twice_in_a_group() {
+        let previous = CacheEntry::new(dataset_with_groups(), 3600);
+        let captured = previous
+            .capture_host("motoko.section9.net")
+            .expect("captured");
+
+        // The new dataset still lists the host in the group even though it has
+        // no hostvars for it
+        let mut entry = CacheEntry::new(dataset_with_groups(), 3600);
+        entry.restore_host(captured);
+
+        assert_eq!(entry.dataset.groups["commanders"].hosts.len(), 1);
+    }
+
+    #[test]
+    fn restore_keeps_the_age_the_host_already_had() {
+        let mut previous = CacheEntry::new(dataset_with_groups(), 3600);
+        let (name, vars) = host_vars("motoko.section9.net", "commander");
+        previous.update_host_aged(name, vars, 900);
+        let captured = previous
+            .capture_host("motoko.section9.net")
+            .expect("captured");
+
+        let mut entry = CacheEntry::new(empty_dataset(), 3600);
+        entry.restore_host(captured);
+
+        assert!(entry.host_age_seconds("motoko.section9.net").unwrap_or(0) >= 900);
     }
 
     #[test]

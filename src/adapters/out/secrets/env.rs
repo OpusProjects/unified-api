@@ -31,7 +31,7 @@ impl SecretsPort for EnvSecrets {
                 let resolved = if let Some(ref prefix) = credential.env_prefix {
                     resolve_from_env(prefix, &credential.secret_keys)
                 } else if let Some(ref path) = credential.secret_file {
-                    resolve_from_file(path, &credential.secret_keys)
+                    resolve_from_file(path, &credential.secret_keys).await
                 } else {
                     Err(SecretsError {
                         message: format!(
@@ -83,14 +83,22 @@ fn resolve_from_env(
     Ok(secrets)
 }
 
-// Reads a JSON file and extracts fields according to secret_keys
-fn resolve_from_file(
+// Reads a JSON file and extracts fields according to secret_keys.
+//
+// tokio::fs rather than std::fs: this runs inside the async runtime, on every
+// sync of every source that uses a file-backed credential. A blocking read
+// parks the whole worker thread — with unrelated HTTP requests and sync tasks
+// queued behind it — and the file may live on a mounted secrets volume rather
+// than local disk, where "instant" is not guaranteed.
+async fn resolve_from_file(
     path: &str,
     secret_keys: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>, SecretsError> {
-    let content = std::fs::read_to_string(path).map_err(|e| SecretsError {
-        message: format!("Failed to read secret file '{}': {}", path, e),
-    })?;
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| SecretsError {
+            message: format!("Failed to read secret file '{}': {}", path, e),
+        })?;
 
     let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| SecretsError {
         message: format!("Failed to parse secret file '{}': {}", path, e),
@@ -182,6 +190,80 @@ mod tests {
 
         assert_eq!(result["username"], "dbadmin");
         assert_eq!(result["password"], "dbpass");
+    }
+
+    // The file-backed path had only its happy case covered. These three are the
+    // ways it fails in a deployment — a volume that did not mount, a truncated
+    // write, a renamed field — and each error has to name what to go and look at.
+    #[tokio::test]
+    async fn a_missing_secret_file_names_the_path() {
+        let credentials = file_credential("/nonexistent/creds.json");
+        let error = EnvSecrets::new(credentials)
+            .resolve("cred-db")
+            .await
+            .expect_err("a missing secret file must fail");
+        assert!(
+            error.message.contains("/nonexistent/creds.json"),
+            "error was: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_secret_file_names_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.json");
+        std::fs::write(&path, "{not json").unwrap();
+
+        let credentials = file_credential(path.to_str().unwrap());
+        let error = EnvSecrets::new(credentials)
+            .resolve("cred-db")
+            .await
+            .expect_err("a malformed secret file must fail");
+        assert!(
+            error.message.contains("creds.json"),
+            "error was: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_missing_from_the_secret_file_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("creds.json");
+        std::fs::write(&path, r#"{"USER": "dbadmin"}"#).unwrap();
+
+        let credentials = file_credential(path.to_str().unwrap());
+        let error = EnvSecrets::new(credentials)
+            .resolve("cred-db")
+            .await
+            .expect_err("a missing key must fail");
+        assert!(
+            error.message.contains("PASS"),
+            "error was: {}",
+            error.message
+        );
+    }
+
+    fn file_credential(path: &str) -> HashMap<String, Credential> {
+        [(
+            "cred-db".to_string(),
+            Credential {
+                name: "DB".to_string(),
+                credential_type: CredentialType::UsernamePassword,
+                env_prefix: None,
+                secret_file: Some(path.to_string()),
+                secret_keys: [
+                    ("username".to_string(), "USER".to_string()),
+                    ("password".to_string(), "PASS".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                file_keys: HashMap::new(),
+            },
+        )]
+        .into_iter()
+        .collect()
     }
 
     #[tokio::test]

@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Reading a file-backed credential no longer blocks the runtime.**
+  `EnvSecrets` read `secret_file` with a blocking `std::fs` call from inside an
+  async function, which parks a whole worker thread — with unrelated HTTP
+  requests and sync tasks queued behind it — on every sync of every source using
+  one. Small on local disk, less so on a mounted secrets volume. It now reads
+  through `tokio::fs`.
+
 - **A conditional request can no longer talk a view out of refusing.** A view
   minted its ETag and could answer `304 Not Modified` *before* routing the hosts
   the request named, so `If-None-Match: *` turned a host no member claims into

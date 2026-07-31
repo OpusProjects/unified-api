@@ -123,7 +123,10 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
 
 - **Execution timeouts:** every connector/enricher/output run is bounded by
   `timeout_seconds` (default 300); a hung script fails the run instead of blocking
-  its scheduler task or HTTP request.
+  its scheduler task or HTTP request. Exceeding it KILLS the process (and aborts
+  the SSH connector's per-host tasks) rather than abandoning it — otherwise a
+  wedged script accumulated a live copy per interval. Scripts must therefore be
+  interruptible: nothing cleans up a half-written file for them.
 - **Metrics:** `GET /metrics` (Prometheus; public by default, since a scrape
   config carries no API key — set `server.metrics_require_auth: true` to move
   it behind the key on a shared network, as the exposition labels every source

@@ -51,13 +51,30 @@ Rotation is external by design: swap the secret in the env var (Secret, Vault,
 unaffected). Browser-based consumers need their origins listed in
 `server.cors_allowed_origins` — see [configuration](configuration.md).
 
+## Errors
+
+**Every** failure from every route carries the same JSON body:
+
+```json
+{ "error": "source 'src-d42' is not in the cache (never synced, or evicted)" }
+```
+
+The message distinguishes cases that share a status code — `404` from
+`/dataset` means "not in the cache", `404` from `/sync` means "not in
+`sources.yaml`", and a `404` from `DELETE .../hosts/{hostname}` names whichever
+of the two is missing. Treat the text as loggable, not matchable: branch on the
+status code, read the message.
+
+The one exception is `401`: the API-key middleware rejects a request before any
+handler runs, so an unauthenticated call gets the status alone.
+
 ## Health
 
 | Route | Meaning |
 |---|---|
 | `GET /healthz` | Liveness — always `200 ok` while the process runs |
 | `GET /readyz` | Readiness — `200` when no sources are configured or at least one has synced; `503` otherwise, with the pending list. `server.readyz_require_all_sources: true` waits for every source |
-| `GET /metrics` | Prometheus metrics (sync/enrich/endpoint counters and durations, per-source freshness gauges) — see [deployment](deployment.md) |
+| `GET /metrics` | Prometheus metrics (sync/enrich/endpoint counters and durations, per-source freshness gauges) — see [observability](observability.md) |
 
 ## Sources
 
@@ -139,20 +156,6 @@ The block is absent when no sync has been attempted yet, and a source that
 has **never** synced successfully has no cache entry, so it doesn't appear in
 `GET /sources` at all — watch `unified_api_source_cached` or `/readyz`'s
 `sources_pending` for that case.
-
-### Errors
-
-Every failure carries a JSON body:
-
-```json
-{ "error": "source 'src-d42' is not in the cache (never synced, or evicted)" }
-```
-
-The message distinguishes cases that share a status code — `404` from
-`/dataset` means "not in the cache", `404` from `/sync` means "not in
-`sources.yaml`", and a `404` from `DELETE .../hosts/{hostname}` names whichever
-of the two is missing. Treat the text as loggable, not matchable: branch on the
-status code, read the message.
 
 ### Discovery
 

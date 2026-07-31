@@ -22,13 +22,13 @@ and every one of them sees the same inventory.
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
 - **SSH connector**: gathers Ansible facts from whole fleets in parallel
 - **In-memory cache with TTLs**: per-dataset, per-host and per-group freshness, no database
-- **Gzip responses**: inventory JSON compresses ~10× for clients sending `Accept-Encoding: gzip`
+- **Gzip responses**: inventory JSON compresses ~10× for `Accept-Encoding: gzip` clients
 - **Enrichers**: post-process cached data on a schedule or on demand
 - **Output endpoints**: turn cached datasets into the format each consumer needs
-- **Federation**: one instance per datacenter doing the local work, one central aggregating them, with the data's real age travelling along
-- **Views**: one id over several sources, routing each host to the member that owns it, so consumers stop needing to know which datacenter a host lives in
+- **Federation**: one instance per datacenter, one central aggregating them, real ages intact
+- **Views**: one id over several sources, routing each host to the member that owns it
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
-- **On-demand refresh**: a read can bring the hosts it names up to date at the origin, bounded by the source's TTL so consumers cannot outrun the operator's policy
+- **Refresh**: a read can bring the hosts it names up to date, bounded by the source's TTL
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
 
@@ -44,8 +44,10 @@ and every one of them sees the same inventory.
 | [CLI](docs/cli.md) | Environment variables, log tuning, health checks, common curl operations and shutdown |
 | [Configuration](docs/configuration.md) | Every YAML file field by field, environment variables and startup validation |
 | [Connectors](docs/connectors.md) | The script contracts for source connectors, enrichers and output transformers |
-| [Deployment](docs/deployment.md) | Container image, CI/CD jobs, Kubernetes probes, secrets and scheduling notes |
-| [On-demand refresh](docs/on-demand-refresh.md) | Getting current facts for a named host across a federated mesh, and the limits that keep consumers from overloading a datacenter |
+| [Deployment](docs/deployment.md) | Container image, the worked config example, CI/CD jobs, Kubernetes and ArgoCD |
+| [Federation](docs/federation.md) | One instance per datacenter and one central federating them, and why not to SSH across the WAN |
+| [Observability](docs/observability.md) | Scheduling behaviour, structured logs, and the Prometheus metrics worth alerting on |
+| [Refresh](docs/on-demand-refresh.md) | Getting current facts for a named host across a federated mesh, and the limits that stop consumers overloading a datacenter |
 | [Testing](docs/testing.md) | How to run the suite, what the unit and integration tests cover, and how to add more |
 | [Views](docs/views.md) | Presenting several sources as one id, how a host is routed to its owner, and why ownership is declared rather than inferred |
 

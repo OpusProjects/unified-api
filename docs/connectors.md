@@ -58,6 +58,10 @@ is captured into the error message.
 **Time limit:** the script must finish within the source's `timeout_seconds`
 (default 300). A slower run is aborted and the sync fails with
 `sync timed out after Ns` — a hung script never blocks the scheduler or an API call.
+The process is **killed**, not merely abandoned, so a script that wedges does not
+accumulate a live copy per sync interval. Write scripts to be interruptible at any
+point: a partially-written file or a half-finished remote change will not be
+cleaned up for you.
 
 Minimal example:
 

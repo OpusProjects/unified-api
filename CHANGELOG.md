@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A timed-out run is now stopped, not just abandoned.** `timeout_seconds`
+  bounded how long unified-api *waited*, never how long the script *ran*: the
+  timeout dropped the future, and a dropped child process keeps executing. A
+  connector wedged on an unresponsive API therefore got a fresh copy spawned on
+  every `sync_interval_seconds` and none of them ever exited — at a 300-second
+  interval, twelve new live processes an hour, indefinitely, each still querying
+  the source of truth this service exists to shield from exactly that.
+
+  Connector, enricher and output processes are now killed when their run is
+  abandoned. The SSH connector had the same problem in its own shape — one
+  detached task per host, which a timeout could not reach — so a source-level
+  timeout on a large fleet left thousands of SSH sessions still being opened for
+  a result nobody would read; those are now aborted with the run.
+
+  **Write connector scripts to be interruptible.** A partially written file or a
+  half-finished remote change will not be cleaned up for you.
+
 ## [0.10.2] - 2026-08-01
 
 ### Fixed

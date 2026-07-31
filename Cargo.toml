@@ -17,7 +17,6 @@ bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
 # git operation, so the SIMD engines' unsafe code buys nothing here.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 dashmap = "6"
-futures = "0.3"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # Remote connector (federation): fetch datasets from other unified-api
@@ -37,6 +36,9 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # [dev-dependencies] = compiled only for tests, never shipped in the production binary
 [dev-dependencies]
+# Only the tests fan out over a set of futures now — the SSH connector uses a
+# JoinSet, so the production build no longer needs this
+futures = "0.3"
 # test-util adds virtual time (tokio::time::pause): the scheduler's tick
 # behaviour is a property of a 40-second schedule, and this exercises it in
 # microseconds instead of making the suite wait

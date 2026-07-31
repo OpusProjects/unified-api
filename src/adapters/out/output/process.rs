@@ -55,6 +55,11 @@ impl OutputPort for ProcessOutput {
             })?;
 
             let mut cmd = Command::new(&script_path);
+            // Killed if this future is dropped — which is what a timeout
+            // does. Without it `timeout_seconds` bounded only how long WE
+            // waited: the script kept running, so a wedged one got a fresh
+            // copy spawned every interval and none of them ever exited.
+            cmd.kill_on_drop(true);
             cmd.args(&args);
             cmd.env("ENDPOINT_CONFIG", &config_json);
             cmd.env("ENDPOINT_PARAMS", &params_json);

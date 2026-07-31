@@ -629,7 +629,9 @@ Background sync tasks start at boot for every source with
 with an interval likewise. A failed run logs the error and waits for the next tick —
 there is no retry/backoff beyond the interval itself. Every script execution is
 bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
-cannot wedge its scheduler task.
+cannot wedge its scheduler task. Exceeding it **kills** the process rather than
+abandoning it, so a wedged script does not leave a live copy behind on every
+tick; the SSH connector likewise aborts the per-host gathers still in flight.
 
 A run that outlasts its own interval **skips** the ticks it missed and resumes on
 the original schedule, rather than firing them back to back to catch up. A sync

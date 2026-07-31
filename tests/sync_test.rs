@@ -1153,6 +1153,48 @@ async fn sync_times_out_on_slow_connector() {
     assert_eq!(result["total_hosts"], 0);
 }
 
+// A timeout has to STOP the script, not just stop waiting for it.
+//
+// It used to only stop waiting: the child kept running to completion, so a
+// connector wedged on an unresponsive API got a fresh copy spawned every
+// `sync_interval_seconds` and none of them ever exited — while continuing to
+// hammer the very source of truth this service exists to shield.
+#[tokio::test]
+async fn a_timed_out_connector_is_killed_not_merely_abandoned() {
+    let marker = std::env::temp_dir().join("unified-api-outlives-timeout.log");
+    let _ = std::fs::remove_file(&marker);
+
+    let mut source = test_source("default");
+    source.script_path = "tests/adapters/out/connectors/outlives_its_timeout.py".to_string();
+    source.timeout_seconds = 1;
+    source.config.insert(
+        "marker_file".to_string(),
+        marker.to_string_lossy().to_string(),
+    );
+    source
+        .config
+        .insert("sleep_seconds".to_string(), "2".to_string());
+
+    let mut sources = HashMap::new();
+    sources.insert("src-outlives".to_string(), source);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, body) = request(app, "POST", "/api/v1/sources/src-outlives/sync").await;
+    assert_eq!(status, StatusCode::OK);
+    let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(result["success"], false);
+
+    // Well past the script's own sleep: if it were still alive it would have
+    // finished and written the marker by now.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    assert!(
+        !marker.exists(),
+        "the script outlived the timeout that was supposed to bound it: {}",
+        std::fs::read_to_string(&marker).unwrap_or_default()
+    );
+}
+
 // =========================================================================
 // Tests: hosts_from_source — dynamic SSH host lists resolved from the cache
 // =========================================================================

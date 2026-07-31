@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::future::join_all;
 use russh::client;
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use tokio::sync::Semaphore;
@@ -134,15 +133,23 @@ impl ConnectorPort for SshConnector {
             let semaphore = Arc::new(Semaphore::new(concurrency));
             let private_key = Arc::new(private_key);
 
-            let tasks: Vec<_> = hosts
-                .into_iter()
-                .map(|spec| {
+            // A JoinSet rather than loose `tokio::spawn` handles: dropping it
+            // aborts whatever is still running, and dropping it is exactly what
+            // the source-level `timeout_seconds` does to this whole future.
+            //
+            // Detached tasks kept gathering after the sync had given up on them.
+            // On a large fleet that is thousands of SSH sessions still being
+            // opened against a datacenter for a result nobody will read — the
+            // opposite of what a timeout is for.
+            let mut tasks = tokio::task::JoinSet::new();
+            for spec in hosts {
+                {
                     let sem = Arc::clone(&semaphore);
                     let key = Arc::clone(&private_key);
                     let user = username.clone();
                     let cmd = command.clone();
 
-                    tokio::spawn(async move {
+                    tasks.spawn(async move {
                         // acquire() only errors if the semaphore is closed, which
                         // never happens here (it lives for the whole fan-out); skip
                         // the host rather than panic the task if that ever changes.
@@ -193,17 +200,15 @@ impl ConnectorPort for SshConnector {
                             }
                         }
                         (spec.name, None)
-                    })
-                })
-                .collect();
-
-            let results = join_all(tasks).await;
+                    });
+                }
+            }
 
             let mut hostvars: HashMap<String, HostVars> = HashMap::new();
             let mut reachable: Vec<String> = Vec::new();
             let mut failed: Vec<String> = Vec::new();
 
-            for result in results {
+            while let Some(result) = tasks.join_next().await {
                 match result {
                     Ok((host, Some(output))) => {
                         let vars = parse_host_output(&output, &host);
@@ -216,6 +221,11 @@ impl ConnectorPort for SshConnector {
                     }
                 }
             }
+
+            // Sorted because results now arrive in COMPLETION order rather than
+            // spawn order, and a group whose member list reshuffles on every
+            // sync would change the dataset's ETag without the data changing.
+            reachable.sort();
 
             let mut groups: HashMap<String, Group> = HashMap::new();
             groups.insert(

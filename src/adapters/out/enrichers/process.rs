@@ -52,6 +52,11 @@ impl EnricherPort for ProcessEnricher {
             // - SOURCE_CONFIG as env var (same as the connector)
             // - The current dataset via stdin (JSON)
             let mut cmd = Command::new(&script_path);
+            // Killed if this future is dropped — which is what a timeout
+            // does. Without it `timeout_seconds` bounded only how long WE
+            // waited: the script kept running, so a wedged one got a fresh
+            // copy spawned every interval and none of them ever exited.
+            cmd.kill_on_drop(true);
             cmd.args(&args);
             cmd.env("SOURCE_CONFIG", &config_json);
             cmd.stdin(std::process::Stdio::piped());

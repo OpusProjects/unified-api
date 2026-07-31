@@ -65,6 +65,64 @@ fn record_source_gauges(state: &AppState) {
         metrics::gauge!("unified_api_source_groups", "source" => source_id.clone())
             .set(entry.dataset.groups.len() as f64);
     }
+
+    record_view_gauges(state);
+}
+
+// The same questions for views, which the source gauges cannot answer.
+//
+// A view holds no cache entry — it is resolved from its members on every read —
+// so it appears in neither `cache.keys()` nor `state.sources`, and had no series
+// at all. That left the one address consumers are pointed at as the one thing
+// impossible to alert on: every member could be healthy while the view served
+// nothing, because ownership resolves against an inventory source that has not
+// synced.
+//
+// Separate metric names rather than reusing `unified_api_source_*` with a view
+// id. The two id spaces are shared on the ROUTES deliberately, but a view's
+// hosts are its members' hosts — folding them into one series would double-count
+// every host in any sum across the label.
+fn record_view_gauges(state: &AppState) {
+    for (view_id, view) in &state.views {
+        let snapshot = crate::application::views::snapshot(
+            &*state.cache,
+            &state.sources,
+            view_id.as_str(),
+            view,
+        );
+
+        metrics::gauge!("unified_api_view_fresh", "view" => view_id.clone())
+            .set(if snapshot.is_fresh() { 1.0 } else { 0.0 });
+        metrics::gauge!("unified_api_view_age_seconds", "view" => view_id.clone())
+            .set(snapshot.age_seconds() as f64);
+        metrics::gauge!("unified_api_view_ttl_seconds", "view" => view_id.clone())
+            .set(snapshot.ttl_seconds() as f64);
+        metrics::gauge!("unified_api_view_hosts", "view" => view_id.clone())
+            .set(snapshot.hosts().len() as f64);
+
+        // How much of the view is actually assembled. `members_cached` short of
+        // `members_total` is a view serving part of its inventory; a member
+        // whose OWNERSHIP source has not synced claims nothing beyond literally
+        // named hosts, which is the state where a view 404s hosts that plainly
+        // exist — and it is invisible in every other number here.
+        let cached = snapshot
+            .members
+            .iter()
+            .filter(|member| member.entry.is_some())
+            .count();
+        let routable = snapshot
+            .members
+            .iter()
+            .filter(|member| member.ownership_cached())
+            .count();
+
+        metrics::gauge!("unified_api_view_members_total", "view" => view_id.clone())
+            .set(snapshot.members.len() as f64);
+        metrics::gauge!("unified_api_view_members_cached", "view" => view_id.clone())
+            .set(cached as f64);
+        metrics::gauge!("unified_api_view_members_routable", "view" => view_id.clone())
+            .set(routable as f64);
+    }
 }
 
 // Called from the composition root so the recorder exists before the first

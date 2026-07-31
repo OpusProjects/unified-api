@@ -666,3 +666,114 @@ async fn a_key_granted_only_the_view_can_read_it_and_not_its_members() {
         .collect();
     assert_eq!(ids, vec!["vw-all"]);
 }
+
+// =========================================================================
+// Observability: a view is the address consumers are given, so it has to be
+// the address an operator can alert on
+// =========================================================================
+
+// The Prometheus recorder is a process global shared by every test in this
+// binary, so a gauge keyed by view id is only assertable if the id is unique to
+// the test. `vw-all` is used by every other fixture here; these build their own.
+fn metrics_app(view_id: &str, name: &str, with_inventory: bool) -> axum::Router {
+    let sources = HashMap::from([
+        (
+            "src-inventory".to_string(),
+            member_source("/dev/null", 7200, false),
+        ),
+        (
+            "src-a".to_string(),
+            member_source(&counter_path(&format!("{}-a", name)), 60, false),
+        ),
+        (
+            "src-b".to_string(),
+            member_source(&counter_path(&format!("{}-b", name)), 60, false),
+        ),
+    ]);
+
+    let view: View = serde_yaml_ng::from_str(VIEW_YAML).unwrap();
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .views(HashMap::from([(view_id.to_string(), view)]))
+        .build_with_state();
+
+    if with_inventory {
+        state.cache.set("src-inventory", inventory());
+    }
+    state
+        .cache
+        .set("src-a", facts("h1.example", "OracleLinux", 300, 60));
+    state
+        .cache
+        .set("src-b", facts("h2.example", "RHEL", 300, 60));
+
+    app
+}
+
+// A view holds no cache entry, so it appears in neither `cache.keys()` nor
+// `sources` — and had no metric series at all. Every member could be healthy
+// while the view served nothing, and no gauge would say so.
+#[tokio::test]
+async fn a_view_reports_its_own_gauges() {
+    let app = metrics_app("vw-metrics-healthy", "metrics-healthy", true);
+    let response = get(app, "/metrics").await;
+    assert_eq!(response.status, StatusCode::OK);
+
+    for series in [
+        "unified_api_view_fresh",
+        "unified_api_view_age_seconds",
+        "unified_api_view_ttl_seconds",
+        "unified_api_view_hosts",
+        "unified_api_view_members_total",
+        "unified_api_view_members_cached",
+        "unified_api_view_members_routable",
+    ] {
+        assert!(
+            response
+                .body
+                .contains(&format!("{}{{view=\"vw-metrics-healthy\"}}", series)),
+            "missing series {}; body was:\n{}",
+            series,
+            response.body
+        );
+    }
+
+    for expected in [
+        "unified_api_view_members_total{view=\"vw-metrics-healthy\"} 2",
+        "unified_api_view_members_cached{view=\"vw-metrics-healthy\"} 2",
+        "unified_api_view_members_routable{view=\"vw-metrics-healthy\"} 2",
+        "unified_api_view_hosts{view=\"vw-metrics-healthy\"} 2",
+    ] {
+        assert!(
+            response.body.contains(expected),
+            "expected {}; body was:\n{}",
+            expected,
+            response.body
+        );
+    }
+}
+
+// The state no other gauge can show: both members hold data and look healthy,
+// but the inventory their ownership resolves against has never synced — so
+// nothing is claimed and the view serves an empty inventory.
+#[tokio::test]
+async fn a_view_that_cannot_route_is_visible_in_the_gauges() {
+    let app = metrics_app("vw-metrics-unroutable", "metrics-unroutable", false);
+    let response = get(app, "/metrics").await;
+
+    for expected in [
+        // both members have their own data...
+        "unified_api_view_members_cached{view=\"vw-metrics-unroutable\"} 2",
+        // ...but neither can expand its ownership patterns...
+        "unified_api_view_members_routable{view=\"vw-metrics-unroutable\"} 0",
+        // ...so the view serves nothing
+        "unified_api_view_hosts{view=\"vw-metrics-unroutable\"} 0",
+    ] {
+        assert!(
+            response.body.contains(expected),
+            "expected {}; body was:\n{}",
+            expected,
+            response.body
+        );
+    }
+}

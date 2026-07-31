@@ -27,6 +27,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
   a read that may improve its data but must never overtake a gather already in
   flight. Different sources are unaffected and still sync in parallel.
 
+### Added
+
+- **Views are visible in Prometheus.** A view holds no cache entry — it is
+  resolved from its members on every read — so it appeared in neither
+  `cache.keys()` nor `sources`, and had no metric series at all. The one address
+  consumers are pointed at was the one thing impossible to alert on.
+
+  Seven gauges, labelled `view`: `unified_api_view_fresh`, `_age_seconds`,
+  `_ttl_seconds`, `_hosts`, `_members_total`, `_members_cached` and
+  `_members_routable`. Separate names rather than reusing `unified_api_source_*`
+  with a view id, because a view's hosts *are* its members' hosts — one series
+  would double-count every host in any sum across the label.
+
+  `_members_routable` is the one with no equivalent elsewhere: every member can
+  be cached and fresh while the inventory source their ownership resolves
+  against has never synced. The view then claims nothing and serves an empty
+  dataset while looking healthy in every other number.
+
 ## [0.10.3] - 2026-07-31
 
 ### Fixed

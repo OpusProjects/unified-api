@@ -190,10 +190,10 @@ pub fn status(
     let hosts: Vec<HostStatus> = selection
         .iter()
         .filter_map(|hostname| {
-            let index = snap
-                .members
-                .iter()
-                .position(|member| member.claims(hostname))?;
+            // The snapshot's routing table, not a second scan of the members:
+            // two implementations of "who owns this host" are two things that
+            // can disagree, and this one answers a status the other one served.
+            let index = snap.owner_index(hostname)?;
             let owner = &snap.members[index];
             let entry = owner.entry.as_ref()?;
             let age = entry.host_age_seconds(hostname)?;

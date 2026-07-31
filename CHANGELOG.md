@@ -8,6 +8,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **An endpoint's 403 and 404 now say what went wrong.** `POST`/`GET
+  /api/v1/endpoints/{id}` answered both with a bare status code, which axum
+  renders with an **empty body** — so a consumer refused an endpoint got a 403
+  with nothing in it, while the same refusal on a source route explains itself.
+  Its other failures (a script that exited non-zero, sources not yet synced)
+  already carried `{"error": ...}`, so the inconsistency sat inside one handler.
+
+  Endpoints are the consumer-facing route — AWX and AnsibleForms call these —
+  which makes it the worst place to answer "no" without a reason. Both now use
+  `ApiError` like everything else, naming the endpoint id, and the OpenAPI
+  responses declare `body = ErrorBody` so the published spec stops describing
+  the empty shape.
+
 - **Listing projects no longer blocks the runtime.** `GET /api/v1/projects`
   reported `checkout_present` with a blocking `Path::exists` per configured
   project, from inside an async handler — the same shape as the `secret_file`

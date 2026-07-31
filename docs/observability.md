@@ -1,0 +1,75 @@
+# Observability
+
+What the service says about itself: when it works, what it logs, and the metrics
+to alert on.
+
+For what the *data* looks like rather than the process, see
+[caching & TTLs](caching.md); for the health probes as Kubernetes consumes them,
+see [deployment](deployment.md).
+
+## Scheduling behavior
+
+Background sync tasks start at boot for every source with
+`sync_interval_seconds > 0` (tokio `interval`, first tick immediately). Enrichers
+with an interval likewise. A failed run logs the error and waits for the next tick —
+there is no retry/backoff beyond the interval itself. Every script execution is
+bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
+cannot wedge its scheduler task. Exceeding it **kills** the process rather than
+abandoning it, so a wedged script does not leave a live copy behind on every
+tick; the SSH connector likewise aborts the per-host gathers still in flight.
+
+A run that outlasts its own interval **skips** the ticks it missed and resumes on
+the original schedule, rather than firing them back to back to catch up. A sync
+that took an hour on a ten-minute interval therefore costs the runs it displaced
+and nothing more — it does not come back as five immediate syncs against a source
+that is evidently already struggling. The same applies to enricher runs and project
+pulls. A source using `hosts_from_source` additionally waits, once, for the source
+it reads to have data before its first sync (up to five minutes) — see
+[connectors](connectors.md#dynamic-host-lists-hosts_from_source).
+
+Shutdown is graceful for
+in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
+
+## Logs and metrics
+
+Structured logs via `tracing` to stdout; tune with `RUST_LOG` (e.g.
+`unified_api=debug`). Every HTTP request is logged at INFO with method, path,
+status and latency (a `tower-http` trace layer); set `tower_http=debug` for more
+detail. Sync and enrich outcomes are logged with source ids, host counts and
+durations.
+
+**Prometheus metrics** are exposed at `GET /metrics` (public, like the health
+probes — scrapers don't carry the API key):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `unified_api_sync_total` | `source`, `result` | Sync runs, success vs error |
+| `unified_api_sync_duration_seconds` | `source` | Sync duration histogram |
+| `unified_api_enrich_total` | `source`, `result` | Enricher runs |
+| `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |
+| `unified_api_endpoint_total` | `endpoint`, `result` | Output endpoint runs |
+| `unified_api_endpoint_duration_seconds` | `endpoint` | Endpoint duration histogram |
+| `unified_api_source_cached` | `source` | 1 if the configured source has a cache entry, 0 if it has never synced |
+| `unified_api_source_age_seconds` | `source` | Seconds since the dataset was last fetched |
+| `unified_api_source_ttl_seconds` | `source` | The source's dataset TTL |
+| `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired — and 0 for a source that has only ever received host- or group-scoped syncs, which have no full gather for the TTL to be measured against |
+| `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
+| `unified_api_source_groups` | `source` | Groups in the cached dataset |
+
+Timed-out and failed runs count as `result="error"`, so alerting on the error
+rate catches hung connectors too.
+
+The `unified_api_source_*` gauges are read from the cache on every scrape
+rather than pushed on sync, so age keeps growing while a source is not
+syncing — the case worth alerting on. A source whose scheduler task died
+produces no errors at all, so the error rate alone will not catch it:
+
+```yaml
+# Data older than three sync intervals, or never synced at all
+- alert: UnifiedApiSourceStale
+  expr: unified_api_source_fresh == 0 or unified_api_source_cached == 0
+  for: 15m
+```
+
+The gauges are labeled per source, so a source removed from both config and
+cache keeps its last value until the process restarts.

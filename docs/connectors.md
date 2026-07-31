@@ -209,6 +209,11 @@ For classic Ansible **static YAML inventories** — an `inventory.yaml` with the
 directories next to it. No process is spawned and no `ansible-core` is
 needed: the files are parsed natively.
 
+A group may be declared more than once — under two parents, or twice under the
+same one. The declarations are **merged**: hosts, children and group vars all
+accumulate, and a host inherits the vars of every ancestry its group is declared
+under. Naming the same host in both declarations lists it once.
+
 ```yaml
 src-inventory-linux:
   name: "Linux static inventory"

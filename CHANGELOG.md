@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-31
+
 ### Fixed
 
 - **An endpoint's 403 and 404 now say what went wrong.** `POST`/`GET
@@ -953,7 +955,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/OpusProjects/unified-api/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/OpusProjects/unified-api/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/OpusProjects/unified-api/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/OpusProjects/unified-api/compare/v0.9.0...v0.10.0

@@ -73,7 +73,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   **Write connector scripts to be interruptible.** A partially written file or a
   half-finished remote change will not be cleaned up for you.
 
-## [0.10.2] - 2026-08-01
+## [0.10.2] - 2026-07-31
 
 ### Fixed
 

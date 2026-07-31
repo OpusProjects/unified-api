@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Changing a source's `ttl_seconds` now takes effect on an entry that already
+  exists.** The TTL was applied only when a cache entry was *created*, so a
+  source whose entry is patched in place rather than replaced — every
+  `sync_mode: merge` source, and any entry seeded by a scoped sync — kept the
+  TTL it was born with for the life of the process. Editing `ttl_seconds` did
+  nothing, and with disk persistence the old value came back on every restart,
+  so it never took effect at all. The TTL is configuration, and the configured
+  value now wins on every sync.
+
 - **A failed SSH command is no longer stored as the host's facts.** The channel
   read loop stopped at EOF, but the exit status arrives as a message of its own
   and the protocol fixes no order between the two — EOF means "no more output",

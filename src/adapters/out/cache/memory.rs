@@ -104,7 +104,16 @@ impl CachePort for MemoryCache {
         // The entry API is like Python's dict.setdefault but with a lock:
         // decides "exists / doesn't exist" and acts, all under the same lock.
         match self.store.entry(key.to_string()) {
-            Entry::Occupied(mut occupied) => f(occupied.get_mut(), dataset),
+            Entry::Occupied(mut occupied) => {
+                let entry = occupied.get_mut();
+                // The TTL is configuration, so the configured value wins over
+                // whatever the entry was created with. Only the vacant branch
+                // used to apply it, which meant a source patched in place —
+                // every merge-mode sync — kept its original TTL for the life of
+                // the entry, and a snapshot on disk carried it across restarts.
+                entry.set_ttl(ttl_seconds);
+                f(entry, dataset)
+            }
             Entry::Vacant(vacant) => {
                 vacant.insert(CacheEntry::new(dataset, ttl_seconds));
             }
@@ -237,7 +246,11 @@ mod tests {
     #[test]
     fn merge_or_insert_merges_when_occupied() {
         let cache = MemoryCache::new();
-        cache.set("src-1", CacheEntry::new(empty_dataset(), 3600));
+        let mut existing = empty_dataset();
+        existing
+            .hostvars
+            .insert("host-a".to_string(), HashMap::new());
+        cache.set("src-1", CacheEntry::new(existing, 3600));
 
         let mut partial = empty_dataset();
         partial
@@ -248,10 +261,27 @@ mod tests {
             entry.merge_dataset(new);
         });
 
+        // Merged into the existing entry rather than replacing it: both hosts
         let entry = cache.get("src-1").unwrap();
+        assert!(entry.dataset.hostvars.contains_key("host-a"));
         assert!(entry.dataset.hostvars.contains_key("host-b"));
-        // The original TTL is preserved: a new entry was not created
-        assert_eq!(entry.ttl.as_secs(), 3600);
+    }
+
+    // The TTL is configuration, so an entry that outlives a config change picks
+    // the new value up. Before this, an entry patched in place kept the TTL it
+    // was created with for the life of the process — and with disk persistence,
+    // across restarts too, so lowering a merge-mode source's TTL never took
+    // effect at all.
+    #[test]
+    fn merge_or_insert_adopts_the_configured_ttl() {
+        let cache = MemoryCache::new();
+        cache.set("src-1", CacheEntry::new(empty_dataset(), 86400));
+
+        cache.merge_or_insert("src-1", empty_dataset(), 60, &mut |entry, new| {
+            entry.merge_dataset(new);
+        });
+
+        assert_eq!(cache.get("src-1").unwrap().ttl.as_secs(), 60);
     }
 
     // This test demonstrates the bug that update() fixes: with the old pattern

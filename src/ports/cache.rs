@@ -58,6 +58,11 @@ pub trait CachePort: Send + Sync {
     // can decide HOW to merge (merge_dataset, update_group, update_host...).
     // If it does not exist: inserts CacheEntry::new(dataset, ttl_seconds) as-is.
     //
+    // Either way the entry ends up with `ttl_seconds`. It is configuration, and
+    // an entry that outlives a config change must pick the new value up — an
+    // entry only ever patched in place would otherwise keep the TTL it was born
+    // with forever.
+    //
     // The dataset is passed by value because both branches consume it, and only
     // one of the two can execute.
     fn merge_or_insert(

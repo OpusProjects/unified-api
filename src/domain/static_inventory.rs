@@ -88,19 +88,27 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
 
         // 2. every group containing the host (directly or via ancestors),
         //    parents before children, alphabetical within the same depth
+        //
+        // A walk over a graph rather than a chain: a group can be declared under
+        // several parents, so it has several ancestries and a host inherits from
+        // all of them. `visited` both dedupes that and guarantees termination,
+        // which a hand-written inventory should never need but costs nothing.
         let mut chain: Vec<(usize, String)> = Vec::new();
-        for group in direct {
-            let mut current = Some(group.clone());
-            while let Some(name) = current {
-                if name != "all" {
-                    let depth = walk.groups.get(&name).map(|g| g.depth).unwrap_or(0);
-                    chain.push((depth, name.clone()));
-                }
-                current = walk.parents.get(&name).cloned();
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut pending: Vec<String> = direct.clone();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if name != "all" {
+                let depth = walk.groups.get(&name).map(|g| g.depth).unwrap_or(0);
+                chain.push((depth, name.clone()));
+            }
+            if let Some(parents) = walk.parents.get(&name) {
+                pending.extend(parents.iter().cloned());
             }
         }
         chain.sort();
-        chain.dedup();
         for (_, group) in &chain {
             if let Some(group_vars) = group_effective_vars.get(group) {
                 vars.extend(group_vars.clone());
@@ -140,14 +148,18 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
         groups.insert(
             name.clone(),
             Group {
+                // Deduplicated as well as sorted: merging several declarations
+                // of one group can name the same host or child twice.
                 hosts: {
                     let mut hosts = info.hosts.clone();
                     hosts.sort();
+                    hosts.dedup();
                     hosts
                 },
                 children: {
                     let mut children = info.children.clone();
                     children.sort();
+                    children.dedup();
                     children
                 },
                 vars,
@@ -175,8 +187,13 @@ struct GroupInfo {
 #[derive(Default)]
 struct Walk {
     groups: HashMap<String, GroupInfo>,
-    // child group -> parent group
-    parents: HashMap<String, String>,
+    // child group -> its parent groups.
+    //
+    // A LIST, because the same group may be declared under more than one parent
+    // — ordinary in Ansible, and the reason this is a graph rather than a tree.
+    // Keeping one parent lost half the ancestry, and with it half the group vars
+    // a host should have inherited.
+    parents: HashMap<String, Vec<String>>,
     // host -> groups it appears under directly
     host_memberships: HashMap<String, Vec<String>>,
     host_inline_vars: HashMap<String, HostVars>,
@@ -189,12 +206,22 @@ impl Walk {
         node: &serde_yaml_ng::Value,
         depth: usize,
     ) -> Result<(), String> {
-        let mut info = GroupInfo {
+        // Taken out of the map rather than built fresh: a group may be declared
+        // more than once (under two parents, or twice under the same one), and
+        // replacing what was there dropped every host the earlier declaration
+        // carried. Silently — the host stayed in `hostvars`, so nothing looked
+        // wrong until an inventory rendered from `groups` failed to target it.
+        //
+        // The deepest declaration wins the depth, which drives var precedence:
+        // a group nested further down is the more specific statement about a
+        // host, so its vars should be applied later.
+        let mut info = self.groups.remove(name).unwrap_or(GroupInfo {
             depth,
             hosts: Vec::new(),
             children: Vec::new(),
             inline_vars: HashMap::new(),
-        };
+        });
+        info.depth = info.depth.max(depth);
 
         // A group may be null (empty) or a mapping with hosts/children/vars
         if let Some(mapping) = node.as_mapping() {
@@ -229,13 +256,25 @@ impl Walk {
                         for (child, child_node) in children {
                             let child = key_as_string(child)?;
                             info.children.push(child.clone());
-                            self.parents.insert(child.clone(), name.to_string());
+                            self.parents
+                                .entry(child.clone())
+                                .or_default()
+                                .push(name.to_string());
+                            // Recursing re-enters `group` for the child, which
+                            // merges into whatever that child already had — so
+                            // the second parent adds to the first rather than
+                            // replacing it. This is why `info` is held out of
+                            // the map across the recursion.
                             self.group(&child, child_node, depth + 1)?;
                         }
                     }
                     "vars" => {
-                        info.inline_vars =
+                        // Extended, not replaced: a group declared twice may
+                        // carry vars in both places, and the later declaration
+                        // should add to the earlier rather than erase it.
+                        let vars =
                             yaml_vars(value).map_err(|e| format!("group '{}': {}", name, e))?;
+                        info.inline_vars.extend(vars);
                     }
                     other => {
                         return Err(format!(
@@ -485,6 +524,124 @@ all:
                 .iter()
                 .any(|w| w.contains("host_vars/nope.example.com"))
         );
+    }
+
+    // Declaring one group under two parents is ordinary Ansible. The second
+    // declaration used to replace the first, so every host the first carried
+    // vanished from the group — silently, since the host stayed in `hostvars`
+    // and nothing looked wrong until an inventory rendered from `groups` failed
+    // to target it.
+    #[test]
+    fn a_group_declared_under_two_parents_keeps_every_host() {
+        let inv = input(
+            r#"
+all:
+  children:
+    dc1:
+      children:
+        web:
+          hosts:
+            web01.example.com:
+    dc2:
+      children:
+        web:
+          hosts:
+            web02.example.com:
+"#,
+        );
+        let (dataset, _) = parse(&inv).unwrap();
+
+        assert_eq!(
+            dataset.groups["web"].hosts,
+            vec!["web01.example.com", "web02.example.com"]
+        );
+        assert_eq!(dataset.hostvars.len(), 2);
+    }
+
+    // Both ancestries count, so a host inherits the vars of every parent the
+    // group is declared under, not just the last one walked.
+    #[test]
+    fn a_host_inherits_from_every_ancestry_of_its_group() {
+        let inv = input(
+            r#"
+all:
+  children:
+    dc1:
+      vars:
+        site: madrid
+      children:
+        web:
+          hosts:
+            web01.example.com:
+    dc2:
+      vars:
+        region: emea
+      children:
+        web: {}
+"#,
+        );
+        let (dataset, _) = parse(&inv).unwrap();
+
+        let vars = &dataset.hostvars["web01.example.com"];
+        assert_eq!(vars["site"], "madrid");
+        assert_eq!(vars["region"], "emea");
+    }
+
+    #[test]
+    fn a_group_declared_twice_merges_its_vars_and_children() {
+        let inv = input(
+            r#"
+all:
+  children:
+    dc1:
+      children:
+        web:
+          vars:
+            role: frontend
+          children:
+            web_cache:
+              hosts:
+                cache01.example.com:
+    dc2:
+      children:
+        web:
+          vars:
+            tier: public
+          hosts:
+            web02.example.com:
+"#,
+        );
+        let (dataset, _) = parse(&inv).unwrap();
+
+        let web = &dataset.groups["web"];
+        assert_eq!(web.children, vec!["web_cache"]);
+        assert_eq!(web.hosts, vec!["web02.example.com"]);
+        let group_vars = web.vars.as_ref().expect("web carries vars");
+        assert_eq!(group_vars["role"], "frontend");
+        assert_eq!(group_vars["tier"], "public");
+    }
+
+    // Merging must not let one declaration's host appear twice in the group.
+    #[test]
+    fn a_host_named_in_both_declarations_is_listed_once() {
+        let inv = input(
+            r#"
+all:
+  children:
+    dc1:
+      children:
+        web:
+          hosts:
+            web01.example.com:
+    dc2:
+      children:
+        web:
+          hosts:
+            web01.example.com:
+"#,
+        );
+        let (dataset, _) = parse(&inv).unwrap();
+        assert_eq!(dataset.groups["web"].hosts, vec!["web01.example.com"]);
     }
 
     #[test]

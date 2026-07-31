@@ -45,19 +45,31 @@ pub async fn list_projects(
         return Err(ApiError::admin_only());
     }
 
-    let mut projects: Vec<ProjectInfo> = state
-        .projects
-        .iter()
-        .map(|(id, project)| ProjectInfo {
+    // A loop rather than a map, because `checkout_present` is a filesystem
+    // question and it is asked with tokio::fs: `Path::exists` is a blocking
+    // syscall, and this handler runs on the runtime. One stat per configured
+    // project is small, but it is small on local disk — a checkout on a network
+    // or overlay volume is the case that would park a worker thread with
+    // unrelated requests queued behind it.
+    //
+    // An IO error (a permissions problem on the projects directory) reads as
+    // "no checkout", which is what an operator would conclude from it anyway.
+    let mut projects: Vec<ProjectInfo> = Vec::with_capacity(state.projects.len());
+    for (id, project) in &state.projects {
+        let checkout_present = tokio::fs::try_exists(state.projects_dir.join(id).join(".git"))
+            .await
+            .unwrap_or(false);
+
+        projects.push(ProjectInfo {
             project_id: id.clone(),
             name: project.name.clone(),
             git_url: project.git_url.clone(),
             branch: project.branch.clone(),
-            checkout_present: state.projects_dir.join(id).join(".git").exists(),
+            checkout_present,
             sync_interval_seconds: project.sync_interval_seconds,
             sync_on_boot: project.sync_on_boot,
-        })
-        .collect();
+        });
+    }
 
     projects.sort_by(|a, b| a.project_id.cmp(&b.project_id));
     Ok(Json(projects))

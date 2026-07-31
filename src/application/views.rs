@@ -354,8 +354,9 @@ impl<'a> ViewSnapshot<'a> {
     // rule as ownership.
     //
     // Membership is NOT filtered to what each member owns: a group is a
-    // statement about the topology, and the aa1 member listing the DC4 hosts is
-    // true whether or not the view serves their facts from there.
+    // statement about the topology, and the datacenter A member listing the
+    // datacenter B hosts is true whether or not the view serves their facts from
+    // there.
     pub fn groups(&self) -> BTreeMap<&str, MergedGroup<'_>> {
         let mut merged: BTreeMap<&str, MergedGroup> = BTreeMap::new();
 
@@ -459,7 +460,7 @@ mod tests {
     }
 
     // src-d42 is the inventory both members resolve ownership against;
-    // src-aa1 and src-dc4 are the facts sources the view serves.
+    // src-dc1 and src-dc2 are the facts sources the view serves.
     fn fixture() -> (MemoryCache, HashMap<String, Source>, View) {
         let cache = MemoryCache::new();
 
@@ -468,12 +469,12 @@ mod tests {
             CacheEntry::new(
                 dataset(serde_json::json!({
                     "hostvars": {
-                        "web01.aa1": {}, "web02.aa1": {},
-                        "db01.dc4": {}, "appliance.dc4": {}
+                        "web01.dc1": {}, "web02.dc1": {},
+                        "db01.dc2": {}, "appliance.dc2": {}
                     },
                     "groups": {
-                        "datacenter_aa1": {"hosts": ["web01.aa1", "web02.aa1"]},
-                        "datacenter_dc4": {"hosts": ["db01.dc4", "appliance.dc4"]}
+                        "datacenter_dc1": {"hosts": ["web01.dc1", "web02.dc1"]},
+                        "datacenter_dc2": {"hosts": ["db01.dc2", "appliance.dc2"]}
                     }
                 })),
                 7200,
@@ -481,23 +482,23 @@ mod tests {
         );
 
         cache.set(
-            "src-aa1",
+            "src-dc1",
             CacheEntry::new(
                 dataset(serde_json::json!({
-                    "hostvars": {"web01.aa1": {"os": "ol8"}, "web02.aa1": {"os": "ol9"}},
-                    "groups": {"ol8": {"hosts": ["web01.aa1"]}, "shared": {"hosts": ["web01.aa1"]}}
+                    "hostvars": {"web01.dc1": {"os": "ol8"}, "web02.dc1": {"os": "ol9"}},
+                    "groups": {"ol8": {"hosts": ["web01.dc1"]}, "shared": {"hosts": ["web01.dc1"]}}
                 })),
                 86400,
             ),
         );
 
-        // db01 only; appliance.dc4 is owned by this member and never gathered
+        // db01 only; appliance.dc2 is owned by this member and never gathered
         cache.set(
-            "src-dc4",
+            "src-dc2",
             CacheEntry::new(
                 dataset(serde_json::json!({
-                    "hostvars": {"db01.dc4": {"os": "rhel9"}},
-                    "groups": {"shared": {"hosts": ["db01.dc4"]}}
+                    "hostvars": {"db01.dc2": {"os": "rhel9"}},
+                    "groups": {"shared": {"hosts": ["db01.dc2"]}}
                 })),
                 30,
             ),
@@ -505,15 +506,15 @@ mod tests {
 
         let sources: HashMap<String, Source> = serde_yaml_ng::from_str(
             "src-d42:\n  name: d42\n  project_id: p\n  script_path: x\n  ttl_seconds: 7200\n\
-             src-aa1:\n  name: aa1\n  project_id: p\n  script_path: x\n  ttl_seconds: 86400\n\
-             src-dc4:\n  name: dc4\n  project_id: p\n  script_path: x\n  ttl_seconds: 30\n",
+             src-dc1:\n  name: dc1\n  project_id: p\n  script_path: x\n  ttl_seconds: 86400\n\
+             src-dc2:\n  name: dc2\n  project_id: p\n  script_path: x\n  ttl_seconds: 30\n",
         )
         .unwrap();
 
         let view: View = serde_yaml_ng::from_str(
             "name: All facts\nmembers:\n\
-             \x20 - source: src-aa1\n    owns:\n      source: src-d42\n      groups: [\"datacenter_aa1\"]\n\
-             \x20 - source: src-dc4\n    owns:\n      source: src-d42\n      groups: [\"datacenter_dc4\"]\n",
+             \x20 - source: src-dc1\n    owns:\n      source: src-d42\n      groups: [\"datacenter_dc1\"]\n\
+             \x20 - source: src-dc2\n    owns:\n      source: src-d42\n      groups: [\"datacenter_dc2\"]\n",
         )
         .unwrap();
 
@@ -532,8 +533,8 @@ mod tests {
     fn a_host_routes_to_the_member_that_claims_it() {
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.owner_of("web01.aa1").unwrap().source_id, "src-aa1");
-        assert_eq!(s.owner_of("db01.dc4").unwrap().source_id, "src-dc4");
+        assert_eq!(s.owner_of("web01.dc1").unwrap().source_id, "src-dc1");
+        assert_eq!(s.owner_of("db01.dc2").unwrap().source_id, "src-dc2");
         assert!(s.owner_of("nobody.example").is_none());
     }
 
@@ -548,7 +549,7 @@ mod tests {
         // load bearing for this comparison too.
         cache.update("src-d42", &mut |entry| {
             entry.merge_dataset(dataset(serde_json::json!({
-                "groups": {"datacenter_dc4": {"hosts": ["db01.dc4", "web01.aa1"]}}
+                "groups": {"datacenter_dc2": {"hosts": ["db01.dc2", "web01.dc1"]}}
             })));
         });
 
@@ -562,10 +563,10 @@ mod tests {
             indexed.routing(); // force the table on one of them
 
             for host in [
-                "web01.aa1",
-                "web02.aa1",
-                "db01.dc4",
-                "appliance.dc4",
+                "web01.dc1",
+                "web02.dc1",
+                "db01.dc2",
+                "appliance.dc2",
                 "nobody.example",
             ] {
                 assert_eq!(
@@ -586,8 +587,8 @@ mod tests {
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
 
-        let routed = s.route(&["db01.dc4".to_string()]).unwrap();
-        assert_eq!(routed[0].0.source_id, "src-dc4");
+        let routed = s.route(&["db01.dc2".to_string()]).unwrap();
+        assert_eq!(routed[0].0.source_id, "src-dc2");
         assert!(s.routing.get().is_none());
 
         // ...while a whole-view read does build it
@@ -601,15 +602,15 @@ mod tests {
         // absent from its dataset. Routing it is what lets a refresh reach it.
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.owner_of("appliance.dc4").unwrap().source_id, "src-dc4");
-        assert!(!s.hosts().contains(&"appliance.dc4"));
+        assert_eq!(s.owner_of("appliance.dc2").unwrap().source_id, "src-dc2");
+        assert!(!s.hosts().contains(&"appliance.dc2"));
     }
 
     #[test]
     fn the_union_is_every_owned_host_that_has_data() {
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.hosts(), vec!["db01.dc4", "web01.aa1", "web02.aa1"]);
+        assert_eq!(s.hosts(), vec!["db01.dc2", "web01.dc1", "web02.dc1"]);
     }
 
     #[test]
@@ -618,8 +619,8 @@ mod tests {
         let s = snap(&cache, &sources, &view);
         let selection = s.hosts();
         let vars = s.hostvars(&selection);
-        assert_eq!(vars["web01.aa1"]["os"], "ol8");
-        assert_eq!(vars["db01.dc4"]["os"], "rhel9");
+        assert_eq!(vars["web01.dc1"]["os"], "ol8");
+        assert_eq!(vars["db01.dc2"]["os"], "rhel9");
     }
 
     #[test]
@@ -627,8 +628,8 @@ mod tests {
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
         let groups = s.groups();
-        assert_eq!(groups["shared"].hosts, vec!["db01.dc4", "web01.aa1"]);
-        assert_eq!(groups["ol8"].hosts, vec!["web01.aa1"]);
+        assert_eq!(groups["shared"].hosts, vec!["db01.dc2", "web01.dc1"]);
+        assert_eq!(groups["ol8"].hosts, vec!["web01.dc1"]);
     }
 
     #[test]
@@ -636,7 +637,7 @@ mod tests {
         let (cache, sources, view) = fixture();
         let s = snap(&cache, &sources, &view);
         let err = s
-            .select(Some("web01.aa1,nobody.example"), None)
+            .select(Some("web01.dc1,nobody.example"), None)
             .expect_err("an unroutable host must not answer with empty data");
         assert_eq!(err.0, vec!["nobody.example"]);
     }
@@ -654,7 +655,7 @@ mod tests {
         let s = snap(&cache, &sources, &view);
         assert_eq!(
             s.select(None, Some("shared")).unwrap(),
-            vec!["db01.dc4", "web01.aa1"]
+            vec!["db01.dc2", "web01.dc1"]
         );
     }
 
@@ -664,15 +665,15 @@ mod tests {
         let s = snap(&cache, &sources, &view);
         let routed = s
             .route(&[
-                "db01.dc4".to_string(),
-                "web01.aa1".to_string(),
-                "web02.aa1".to_string(),
+                "db01.dc2".to_string(),
+                "web01.dc1".to_string(),
+                "web02.dc1".to_string(),
             ])
             .unwrap();
         assert_eq!(routed.len(), 2);
-        assert_eq!(routed[0].0.source_id, "src-aa1");
-        assert_eq!(routed[0].1, vec!["web01.aa1", "web02.aa1"]);
-        assert_eq!(routed[1].0.source_id, "src-dc4");
+        assert_eq!(routed[0].0.source_id, "src-dc1");
+        assert_eq!(routed[0].1, vec!["web01.dc1", "web02.dc1"]);
+        assert_eq!(routed[1].0.source_id, "src-dc2");
     }
 
     #[test]
@@ -681,28 +682,28 @@ mod tests {
         // Put the same host in both datacenter groups, the multi-homed haproxy
         cache.update("src-d42", &mut |entry| {
             entry.merge_dataset(dataset(serde_json::json!({
-                "groups": {"datacenter_dc4": {"hosts": ["db01.dc4", "web01.aa1"]}}
+                "groups": {"datacenter_dc2": {"hosts": ["db01.dc2", "web01.dc1"]}}
             })));
         });
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.owner_of("web01.aa1").unwrap().source_id, "src-aa1");
+        assert_eq!(s.owner_of("web01.dc1").unwrap().source_id, "src-dc1");
 
         view.members.reverse();
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.owner_of("web01.aa1").unwrap().source_id, "src-dc4");
+        assert_eq!(s.owner_of("web01.dc1").unwrap().source_id, "src-dc2");
     }
 
     #[test]
     fn a_declared_view_ttl_replaces_the_members_default() {
         let (cache, sources, mut view) = fixture();
         let s = snap(&cache, &sources, &view);
-        // Inherited: the dc4 member's own 30s
-        let dc4 = s.owner_of("db01.dc4").unwrap();
-        assert_eq!(dc4.default_ttl(s.view), 30);
+        // Inherited: the dc2 member's own 30s
+        let dc2 = s.owner_of("db01.dc2").unwrap();
+        assert_eq!(dc2.default_ttl(s.view), 30);
 
         view.ttl_seconds = Some(120);
         let s = snap(&cache, &sources, &view);
-        assert_eq!(s.owner_of("db01.dc4").unwrap().default_ttl(s.view), 120);
+        assert_eq!(s.owner_of("db01.dc2").unwrap().default_ttl(s.view), 120);
         assert_eq!(s.ttl_seconds(), 120);
     }
 
@@ -711,15 +712,15 @@ mod tests {
         let (cache, mut sources, mut view) = fixture();
         view.ttl_seconds = Some(120);
         sources
-            .get_mut("src-dc4")
+            .get_mut("src-dc2")
             .unwrap()
             .ttl_overrides
             .hosts
-            .insert("db01.dc4".to_string(), 5);
+            .insert("db01.dc2".to_string(), 5);
 
         let s = snap(&cache, &sources, &view);
-        let dc4 = s.owner_of("db01.dc4").unwrap();
-        assert_eq!(dc4.effective_ttl(s.view, "db01.dc4", &dc4.group_ttls()), 5);
+        let dc2 = s.owner_of("db01.dc2").unwrap();
+        assert_eq!(dc2.effective_ttl(s.view, "db01.dc2", &dc2.group_ttls()), 5);
     }
 
     #[test]
@@ -735,26 +736,26 @@ mod tests {
     #[test]
     fn an_uncached_member_makes_the_view_not_fresh() {
         let (cache, sources, view) = fixture();
-        cache.remove("src-dc4");
+        cache.remove("src-dc2");
         let s = snap(&cache, &sources, &view);
         assert!(!s.is_fresh());
         // and its hosts leave the union, while staying routable for a refresh
-        assert_eq!(s.hosts(), vec!["web01.aa1", "web02.aa1"]);
-        assert_eq!(s.owner_of("db01.dc4").unwrap().source_id, "src-dc4");
+        assert_eq!(s.hosts(), vec!["web01.dc1", "web02.dc1"]);
+        assert_eq!(s.owner_of("db01.dc2").unwrap().source_id, "src-dc2");
     }
 
     #[test]
     fn without_the_ownership_source_only_explicit_hosts_route() {
         let (cache, sources, mut view) = fixture();
-        view.members[1].owns.hosts = vec!["appliance.dc4".to_string()];
+        view.members[1].owns.hosts = vec!["appliance.dc2".to_string()];
         cache.remove("src-d42");
 
         let s = snap(&cache, &sources, &view);
         assert!(!s.members[0].ownership_cached());
         // The group patterns cannot be expanded...
-        assert!(s.owner_of("web01.aa1").is_none());
+        assert!(s.owner_of("web01.dc1").is_none());
         // ...but a named host is a claim of its own
-        assert_eq!(s.owner_of("appliance.dc4").unwrap().source_id, "src-dc4");
+        assert_eq!(s.owner_of("appliance.dc2").unwrap().source_id, "src-dc2");
     }
 
     #[test]

@@ -99,15 +99,15 @@ own. Full treatment in [views](views.md).
 vw-facts-all:
   name: "Facts, both datacenters"
   members:                            # ordered: the first claim wins
-    - source: "src-ssh-aa1"           # where the facts come from
+    - source: "src-ssh-dc1"           # where the facts come from
       owns:
         source: "src-d42"             # inventory the pattern resolves against
-        groups: ["datacenter_aa1"]
-    - source: "src-edge-dc4"          # a remote (federated) member works too
+        groups: ["datacenter_dc1"]
+    - source: "src-edge-dc2"          # a remote (federated) member works too
       owns:
         source: "src-d42"
-        groups: ["datacenter_dc4"]
-        hosts: ["appliance01.dc4.example"]   # claimed literally as well
+        groups: ["datacenter_dc2"]
+        hosts: ["appliance01.dc2.example"]   # claimed literally as well
   # ttl_seconds: 30                   # optional; absent = inherit the owner's
 ```
 
@@ -185,8 +185,8 @@ another, matched by hostname. No script needed:
 ```yaml
 enrich-business-unit:
   name: "Add business_unit from D42"
-  target_id: "src-ssh-pq-facts"   # dataset being enriched
-  source_id: "src-d42-proquest"   # dataset to copy fields from
+  target_id: "src-ssh-dc1"        # dataset being enriched
+  source_id: "src-d42"            # dataset to copy fields from
   fields: ["business_unit"]       # top-level hostvars keys to copy
   sync_interval_seconds: 3600
 ```

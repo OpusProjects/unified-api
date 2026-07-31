@@ -19,10 +19,10 @@ use unified_api::ports::connector::ConnectorPort;
 fn edge_dataset() -> Dataset {
     serde_json::from_value(serde_json::json!({
         "hostvars": {
-            "web01.mad.example.com": {"ansible_host": "10.1.0.1", "os": "OracleLinux"},
-            "web02.mad.example.com": {"os": "OracleLinux"}
+            "web01.dc1.example.com": {"ansible_host": "10.1.0.1", "os": "OracleLinux"},
+            "web02.dc1.example.com": {"os": "OracleLinux"}
         },
-        "groups": {"madrid": {"hosts": ["web01.mad.example.com", "web02.mad.example.com"]}}
+        "groups": {"dc1": {"hosts": ["web01.dc1.example.com", "web02.dc1.example.com"]}}
     }))
     .unwrap()
 }
@@ -39,8 +39,8 @@ async fn spawn_edge(api_key: &str) -> String {
         "src-edge",
         CacheEntry::restore(edge_dataset(), 3600, 300, {
             let mut ages = HashMap::new();
-            ages.insert("web01.mad.example.com".to_string(), 300);
-            ages.insert("web02.mad.example.com".to_string(), 120);
+            ages.insert("web01.dc1.example.com".to_string(), 300);
+            ages.insert("web02.dc1.example.com".to_string(), 120);
             ages
         }),
     );
@@ -62,8 +62,8 @@ async fn spawn_open_edge() -> String {
         "src-edge",
         CacheEntry::restore(edge_dataset(), 3600, 300, {
             let mut ages = HashMap::new();
-            ages.insert("web01.mad.example.com".to_string(), 300);
-            ages.insert("web02.mad.example.com".to_string(), 120);
+            ages.insert("web01.dc1.example.com".to_string(), 300);
+            ages.insert("web02.dc1.example.com".to_string(), 120);
             ages
         }),
     );
@@ -78,7 +78,7 @@ async fn spawn_open_edge() -> String {
 
 fn remote_source(url: &str) -> Source {
     Source {
-        name: "DC Madrid".to_string(),
+        name: "Datacenter A".to_string(),
         project_id: "prj-unused".to_string(),
         script_path: "src-edge".to_string(),
         script_args: vec![],
@@ -127,14 +127,14 @@ async fn fetches_the_remote_dataset_and_its_ages() {
 
     assert_eq!(output.dataset.hostvars.len(), 2);
     assert_eq!(
-        output.dataset.hostvars["web01.mad.example.com"]["ansible_host"],
+        output.dataset.hostvars["web01.dc1.example.com"]["ansible_host"],
         "10.1.0.1"
     );
     // the origin's ages came along
     let ages = output.ages.expect("ages must be propagated");
     assert!(ages.dataset_age_seconds >= 300);
-    assert!(ages.host_ages["web02.mad.example.com"] >= 120);
-    assert!(ages.host_ages["web02.mad.example.com"] < 300);
+    assert!(ages.host_ages["web02.dc1.example.com"] >= 120);
+    assert!(ages.host_ages["web02.dc1.example.com"] < 300);
 }
 
 #[tokio::test]
@@ -180,7 +180,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
     let url = spawn_edge("edge-key").await;
 
     let source = Source {
-        name: "DC Madrid".to_string(),
+        name: "Datacenter A".to_string(),
         project_id: "prj-unused".to_string(),
         script_path: "src-edge".to_string(),
         script_args: vec![],
@@ -225,7 +225,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
         &SyncCoordinator::new(),
-        "src-madrid",
+        "src-dc1",
         &source,
         SyncScope::Full,
         None,
@@ -235,7 +235,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
     assert!(outcome.success(), "sync failed: {:?}", outcome.error);
     assert_eq!(outcome.total_hosts, 2);
 
-    let entry = central_cache.get("src-madrid").unwrap();
+    let entry = central_cache.get("src-dc1").unwrap();
     // truthful freshness: the entry is at least as old as it was at the edge
     assert!(
         entry.age_seconds() >= 300,
@@ -259,9 +259,9 @@ async fn host_scope_only_fetches_the_named_host() {
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
         &SyncCoordinator::new(),
-        "src-madrid",
+        "src-dc1",
         &remote_source(&url),
-        SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+        SyncScope::Hosts(vec!["web02.dc1.example.com".to_string()]),
         None,
     )
     .await;
@@ -270,11 +270,11 @@ async fn host_scope_only_fetches_the_named_host() {
     // 1, not 2: the edge answered a filtered dataset. Before honouring the
     // scope this was the full host count.
     assert_eq!(outcome.total_hosts, 1);
-    assert_eq!(outcome.scope, "host:web02.mad.example.com");
+    assert_eq!(outcome.scope, "host:web02.dc1.example.com");
 
-    let entry = central_cache.get("src-madrid").unwrap();
-    assert!(entry.dataset.hostvars.contains_key("web02.mad.example.com"));
-    assert!(!entry.dataset.hostvars.contains_key("web01.mad.example.com"));
+    let entry = central_cache.get("src-dc1").unwrap();
+    assert!(entry.dataset.hostvars.contains_key("web02.dc1.example.com"));
+    assert!(!entry.dataset.hostvars.contains_key("web01.dc1.example.com"));
 }
 
 // The point of federation: a host pulled from the edge carries the age it has
@@ -290,18 +290,18 @@ async fn host_scope_keeps_the_origin_age_for_that_host() {
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
         &SyncCoordinator::new(),
-        "src-madrid",
+        "src-dc1",
         &remote_source(&url),
-        SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
+        SyncScope::Hosts(vec!["web02.dc1.example.com".to_string()]),
         None,
     )
     .await;
     assert!(outcome.success(), "sync failed: {:?}", outcome.error);
 
     let age = central_cache
-        .get("src-madrid")
+        .get("src-dc1")
         .unwrap()
-        .host_age_seconds("web02.mad.example.com")
+        .host_age_seconds("web02.dc1.example.com")
         .expect("the host must have a timestamp");
 
     assert!(
@@ -319,14 +319,14 @@ async fn successive_host_scopes_accumulate_in_the_entry() {
     let source = remote_source(&url);
     let central_cache = MemoryCache::new();
 
-    for host in ["web01.mad.example.com", "web02.mad.example.com"] {
+    for host in ["web01.dc1.example.com", "web02.dc1.example.com"] {
         let outcome = sync_source(
             &central_cache,
             &RemoteConnector::new(),
             &MockSecrets::new(),
             &SyncHealthRegistry::new(),
             &SyncCoordinator::new(),
-            "src-madrid",
+            "src-dc1",
             &source,
             SyncScope::Hosts(vec![host.to_string()]),
             None,
@@ -340,11 +340,11 @@ async fn successive_host_scopes_accumulate_in_the_entry() {
         );
     }
 
-    let entry = central_cache.get("src-madrid").unwrap();
+    let entry = central_cache.get("src-dc1").unwrap();
     assert_eq!(entry.dataset.hostvars.len(), 2);
     // each kept ITS own origin age, not the other's
-    let web01 = entry.host_age_seconds("web01.mad.example.com").unwrap();
-    let web02 = entry.host_age_seconds("web02.mad.example.com").unwrap();
+    let web01 = entry.host_age_seconds("web01.dc1.example.com").unwrap();
+    let web02 = entry.host_age_seconds("web02.dc1.example.com").unwrap();
     assert!((300..360).contains(&web01), "web01 age was {}", web01);
     assert!((120..180).contains(&web02), "web02 age was {}", web02);
 }
@@ -362,9 +362,9 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
         &SyncCoordinator::new(),
-        "src-madrid",
+        "src-dc1",
         &remote_source(&url),
-        SyncScope::Hosts(vec!["ghost.mad.example.com".to_string()]),
+        SyncScope::Hosts(vec!["ghost.dc1.example.com".to_string()]),
         None,
     )
     .await;
@@ -372,7 +372,7 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
     // The remote answers an empty filtered dataset (an unmatched filter is an
     // empty result, not a 404), so the sync itself succeeds with nothing in it
     assert_eq!(outcome.total_hosts, 0);
-    assert!(central_cache.get("src-madrid").is_none());
+    assert!(central_cache.get("src-dc1").is_none());
 }
 
 // =========================================================================

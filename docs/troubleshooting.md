@@ -69,7 +69,7 @@ curl -s localhost:8182/api/v1/sources/vw-all/status -H "$KEY" | jq '.members'
 ```
 
 ```json
-[{ "source_id": "src-aa1", "cached": true, "ownership_cached": false, ... }]
+[{ "source_id": "src-dc1", "cached": true, "ownership_cached": false, ... }]
 ```
 
 `ownership_cached: false` is the usual cause: the inventory source the member's

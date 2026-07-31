@@ -394,10 +394,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   Federation solved this at one end and not the other. `connector_type: remote`
   means a central needs no credentials and no SSH path into a datacenter,
   because the edge that owns the hosts does the gathering — but the *consumer*
-  still had to know the topology, since the facts of a DC4 host lived under a
-  different source id than those of an aa1 host. Every consumer learned the
-  split and relearned it whenever an edge was added. A view is one address for
-  "the facts".
+  still had to know the topology, since the facts of a datacenter B host lived
+  under a different source id than those of a datacenter A host. Every consumer
+  learned the split and relearned it whenever an edge was added. A view is one
+  address for "the facts".
 
   It answers on the **source routes**, in the same shapes — `/dataset`,
   `/status`, `/groups`, `/hosts` — and shares the source id space, so migrating

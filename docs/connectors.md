@@ -260,16 +260,16 @@ aggregates them — consumers only ever talk to the central.
 
 ```yaml
 # on the central
-src-madrid:
-  name: "DC Madrid"
+src-dc1:
+  name: "Datacenter A"
   connector_type: "remote"
   project_id: "prj-unused"          # required by schema; unused here
   script_path: "src-ssh"            # the source id ON THE REMOTE instance
-  credential_ids: ["cred-edge-mad"] # token credential = the remote API key
+  credential_ids: ["cred-edge-dc1"] # token credential = the remote API key
   sync_interval_seconds: 120
   ttl_seconds: 600
   config:
-    url: "https://unified-api-mad.example.com"
+    url: "https://unified-api-dc1.example.com"
     # http_timeout_seconds: "30"    # default 30
     # insecure_tls: "true"          # self-signed remotes; opt-in, never default
 ```

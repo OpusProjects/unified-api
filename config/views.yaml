@@ -12,8 +12,8 @@
 # Why it exists: federation (connector_type: remote) means a central needs no
 # credentials into a datacenter, because the edge that owns the hosts does the
 # gathering. But the CONSUMER still had to know the topology, since the facts of
-# a DC4 host lived under a different source id than those of an aa1 host — and
-# every new edge made every consumer relearn the split.
+# a datacenter B host lived under a different source id than those of a
+# datacenter A host — and every new edge made every consumer relearn the split.
 #
 # vw-facts-all:
 #   name: "Facts, both datacenters"
@@ -22,15 +22,15 @@
 #   # normal (a multi-homed host legitimately sits in two datacenter groups) and
 #   # needs a rule that is stable rather than clever.
 #   members:
-#     - source: "src-ssh-aa1"           # where the facts come from
+#     - source: "src-ssh-dc1"           # where the facts come from
 #       owns:
 #         source: "src-d42"             # inventory the pattern resolves against
-#         groups: ["datacenter_aa1"]    # this member owns those groups' members
-#     - source: "src-edge-dc4"          # a remote (federated) member works too
+#         groups: ["datacenter_dc1"]    # this member owns those groups' members
+#     - source: "src-edge-dc2"          # a remote (federated) member works too
 #       owns:
 #         source: "src-d42"
-#         groups: ["datacenter_dc4"]
-#         # hosts: ["appliance01.dc4.example"]   # claimed literally, whether or
+#         groups: ["datacenter_dc2"]
+#         # hosts: ["appliance01.dc2.example"]   # claimed literally, whether or
 #         #                                      # not the inventory knows them
 #
 #   # Optional. Absent = each host inherits its owning member's TTL, so the

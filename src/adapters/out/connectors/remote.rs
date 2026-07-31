@@ -15,12 +15,12 @@ use crate::ports::connector::{
 // Federation connector: another unified-api instance is the source.
 //
 //   central sources.yaml:
-//     src-madrid:
+//     src-dc1:
 //       connector_type: "remote"
 //       script_path: "src-ssh"          # source id ON THE REMOTE instance
 //       credential_ids: ["cred-edge"]   # token credential = remote API key
 //       config:
-//         url: "https://unified-api-mad.example.com"
+//         url: "https://unified-api-dc1.example.com"
 //
 // GET {url}/api/v1/sources/{id}/dataset returns exactly the Dataset shape a
 // connector must produce — the API itself is the federation protocol. A
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn group_scope_is_not_translated() {
-        let cfg = config(&[("scope", "group"), ("target", "madrid")]);
+        let cfg = config(&[("scope", "group"), ("target", "dc1")]);
         assert_eq!(host_scope_filter(&cfg), "");
     }
 

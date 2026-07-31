@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A hostname the caller chose can no longer panic the request.** The
+  `x-unified-api-refreshed-hosts` header is built from the hosts a successful
+  refresh was asked for — and a host the connector did not return is still among
+  them, so the value is the caller's own `?host=` text. A percent-encoded control
+  byte in it produced an invalid header value, which `Builder::header` defers to
+  `body()`, where the handler unwraps: the request panicked and the connection
+  dropped instead of answering.
+
+  Reaching it needs a source with `allow_on_demand_refresh` and a connector that
+  exits 0 without returning the host it was asked for — which is an ordinary
+  connector, since honouring the scope is an optimisation rather than a duty.
+  Both refresh headers are now skipped when their value cannot be sent: they are
+  metadata about the response, and failing to describe a response is no reason
+  to refuse to send it.
+
 - **A static inventory no longer drops hosts from a group declared twice.**
   Declaring one group under two parents is ordinary Ansible, and the parser
   replaced the earlier declaration with the later one — so every host the first

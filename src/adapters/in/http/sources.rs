@@ -138,20 +138,44 @@ fn with_refresh_headers(
     if let Some(outcome) = refresh {
         builder = builder.header(HEADER_REFRESHED, (outcome.error.is_none()).to_string());
         if !outcome.refreshed.is_empty() {
-            builder = builder.header(HEADER_REFRESHED_HOSTS, outcome.refreshed.join(","));
+            builder = header_if_valid(builder, HEADER_REFRESHED_HOSTS, outcome.refreshed.join(","));
         }
         if let Some(error) = &outcome.error {
-            // Header values cannot carry newlines or control characters, and a
-            // connector's error text can; replacing them keeps a broken script's
-            // stderr from becoming an unsendable response.
-            let sanitized: String = error
-                .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
-                .collect();
-            builder = builder.header(HEADER_REFRESH_ERROR, sanitized);
+            builder = header_if_valid(builder, HEADER_REFRESH_ERROR, sanitize_header_value(error));
         }
     }
     builder
+}
+
+// Header values cannot carry control characters, and both of these carry text
+// from outside: a connector's stderr, and the hostnames the CALLER named in
+// `?host=` — which come back in `refreshed` for any host a successful sync did
+// not return, so a percent-encoded control byte in the query string reaches
+// here verbatim.
+//
+// `Builder::header` defers an invalid value to `body()`, where every caller
+// unwraps, so this used to panic the handler: a request for a host with a funny
+// name dropped the connection. Skipping the header instead is the proportionate
+// answer — it is metadata about the response, and failing to describe a response
+// is no reason to refuse to send it.
+fn header_if_valid(
+    builder: axum::http::response::Builder,
+    name: &'static str,
+    value: String,
+) -> axum::http::response::Builder {
+    match axum::http::HeaderValue::try_from(value) {
+        Ok(value) => builder.header(name, value),
+        Err(_) => builder,
+    }
+}
+
+// Replaces what a header cannot carry, so the common case — a script's stderr
+// with newlines in it — still reaches the caller instead of being dropped.
+pub(crate) fn sanitize_header_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 // ToSchema = utoipa generates the JSON Schema definition for this struct

@@ -407,3 +407,60 @@ async fn a_plain_read_is_untouched() {
     assert!(response.refresh_error.is_none());
     assert!(gathers(&counter).is_empty());
 }
+
+// =========================================================================
+// A hostname the caller chose comes back in a header, so it must not be able
+// to break the response
+// =========================================================================
+
+// `refreshed` lists the hosts a successful sync was asked for, and a host the
+// connector did not return is still in it — so the value is the caller's own
+// `?host=` text. A percent-encoded control byte in it used to reach
+// `Builder::header`, which defers the invalid value to `body()`, where the
+// handler unwraps: the request panicked and the connection dropped.
+//
+// ignores_scope.py is the connector shape that exposes it — it exits 0 without
+// returning the requested host, which the other samples never do.
+#[tokio::test]
+async fn a_hostname_that_cannot_go_in_a_header_does_not_panic_the_handler() {
+    let mut source = counting_source("/dev/null", 60, true, &[]);
+    source.script_path = "tests/adapters/out/connectors/ignores_scope.py".to_string();
+    source.config.clear();
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources(source))
+        .build_with_state();
+    state.cache.set("src-count", stale_entry(300, 60));
+
+    let response = get(
+        app,
+        "/api/v1/sources/src-count/dataset?host=%01bad.example&refresh=true",
+    )
+    .await;
+
+    // The read still answers with the cached data
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.refreshed.as_deref(), Some("true"));
+    // and the header that could not carry the name is simply absent
+    assert!(response.refreshed_hosts.is_none());
+}
+
+// The ordinary case must keep working: a hostname that fits in a header is
+// still reported, so skipping is confined to what genuinely cannot be sent.
+#[tokio::test]
+async fn a_normal_hostname_is_still_reported_in_the_header() {
+    let counter = counter_path("header-ok");
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources(counting_source(&counter, 60, true, &[])))
+        .build_with_state();
+    state.cache.set("src-count", stale_entry(300, 60));
+
+    let response = get(
+        app,
+        "/api/v1/sources/src-count/dataset?host=h1.example&refresh=true",
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.refreshed_hosts.as_deref(), Some("h1.example"));
+}

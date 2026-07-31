@@ -11,7 +11,7 @@ use crate::AppState;
 use crate::adapters::r#in::http::error::ApiError;
 use crate::adapters::r#in::http::sources::{
     CachedSourceInfo, DatasetParams, GroupInfo, HostList, HostStatus, SourceStatus, StatusParams,
-    SyncHealthInfo,
+    SyncHealthInfo, sanitize_header_value,
 };
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::application::views::{MergedGroup, UnclaimedHosts, snapshot};
@@ -425,17 +425,27 @@ fn with_refresh_headers(
     if let Some(outcome) = refresh {
         builder = builder.header(HEADER_REFRESHED, (outcome.error.is_none()).to_string());
         if !outcome.refreshed.is_empty() {
-            builder = builder.header(HEADER_REFRESHED_HOSTS, outcome.refreshed.join(","));
+            builder = header_if_valid(builder, HEADER_REFRESHED_HOSTS, outcome.refreshed.join(","));
         }
         if let Some(error) = &outcome.error {
-            let sanitized: String = error
-                .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
-                .collect();
-            builder = builder.header(HEADER_REFRESH_ERROR, sanitized);
+            builder = header_if_valid(builder, HEADER_REFRESH_ERROR, sanitize_header_value(error));
         }
     }
     builder
+}
+
+// Same reasoning as the source path, which owns the explanation: an invalid
+// value skips its header rather than being deferred into a `body()` unwrap that
+// panics the handler.
+fn header_if_valid(
+    builder: axum::http::response::Builder,
+    name: &'static str,
+    value: String,
+) -> axum::http::response::Builder {
+    match axum::http::HeaderValue::try_from(value) {
+        Ok(value) => builder.header(name, value),
+        Err(_) => builder,
+    }
 }
 
 fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {

@@ -113,6 +113,18 @@ x-unified-api-refreshed-hosts: web01.example.com
 - **`400`** — `refresh=true` without `?host=`. A whole-source refresh on a read
   would gather the entire inventory, so the hosts have to be named.
 
+## A manual sync seems to have had no effect
+
+Syncs of one source run one at a time. If a scheduled sync was already under way
+your `POST /sync` waited for it, and on a source that takes minutes that looks
+like nothing happening. The response arrives when the sync does, with its own
+`sync_duration_ms`.
+
+The same queueing is why a `refresh=true` issued during a long full sync can come
+back `x-unified-api-refreshed: false` with `refresh did not finish within Ns`:
+it waited for the sync, ran out of its own budget, and served the cached data
+rather than overtaking a gather already in flight.
+
 ## A script enricher's keys keep disappearing
 
 A script enricher's `hostvars` entry **replaces** a host's variable map rather

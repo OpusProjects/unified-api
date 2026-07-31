@@ -103,6 +103,7 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     &**connector,
                     &*state.secrets,
                     &state.sync_health,
+                    &state.syncs,
                     &source_id,
                     &source,
                     SyncScope::Full,

@@ -110,6 +110,7 @@ pub async fn sync_source(
         &**connector,
         &*state.secrets,
         &state.sync_health,
+        &state.syncs,
         &id,
         source,
         request,

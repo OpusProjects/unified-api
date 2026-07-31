@@ -44,6 +44,10 @@ pub struct AppState {
     // Coalescing and limits for reads that are allowed to refresh before
     // answering. In-process state like sync_health: no outside world behind it.
     pub refresh: Arc<RefreshCoordinator>,
+    // Serialises syncs of one source, so a manual sync landing mid-way through a
+    // scheduled one cannot let the older gather win. In-process state like the
+    // two above.
+    pub syncs: Arc<crate::application::sync::SyncCoordinator>,
     // /readyz turns green only when every configured source has synced, rather
     // than when at least one has (see config::ServerConfig)
     pub readyz_require_all_sources: bool,

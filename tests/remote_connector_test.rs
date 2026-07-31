@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use unified_api::adapters::out::cache::memory::MemoryCache;
 use unified_api::adapters::out::connectors::remote::RemoteConnector;
 use unified_api::adapters::out::secrets::mock::MockSecrets;
-use unified_api::application::sync::{DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source};
+use unified_api::application::sync::{
+    DEFAULT_REFRESH_DEPTH, SyncCoordinator, SyncRequest, SyncScope, sync_source,
+};
 use unified_api::domain::cache_entry::CacheEntry;
 use unified_api::domain::dataset::Dataset;
 use unified_api::domain::source::{ConnectorType, Source};
@@ -222,6 +224,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-madrid",
         &source,
         SyncScope::Full,
@@ -255,6 +258,7 @@ async fn host_scope_only_fetches_the_named_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
@@ -285,6 +289,7 @@ async fn host_scope_keeps_the_origin_age_for_that_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["web02.mad.example.com".to_string()]),
@@ -320,6 +325,7 @@ async fn successive_host_scopes_accumulate_in_the_entry() {
             &RemoteConnector::new(),
             &MockSecrets::new(),
             &SyncHealthRegistry::new(),
+            &SyncCoordinator::new(),
             "src-madrid",
             &source,
             SyncScope::Hosts(vec![host.to_string()]),
@@ -355,6 +361,7 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-madrid",
         &remote_source(&url),
         SyncScope::Hosts(vec!["ghost.mad.example.com".to_string()]),
@@ -443,6 +450,7 @@ async fn without_refresh_origin_the_edge_does_not_re_gather() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
         SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
@@ -490,6 +498,7 @@ async fn refresh_origin_makes_the_edge_re_gather_the_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
         SyncRequest::refreshing_origin(
@@ -534,6 +543,7 @@ async fn an_origin_that_cannot_re_gather_fails_the_sync() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
         SyncRequest::refreshing_origin(
@@ -567,6 +577,7 @@ async fn an_exhausted_hop_budget_still_serves_the_data() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
         SyncRequest::refreshing_origin(

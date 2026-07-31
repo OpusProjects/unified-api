@@ -105,6 +105,40 @@ impl From<SyncScope> for SyncRequest {
     }
 }
 
+// One lock per source, so two syncs of the same source run one after the other.
+//
+// The scheduler and `POST /sync` call the same use case with nothing between
+// them, so a manual sync can land in the middle of a scheduled one. The cost is
+// not only the duplicated gather — it is that the two finish in an order nobody
+// chose. A slow full sync writes the dataset it collected minutes earlier over
+// a scoped refresh that just fetched the truth, and `CacheEntry::new` stamps
+// every host "now", so the stale value is labelled freshly gathered and the next
+// refresh declines to correct it. The consumer asked for current facts, got
+// older ones, and the freshness data agrees with the wrong answer.
+//
+// Per SOURCE rather than per host, unlike the refresh coordinator: the unit of a
+// sync is the whole entry, and a full sync rewrites all of it.
+//
+// Entries are never removed — one per configured source, a key and an Arc — the
+// same trade the refresh coordinator makes for the same reason.
+#[derive(Default)]
+pub struct SyncCoordinator {
+    in_flight: dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+}
+
+impl SyncCoordinator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock_for(&self, source_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.in_flight
+            .entry(source_id.to_string())
+            .or_default()
+            .clone()
+    }
+}
+
 // Result of a sync — pure data, no HTTP types.
 // The handler converts it to JSON; the scheduler converts it to logs.
 pub struct SyncOutcome {
@@ -153,6 +187,11 @@ pub async fn sync_source(
     connector: &dyn ConnectorPort,
     secrets: &dyn SecretsPort,
     health: &SyncHealthRegistry,
+    // Serialises syncs of the same source. Held for the whole use case — gather,
+    // cache write and enrichment — because all three are the sync's effect on
+    // one entry, and a second sync interleaving with any of them is what lets an
+    // older gather win.
+    syncs: &SyncCoordinator,
     source_id: &str,
     source: &Source,
     // `impl Into<SyncRequest>` accepts both a bare SyncScope (the plain sync
@@ -163,6 +202,8 @@ pub async fn sync_source(
     // test that only cares about the gather)
     enrichment: Option<&Enrichment<'_>>,
 ) -> SyncOutcome {
+    let _guard = syncs.lock_for(source_id).lock_owned().await;
+
     let outcome = run_sync(cache, connector, secrets, source_id, source, request.into()).await;
 
     // Recorded here rather than at the call sites so the scheduler and the HTTP
@@ -1028,5 +1069,131 @@ mod tests {
     fn the_other_labels_are_unchanged() {
         assert_eq!(SyncScope::Full.label(), "full");
         assert_eq!(SyncScope::Group("magi".to_string()).label(), "group:magi");
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use crate::adapters::out::cache::memory::MemoryCache;
+    use crate::adapters::out::secrets::mock::MockSecrets;
+    use crate::domain::dataset::Dataset;
+    use crate::domain::source::OutputFormat;
+    use crate::ports::connector::ConnectorResult;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    // A connector where a FULL gather is slow and a host-scoped one is instant,
+    // and each stamps the host with which gather produced it. That is the shape
+    // that exposes the ordering: the slow one starts first and finishes last.
+    struct PacedConnector {
+        full_delay: Duration,
+    }
+
+    impl ConnectorPort for PacedConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _output_format: OutputFormat,
+            config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            let scoped = config.get("scope").map(String::as_str) == Some("host");
+            let delay = if scoped {
+                Duration::ZERO
+            } else {
+                self.full_delay
+            };
+            let marker = if scoped { "scoped" } else { "full" };
+
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                let vars: HostVars = [("gathered_by".to_string(), serde_json::json!(marker))]
+                    .into_iter()
+                    .collect();
+                Ok(Dataset {
+                    hostvars: [("a.example".to_string(), vars)].into_iter().collect(),
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                }
+                .into())
+            })
+        }
+    }
+
+    fn source() -> Source {
+        serde_yaml_ng::from_str(
+            "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: replace\n",
+        )
+        .expect("source fixture")
+    }
+
+    // A slow full sync must not overwrite a scoped gather that started later and
+    // finished first. Without serialisation it does: the full sync writes the
+    // data it collected before the refresh even began, and CacheEntry::new
+    // stamps every host "now" — so the consumer's refresh is silently undone
+    // AND the stale value is labelled freshly gathered, which stops the next
+    // refresh from correcting it.
+    #[tokio::test]
+    async fn a_slow_full_sync_does_not_clobber_a_later_scoped_gather() {
+        let cache = Arc::new(MemoryCache::new());
+        let connector = Arc::new(PacedConnector {
+            full_delay: Duration::from_millis(300),
+        });
+        let secrets = Arc::new(MockSecrets::new());
+        let health = Arc::new(SyncHealthRegistry::new());
+        // ONE coordinator, shared by both syncs — the same instance AppState holds
+        let syncs = Arc::new(SyncCoordinator::new());
+        let src = source();
+
+        let full = {
+            let (cache, connector, secrets, health, syncs, src) = (
+                Arc::clone(&cache),
+                Arc::clone(&connector),
+                Arc::clone(&secrets),
+                Arc::clone(&health),
+                Arc::clone(&syncs),
+                src.clone(),
+            );
+            tokio::spawn(async move {
+                sync_source(
+                    &*cache,
+                    &*connector,
+                    &*secrets,
+                    &health,
+                    &syncs,
+                    "src",
+                    &src,
+                    SyncScope::Full,
+                    None,
+                )
+                .await
+            })
+        };
+
+        // let the full gather get under way, then refresh one host
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        sync_source(
+            &*cache,
+            &*connector,
+            &*secrets,
+            &health,
+            &syncs,
+            "src",
+            &src,
+            SyncScope::Hosts(vec!["a.example".to_string()]),
+            None,
+        )
+        .await;
+
+        full.await.expect("full sync task");
+
+        let entry = cache.get("src").expect("entry");
+        assert_eq!(
+            entry.dataset.hostvars["a.example"]["gathered_by"], "scoped",
+            "the slow full sync overwrote a gather that started after it"
+        );
     }
 }

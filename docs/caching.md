@@ -40,6 +40,11 @@ the status endpoint or trigger a scoped sync.
 
 ## How writes land
 
+Syncs of the **same source** are serialised: the scheduler, `POST /sync` and an
+on-demand refresh all write the one cache entry, and letting them interleave
+meant the gather that *finished* last won rather than the one that *started*
+last. Different sources sync in parallel as before.
+
 A **full sync** applies the source's `sync_mode`:
 
 - `replace` (default) — the new dataset swaps in wholesale; all host timestamps reset.

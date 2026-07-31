@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use crate::application::sync::{
-    DEFAULT_REFRESH_DEPTH, Enrichment, SyncRequest, SyncScope, sync_source,
+    DEFAULT_REFRESH_DEPTH, Enrichment, SyncCoordinator, SyncRequest, SyncScope, sync_source,
 };
 use crate::domain::source::Source;
 use crate::domain::sync_health::SyncHealthRegistry;
@@ -115,6 +115,11 @@ pub async fn refresh_hosts(
     secrets: &dyn SecretsPort,
     health: &SyncHealthRegistry,
     coordinator: &RefreshCoordinator,
+    // Forwarded to the sync, which serialises per source. A refresh waiting here
+    // behind a slow full sync will hit its own budget below and serve the cached
+    // data — the right answer: it is a read that may improve its data, never one
+    // that may overtake a gather already in flight.
+    syncs: &SyncCoordinator,
     source_id: &str,
     source: &Source,
     hosts: &[String],
@@ -178,6 +183,7 @@ pub async fn refresh_hosts(
         connector,
         secrets,
         health,
+        syncs,
         source_id,
         source,
         SyncRequest::refreshing_origin(

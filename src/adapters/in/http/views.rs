@@ -386,6 +386,7 @@ async fn refresh_before_reading(
             &*state.secrets,
             &state.sync_health,
             &state.refresh,
+            &state.syncs,
             member.source_id,
             source,
             &member_hosts,

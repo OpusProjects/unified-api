@@ -69,7 +69,7 @@ curl -s localhost:8182/api/v1/sources/vw-all/status -H "$KEY" | jq '.members'
 ```
 
 ```json
-[{ "source_id": "src-aa1", "cached": true, "ownership_cached": false, ... }]
+[{ "source_id": "src-dc1", "cached": true, "ownership_cached": false, ... }]
 ```
 
 `ownership_cached: false` is the usual cause: the inventory source the member's
@@ -112,6 +112,18 @@ x-unified-api-refreshed-hosts: web01.example.com
   that owns the named host is the one that needs it.
 - **`400`** — `refresh=true` without `?host=`. A whole-source refresh on a read
   would gather the entire inventory, so the hosts have to be named.
+
+## A manual sync seems to have had no effect
+
+Syncs of one source run one at a time. If a scheduled sync was already under way
+your `POST /sync` waited for it, and on a source that takes minutes that looks
+like nothing happening. The response arrives when the sync does, with its own
+`sync_duration_ms`.
+
+The same queueing is why a `refresh=true` issued during a long full sync can come
+back `x-unified-api-refreshed: false` with `refresh did not finish within Ns`:
+it waited for the sync, ran out of its own budget, and served the cached data
+rather than overtaking a gather already in flight.
 
 ## A script enricher's keys keep disappearing
 

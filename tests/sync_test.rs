@@ -1206,7 +1206,7 @@ mod hosts_from_source {
     use std::sync::Mutex;
     use unified_api::adapters::out::cache::memory::MemoryCache;
     use unified_api::adapters::out::secrets::mock::MockSecrets;
-    use unified_api::application::sync::{SyncScope, sync_source};
+    use unified_api::application::sync::{SyncCoordinator, SyncScope, sync_source};
     use unified_api::domain::dataset::Dataset;
     use unified_api::domain::source::OutputFormat;
     use unified_api::domain::sync_health::SyncHealthRegistry;
@@ -1282,6 +1282,7 @@ mod hosts_from_source {
             &connector,
             &MockSecrets::new(),
             &SyncHealthRegistry::new(),
+            &SyncCoordinator::new(),
             "src-ssh",
             &ssh_source_from("src-origin"),
             SyncScope::Full,
@@ -1317,6 +1318,7 @@ mod hosts_from_source {
             &connector,
             &MockSecrets::new(),
             &SyncHealthRegistry::new(),
+            &SyncCoordinator::new(),
             "src-ssh",
             &ssh_source_from("src-missing"),
             SyncScope::Full,

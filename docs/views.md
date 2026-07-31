@@ -16,25 +16,27 @@ datacenter — and therefore which source — a host lives in.
 means a central needs no credentials and no SSH path into a datacenter: the edge
 that owns the hosts does the gathering, and the central holds its dataset.
 
-But the **consumer** still had to know the topology, because the facts of a DC4
-host lived under a different source id than those of an aa1 host:
+But the **consumer** still had to know the topology, because the facts of a
+datacenter B host lived under a different source id than those of a datacenter A
+host:
 
 ```
-              before                                    after
+               before                                   after
 
-  consumer ──> src-ssh-pq-facts   (aa1)      consumer ──> vw-facts-all
-           └─> src-edge-pq-dc4    (dc4)                        │
-           └─> src-edge-cdi-dc01                       ┌───────┼───────┬────────┐
-           └─> src-edge-cdi-dc04                       v       v       v        v
-           └─> ...                                   aa1     dc4     dc01     dc04
+  consumer ──> src-ssh-dc1    (dc1)         consumer ──> vw-facts-all
+           └─> src-edge-dc2   (dc2)                            │
+           └─> src-edge-dc3   (dc3)                   ┌────────┼────────┐
+           └─> ...                                    v        v        v
+                                                     dc1      dc2      dc3
 
   every consumer learns the split,          the view owns the routing table;
   and relearns it when an edge is added     consumers never see it change
 ```
 
 That was not hypothetical: 28 AnsibleForms forms query one facts source, 17 of
-them for a specific host, and one has a DC4 hostname written into its URL. The
-moment the central's SSH source is scoped to aa1, those stop returning anything.
+them for a specific host, and one has a datacenter B hostname written into its
+URL. The moment the central's SSH source is scoped to datacenter A, those stop
+returning anything.
 
 ### Why not an output endpoint
 
@@ -42,9 +44,9 @@ An [output endpoint](api.md#output-endpoints) does merge sources and *is*
 reachable per host (`?host=` reaches the script as `ENDPOINT_PARAMS`). Two
 measured problems ruled it out:
 
-- The script is fed **whole datasets on stdin**, always. On the aa1 + dc4 pair
-  that is 11.2 MB + 6.2 MB through a pipe, plus spawning and parsing, on every
-  call. The equivalent filtered read is **99 KB in 0.73 s**, done in Rust.
+- The script is fed **whole datasets on stdin**, always. On the `dc1` + `dc2`
+  pair that is 11.2 MB + 6.2 MB through a pipe, plus spawning and parsing, on
+  every call. The equivalent filtered read is **99 KB in 0.73 s**, done in Rust.
 - **Endpoints have no refresh.** Routing consumers through one throws away the
   on-demand path entirely.
 
@@ -58,15 +60,15 @@ Right shape, wrong mechanism. A view filters in Rust and keeps refresh.
 vw-facts-all:
   name: "Facts, both datacenters"
   members:
-    - source: "src-ssh-aa1"           # where the facts come from
+    - source: "src-ssh-dc1"           # where the facts come from
       owns:
         source: "src-d42"             # inventory the pattern resolves against
-        groups: ["datacenter_aa1"]
-    - source: "src-edge-dc4"          # a remote (federated) member works too
+        groups: ["datacenter_dc1"]
+    - source: "src-edge-dc2"          # a remote (federated) member works too
       owns:
         source: "src-d42"
-        groups: ["datacenter_dc4"]
-        hosts: ["appliance01.dc4.example"]   # claimed literally as well
+        groups: ["datacenter_dc2"]
+        hosts: ["appliance01.dc2.example"]   # claimed literally as well
   # ttl_seconds: 30                   # optional; absent = inherit the owner's
 ```
 
@@ -115,8 +117,9 @@ re-gather somebody else's datacenter.
 
 Same-named groups union their hosts and children; group vars collide by the same
 first-member-wins rule as ownership. Membership is **not** filtered to what each
-member owns: a group is a statement about the topology, and an aa1 member
-listing DC4 hosts is true whether or not the view serves their facts from there.
+member owns: a group is a statement about the topology, and a datacenter A
+member listing datacenter B hosts is true whether or not the view serves their
+facts from there.
 
 ### Auth
 
@@ -147,7 +150,7 @@ wrong in two ways, both found in production:
   connectors, InsightIQ). They are permanently the edge's responsibility and
   permanently absent from its data.
 
-This was observed live: `itexenode100.dc4.pqe` was *not* in the central's
+This was observed live: `node100.dc2.example` was *not* in the central's
 cached dataset, and `?refresh=true` still brought it in, because the whole
 chain runs off the resolved host list rather than the cache.
 
@@ -157,24 +160,24 @@ with `hosts_from_source` can be resolved locally; a **`remote` member has no
 what that edge owns is its cached dataset, which is the thing that lags.
 
 Declared ownership is the only rule that is local, fresh, and identical for both
-member kinds. It costs a duplicated truth (the edge says "I am datacenter_dc4"
+member kinds. It costs a duplicated truth (the edge says "I am datacenter_dc2"
 in its own config; the view repeats it), which is acceptable for a first
 version. The no-drift variant is for the edge to advertise its scope over the
 API and the view to read it.
 
 ```
-  GET /sources/vw-facts-all/dataset?host=bwkftp101.dc4.pqe&refresh=true
+  GET /sources/vw-facts-all/dataset?host=node101.dc2.example&refresh=true
         │
-        ├─ 1. who claims it?  ── src-d42's datacenter_dc4 group ─> member src-edge-dc4
+        ├─ 1. who claims it?  ── src-d42's datacenter_dc2 group ─> member src-edge-dc2
         │                          (the inventory, synced every 2 h)
         │
         ├─ 2. is it stale?    ── view ttl_seconds, or the member's ─> yes
         │
-        ├─ 3. delegate         ─> refresh_hosts(src-edge-dc4, [bwkftp101])
+        ├─ 3. delegate        ─> refresh_hosts(src-edge-dc2, [node101])
         │                          └─> remote connector, refresh_origin ─> the edge
         │                                └─> edge SSHes that one host (281 ms)
         │
-        └─ 4. read             ─> serve from src-edge-dc4's cache, now current
+        └─ 4. read            ─> serve from src-edge-dc2's cache, now current
 ```
 
 ### A host nobody claims is a 404
@@ -227,13 +230,13 @@ can answer "nothing" need different fixes:
   "total_hosts": 750,
   "returned": 1,
   "hosts": [
-    {"hostname": "bwkftp101.dc4.pqe", "age_seconds": 12, "is_fresh": true, "ttl_seconds": 30}
+    {"hostname": "node101.dc2.example", "age_seconds": 12, "is_fresh": true, "ttl_seconds": 30}
   ],
   "members": [
-    {"source_id": "src-ssh-aa1", "cached": true, "ownership_cached": true,
+    {"source_id": "src-ssh-dc1", "cached": true, "ownership_cached": true,
      "age_seconds": 473, "is_fresh": false, "ttl_seconds": 30, "total_hosts": 405,
      "sync_health": {"last_success_age_seconds": 473, "consecutive_failures": 0}},
-    {"source_id": "src-edge-dc4", "cached": true, "ownership_cached": true,
+    {"source_id": "src-edge-dc2", "cached": true, "ownership_cached": true,
      "age_seconds": 17, "is_fresh": true, "ttl_seconds": 30, "total_hosts": 345}
   ]
 }
@@ -256,10 +259,11 @@ can answer "nothing" need different fixes:
 
 ## What it does not do
 
-**It saves no SSH.** While an aa1 member still gathers DC4 hosts, it keeps
-gathering them; the view only changes who answers the read. The load saving is a
-separate one-line change — `match_pattern: {groups: ["datacenter_aa1"]}` on the
-aa1 member's `hosts_from_source`.
+**It saves no SSH.** While a datacenter A member still gathers datacenter B
+hosts, it keeps gathering them; the view only changes who answers the read. The
+load saving is a separate one-line change —
+`match_pattern: {groups: ["datacenter_dc1"]}` on the datacenter A member's
+`hosts_from_source`.
 
 **Views do not nest.** A member must be a source. Config validation says so.
 

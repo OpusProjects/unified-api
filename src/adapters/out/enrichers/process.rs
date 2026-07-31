@@ -148,7 +148,7 @@ mod tests {
             .map(|i| {
                 let vars: HostVars = [
                     ("role".to_string(), serde_json::json!("some-service-role")),
-                    ("datacenter".to_string(), serde_json::json!("aa1")),
+                    ("datacenter".to_string(), serde_json::json!("dc1")),
                 ]
                 .into_iter()
                 .collect();
@@ -195,7 +195,7 @@ mod tests {
         // and it carried through what it was given
         assert_eq!(
             partial.hostvars["host00000.example.com"]["datacenter"],
-            "aa1"
+            "dc1"
         );
     }
 }

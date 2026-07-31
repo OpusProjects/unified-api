@@ -81,18 +81,18 @@ Two limits sit under that one, covering what the TTL window does not:
 ```
      AnsibleForms / a browser / anything that fetches a URL
                           │
-                          │  GET /api/v1/sources/src-edge-dc4/dataset
-                          │      ?host=itexenode100&refresh=true
+                          │  GET /api/v1/sources/src-edge-dc2/dataset
+                          │      ?host=node100&refresh=true
                           │      X-API-Key: <consumer key>
                           v
       ┌────────────────────────────────────────────────────────┐
-      │   unified-api CENTRAL          (DC aa1, k8s)           │
+      │   unified-api CENTRAL          (datacenter A, k8s)     │
       │                                                        │
-      │   src-edge-dc4:  connector_type: remote                │
+      │   src-edge-dc2:  connector_type: remote                │
       │                  allow_on_demand_refresh: true         │
       │                  ttl_seconds: 300                      │
       │                                                        │
-      │   1. is itexenode100 inside its 300s TTL?              │
+      │   1. is node100 inside its 300s TTL?                   │
       │        yes ──────────────────────────> serve cache ────┼──> 200, 0 hops
       │        no  ──┐                                         │
       │   2. take the per-host lock; re-check (someone else    │
@@ -102,33 +102,33 @@ Two limits sit under that one, covering what the TTL window does not:
       └──────────────────────────┬─────────────────────────────┘
                                  │
         POST {edge}/api/v1/sources/src-ssh-facts/sync
-             ?host=itexenode100&refresh_origin=true&refresh_depth=2
+             ?host=node100&refresh_origin=true&refresh_depth=2
                                  │   X-API-Key: <edge key>
                                  v
       ┌────────────────────────────────────────────────────────┐
-      │   unified-api EDGE             (DC dc4, podman)        │
+      │   unified-api EDGE             (datacenter B, podman)  │
       │                                                        │
       │   src-ssh-facts: connector_type: ssh                   │
       │                  hosts_from_source: src-inventory      │
       │                                                        │
-      │   host scope honoured: SSH to itexenode100 ONLY        │
+      │   host scope honoured: SSH to node100 ONLY             │
       └──────────────────────────┬─────────────────────────────┘
-                                 │ russh, key that never leaves dc4
+                                 │ russh, key that never leaves datacenter B
                                  v
-                          itexenode100  (facts)
+                              node100  (facts)
                                  │
       ┌──────────────────────────┴─────────────────────────────┐
       │  then the central reads what the edge now has:         │
       │                                                        │
-      │ GET {edge}/.../dataset?host=itexenode100 < ~KB, not MB │
-      │ GET {edge}/.../status?host=itexenode100  < the REAL age│
+      │ GET {edge}/.../dataset?host=node100 < ~KB, not MB      │
+      │ GET {edge}/.../status?host=node100  < the REAL age     │
       │                                                        │
       │  cached with that age, not with "now"                  │
       └──────────────────────────┬─────────────────────────────┘
                                  v
                      200 + the host's facts
                      x-unified-api-refreshed: true
-                     x-unified-api-refreshed-hosts: itexenode100
+                     x-unified-api-refreshed-hosts: node100
 ```
 
 The refresh intent recurses: if the edge's source were itself `remote` (region →
@@ -159,7 +159,7 @@ central's key for that source — which a **restricted** key does, since `POST
 
 Complete and copy-pasteable. Two instances, one datacenter each.
 
-### Edge — `sources.yaml` (DC dc4, podman)
+### Edge — `sources.yaml` (datacenter B, podman)
 
 Nothing new here. The edge is unchanged by this feature; it only has to honour
 a host-scoped sync, which it does as of 0.8.0.
@@ -167,7 +167,7 @@ a host-scoped sync, which it does as of 0.8.0.
 ```yaml
 # The inventory that says WHAT exists in this DC
 src-inventory:
-  name: "Device42 inventory (dc4)"
+  name: "Device42 inventory (datacenter B)"
   project_id: "prj-connectors"
   script_path: "d42_inventory.py"
   script_args: ["--list"]
@@ -179,15 +179,15 @@ src-inventory:
 
 # The facts: WHAT each host is doing. Host list comes from src-inventory.
 src-ssh-facts:
-  name: "Ansible local facts (dc4)"
+  name: "Ansible local facts (datacenter B)"
   project_id: "prj-connectors"
   script_path: "unused-in-facts-mode"
   connector_type: "ssh"
-  credential_ids: ["cred-ssh-dc4"]
+  credential_ids: ["cred-ssh-dc2"]
   hosts_from_source:
     source: "src-inventory"
     match_pattern:
-      groups: ["dc4"]
+      groups: ["dc2"]
     connect_via: "ansible_host_then_hostname"
   sync_interval_seconds: 1800
   # The edge's own TTL. Independent of the central's: this one describes when
@@ -204,18 +204,18 @@ src-ssh-facts:
 ### Edge — `api_keys.yaml`
 
 The key the central uses. Restricted to the one source it federates: if the
-central is compromised it cannot read the rest of dc4's inventory.
+central is compromised it cannot read the rest of datacenter B's inventory.
 
 ```yaml
 key-central:
-  name: "central aa1"
+  name: "central (datacenter A)"
   env: "UNIFIED_API_KEY_CENTRAL"
   role: "restricted"
   sources: ["src-ssh-facts"]
   endpoints: []
 ```
 
-### Central — `config.yaml` (DC aa1, k8s)
+### Central — `config.yaml` (datacenter A, k8s)
 
 ```yaml
 server:
@@ -238,13 +238,13 @@ cache:
 ### Central — `sources.yaml`
 
 ```yaml
-src-edge-dc4:
-  name: "DC4 facts (federated)"
+src-edge-dc2:
+  name: "Datacenter B facts (federated)"
   project_id: "prj-connectors"
   # script_path = the source id ON THE EDGE
   script_path: "src-ssh-facts"
   connector_type: "remote"
-  credential_ids: ["cred-edge-dc4"]
+  credential_ids: ["cred-edge-dc2"]
   # This is the gate. A read asking for a host refreshes it only if the host is
   # older than this. Read the "Choosing the TTL" note before setting it.
   ttl_seconds: 300
@@ -256,12 +256,12 @@ src-edge-dc4:
   ttl_overrides:
     hosts:
       # A box whose state changes fast enough to be worth gathering more often
-      itexenode100: 60
+      node100: 60
     groups:
     # ...or a whole group of them
       oracle_db: 120
   config:
-    url: "https://unified-api-dc4.example.com"
+    url: "https://unified-api-dc2.example.com"
     # Bounds BOTH the reads and the refresh POST, so it must exceed the time the
     # edge needs to gather one host. Raise it on slow links or slow hosts.
     http_timeout_seconds: "30"
@@ -270,12 +270,12 @@ src-edge-dc4:
 ### Central — `credentials.yaml`
 
 ```yaml
-# The edge's API key, read from UNIFIED_API_EDGE_DC4_KEY. The remote connector
+# The edge's API key, read from UNIFIED_API_EDGE_DC2_KEY. The remote connector
 # looks for a credential named `token`, which is what secret_keys maps here.
-cred-edge-dc4:
-  name: "DC4 edge API key"
+cred-edge-dc2:
+  name: "Datacenter B edge API key"
   type: "token"
-  env_prefix: "UNIFIED_API_EDGE_DC4"
+  env_prefix: "UNIFIED_API_EDGE_DC2"
   secret_keys:
     token: "KEY"
 ```
@@ -285,12 +285,12 @@ cred-edge-dc4:
 | Instance | Env var | Value | Where it comes from |
 |---|---|---|---|
 | Edge | `UNIFIED_API_KEY_CENTRAL` | the key the central presents | Vault → ESO → Secret |
-| Central | `UNIFIED_API_EDGE_DC4_KEY` | the **same** value | Vault → ESO → Secret |
+| Central | `UNIFIED_API_EDGE_DC2_KEY` | the **same** value | Vault → ESO → Secret |
 | Central | `UNIFIED_API_KEY_FORMS` | the consumer key (AnsibleForms) | Vault → ESO → Secret |
-| Edge | `CREDENTIAL_*` for `cred-ssh-dc4` | SSH key + user, dc4 only | Vault → ESO → Secret |
+| Edge | `CREDENTIAL_*` for `cred-ssh-dc2` | SSH key + user, datacenter B only | Vault → ESO → Secret |
 
 The SSH key exists only on the edge. That is the point of the topology: no
-credential with reach into dc4 is ever present in aa1.
+credential with reach into datacenter B is ever present in datacenter A.
 
 ---
 
@@ -308,18 +308,18 @@ in a validation run). The outputs shown are the ones those runs produced.
 
 ```bash
 curl -s -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/status?host=itexenode100" | jq
+  "$CENTRAL/api/v1/sources/src-edge-dc2/status?host=node100" | jq
 ```
 
 ```json
 {
-  "source_id": "src-edge-dc4",
+  "source_id": "src-edge-dc2",
   "dataset_age_seconds": 431,
   "ttl_seconds": 300,
   "total_hosts": 371,
   "returned": 1,
   "hosts": [
-    { "hostname": "itexenode100", "age_seconds": 431, "is_fresh": false, "ttl_seconds": 60 }
+    { "hostname": "node100", "age_seconds": 431, "is_fresh": false, "ttl_seconds": 60 }
   ]
 }
 ```
@@ -332,14 +332,14 @@ would not — and that is the whole safety property, not a bug.
 
 ```bash
 curl -si -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?host=itexenode100&refresh=true" \
+  "$CENTRAL/api/v1/sources/src-edge-dc2/dataset?host=node100&refresh=true" \
   | grep -i '^\(HTTP\|x-unified-api\)'
 ```
 
 ```
 HTTP/1.1 200 OK
 x-unified-api-refreshed: true
-x-unified-api-refreshed-hosts: itexenode100
+x-unified-api-refreshed-hosts: node100
 ```
 
 Then confirm the age really moved, at both ends:
@@ -347,12 +347,12 @@ Then confirm the age really moved, at both ends:
 ```bash
 # on the central
 curl -s -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/status?host=itexenode100" \
+  "$CENTRAL/api/v1/sources/src-edge-dc2/status?host=node100" \
   | jq '.hosts[0].age_seconds'   # > a small number, single digits
 
 # on the edge, proving the SSH actually happened there
 curl -s -H "X-API-Key: $CENTRAL_KEY" \
-  "$EDGE/api/v1/sources/src-ssh-facts/status?host=itexenode100" \
+  "$EDGE/api/v1/sources/src-ssh-facts/status?host=node100" \
   | jq '.hosts[0].age_seconds'   # > also small
 ```
 
@@ -375,7 +375,7 @@ ceiling working.
 ```bash
 # no hosts named
 curl -s -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?refresh=true" | jq -r .error
+  "$CENTRAL/api/v1/sources/src-edge-dc2/dataset?refresh=true" | jq -r .error
 # > refresh=true requires ?host=: a refresh of a whole source on a read would
 #   gather the entire inventory, so the hosts have to be named. POST the
 #   source's /sync endpoint for a full refresh.
@@ -394,13 +394,13 @@ Stop the edge (or break the link), wait for the host to pass its TTL, then read:
 ```
 HTTP/1.1 200 OK
 x-unified-api-refreshed: false
-x-unified-api-refresh-error: request to 'http://.../sync?host=itexenode100&refresh_origin=true&refresh_depth=2' failed: error sending request for url (...)
+x-unified-api-refresh-error: request to 'http://.../sync?host=node100&refresh_origin=true&refresh_depth=2' failed: error sending request for url (...)
 ```
 
 ```bash
 curl -s -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?host=itexenode100&refresh=true" \
-  | jq -c '{returned, has_facts: (.hostvars["itexenode100"].memory != null)}'
+  "$CENTRAL/api/v1/sources/src-edge-dc2/dataset?host=node100&refresh=true" \
+  | jq -c '{returned, has_facts: (.hostvars["node100"].memory != null)}'
 # > {"returned":1,"has_facts":true}
 ```
 
@@ -415,12 +415,12 @@ the error naming the origin's own reason instead:
 
 ```bash
 curl -si -H "X-API-Key: $FORMS_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?host=itexenode100,itexenode101,itexenode102&refresh=true" \
+  "$CENTRAL/api/v1/sources/src-edge-dc2/dataset?host=node100,node101,node102&refresh=true" \
   | grep -i 'x-unified-api-refreshed-hosts'
 ```
 
 ```
-x-unified-api-refreshed-hosts: itexenode100,itexenode101,itexenode102
+x-unified-api-refreshed-hosts: node100,node101,node102
 ```
 
 One request, one gather, one SSH fan-out on the edge.
@@ -429,14 +429,14 @@ One request, one gather, one SSH fan-out on the edge.
 
 ```bash
 curl -s -X POST -H "X-API-Key: $AWX_KEY" \
-  "$CENTRAL/api/v1/sources/src-edge-dc4/sync?host=itexenode100&refresh_origin=true" | jq
+  "$CENTRAL/api/v1/sources/src-edge-dc2/sync?host=node100&refresh_origin=true" | jq
 ```
 
 ```json
 {
-  "source_id": "src-edge-dc4",
+  "source_id": "src-edge-dc2",
   "success": true,
-  "scope": "host:itexenode100",
+  "scope": "host:node100",
   "total_hosts": 1,
   "total_groups": 0,
   "sync_duration_ms": 2314,
@@ -507,11 +507,11 @@ tighten the few hosts that genuinely need it rather than the whole source.
 ### Metrics
 
 ```
-unified_api_refresh_total{source="src-edge-dc4", result="refreshed"}
-unified_api_refresh_total{source="src-edge-dc4", result="fresh"}
-unified_api_refresh_total{source="src-edge-dc4", result="coalesced"}
-unified_api_refresh_total{source="src-edge-dc4", result="failed"}
-unified_api_refresh_total{source="src-edge-dc4", result="timeout"}
+unified_api_refresh_total{source="src-edge-dc2", result="refreshed"}
+unified_api_refresh_total{source="src-edge-dc2", result="fresh"}
+unified_api_refresh_total{source="src-edge-dc2", result="coalesced"}
+unified_api_refresh_total{source="src-edge-dc2", result="failed"}
+unified_api_refresh_total{source="src-edge-dc2", result="timeout"}
 ```
 
 `refreshed` is what costs a gather; `fresh` and `coalesced` are the two ways the
@@ -544,7 +544,7 @@ Point the form's data source at the central with `refresh=true` and let it
 render whatever comes back:
 
 ```
-GET https://unified-api.example.com/api/v1/sources/src-edge-dc4/dataset
+GET https://unified-api.example.com/api/v1/sources/src-edge-dc2/dataset
     ?host={{ selected_host }}&refresh=true&fields=filesystems,memory
 ```
 
@@ -559,7 +559,7 @@ Refresh before a playbook that depends on current facts, as a task in the job:
 ```yaml
 - name: Refresh the target's facts at the origin
   ansible.builtin.uri:
-    url: "{{ unified_api }}/api/v1/sources/src-edge-dc4/sync"
+    url: "{{ unified_api }}/api/v1/sources/src-edge-dc2/sync"
     method: POST
     headers:
       X-API-Key: "{{ unified_api_key }}"

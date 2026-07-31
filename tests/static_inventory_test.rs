@@ -36,7 +36,7 @@ all:
     .await;
     write(
         &dir.join("group_vars/all.yaml"),
-        "timezone: Europe/Madrid\nuseransible: laughingman_ansible\n",
+        "timezone: UTC\nuseransible: laughingman_ansible\n",
     )
     .await;
     write(&dir.join("group_vars/zookeeper.yaml"), "zk_port: 2181\n").await;
@@ -67,7 +67,7 @@ async fn reads_a_full_inventory_layout_from_disk() {
 
     assert_eq!(dataset.hostvars.len(), 4);
     // group_vars/all reaches every host
-    assert_eq!(dataset.hostvars["localhost"]["timezone"], "Europe/Madrid");
+    assert_eq!(dataset.hostvars["localhost"]["timezone"], "UTC");
     // group_vars/<group> reaches its members only
     assert_eq!(dataset.hostvars["zk01.example.com"]["zk_port"], 2181);
     assert!(!dataset.hostvars["nas01.example.com"].contains_key("zk_port"));

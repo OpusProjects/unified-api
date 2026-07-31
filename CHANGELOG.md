@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A slow sync can no longer overwrite a gather that started after it.**
+  Nothing serialised two syncs of the same source: the scheduler and
+  `POST /sync` call the same use case with nothing between them, and an
+  on-demand refresh is a third writer. So a full sync of a large source could
+  still be gathering when a consumer's `refresh=true` fetched one host, and the
+  full sync would then write the dataset it had collected minutes earlier over
+  the top of it.
+
+  The stale value was also stamped freshly gathered — a replace rebuilds the
+  entry and marks every host "now" — so the next `refresh=true` saw a fresh host
+  and declined to correct it. The consumer asked for current facts, got older
+  ones, and the freshness data agreed with the wrong answer.
+
+  Syncs of one source now run one after another. A refresh that arrives while a
+  full sync is running waits, hits its own `refresh_timeout_seconds`, and serves
+  the cached data with `x-unified-api-refreshed: false` — the right outcome for
+  a read that may improve its data but must never overtake a gather already in
+  flight. Different sources are unaffected and still sync in parallel.
+
 ## [0.10.3] - 2026-07-31
 
 ### Fixed
@@ -373,10 +394,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
   Federation solved this at one end and not the other. `connector_type: remote`
   means a central needs no credentials and no SSH path into a datacenter,
   because the edge that owns the hosts does the gathering — but the *consumer*
-  still had to know the topology, since the facts of a DC4 host lived under a
-  different source id than those of an aa1 host. Every consumer learned the
-  split and relearned it whenever an edge was added. A view is one address for
-  "the facts".
+  still had to know the topology, since the facts of a datacenter B host lived
+  under a different source id than those of a datacenter A host. Every consumer
+  learned the split and relearned it whenever an edge was added. A view is one
+  address for "the facts".
 
   It answers on the **source routes**, in the same shapes — `/dataset`,
   `/status`, `/groups`, `/hosts` — and shares the source id space, so migrating

@@ -180,6 +180,7 @@ impl AppBuilder {
                 self.refresh_max_concurrent,
                 self.refresh_timeout_seconds,
             )),
+            syncs: Arc::new(application::sync::SyncCoordinator::new()),
             readyz_require_all_sources: self.readyz_require_all_sources,
         });
         let router = adapters::r#in::http::routes::create_router(

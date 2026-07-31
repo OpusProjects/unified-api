@@ -15,16 +15,16 @@ the local work, and **one central** that federates them with
 `connector_type: "remote"` — consumers only ever talk to the central:
 
 ```
-          DC MADRID                                      DC FRANKFURT
+          DATACENTER A                                  DATACENTER B
 ┌─────────────────────────────┐               ┌─────────────────────────────┐
 │      local fleet (LAN)      │               │      local fleet (LAN)      │
-│   web01 . web02 . db01 . ...  │             │ app01 . app02 . db02 . ...  │
+│  web01 . web02 . db01 . ... │               │  app01 . app02 . db02 . ... │
 │         ^                   │               │         ^                   │
 │         │ parallel SSH      │               │         │ parallel SSH      │
 │         │ (russh, key that  │               │         │ (russh, key that  │
-│         │  never leaves MAD)│               │         │  never leaves FRA)│
+│         │  never leaves dc1)│               │         │  never leaves dc2)│
 │  ┌──────┴───────────────┐   │               │  ┌──────┴───────────────┐   │
-│  │  unified-api-mad     │   │               │  │  unified-api-fra     │   │
+│  │  unified-api-dc1     │   │               │  │  unified-api-dc2     │   │
 │  │  > src-fleet  (ssh)  │   │               │  │  > src-fleet  (ssh)  │   │
 │  │  > src-d42 (script)  │   │               │  │  > src-netbox        │   │
 │  │  cache <-> PVC       │   │               │  │  cache <-> PVC       │   │
@@ -40,15 +40,15 @@ the local work, and **one central** that federates them with
                                      v
                      ┌───────────────────────────────┐
                      │      unified-api (CENTRAL)    │
-                     │   > src-madrid    (remote) ─┐ │
-                     │   > src-frankfurt (remote) ─┤ │
-                     │   cache <-> PVC             │ │
-                     │   ep-global <───────────────┘ │
+                     │   > src-dc1 (remote) ───┐     │
+                     │   > src-dc2 (remote) ───┤     │
+                     │   cache <-> PVC         │     │
+                     │   ep-global <───────────┘     │
                      │   (merged world inventory)    │
                      └───────────────┬───────────────┘
                                      │ POST /api/v1/endpoints/ep-global
                                      v
-                     AWX / Ascender . AnsibleForms . curl
+                    AWX / Ascender . AnsibleForms . curl
 ```
 
 Arrows point in the direction the CONNECTION is initiated (the central
@@ -81,26 +81,26 @@ mechanisms as everything else). Generate one distinct key per edge.
 
 ```yaml
 # central: credentials.yaml — one token credential per DC
-cred-edge-mad:
-  name: "Edge Madrid API key"
+cred-edge-dc1:
+  name: "Edge datacenter A API key"
   type: "token"
-  env_prefix: "EDGE_MAD"
+  env_prefix: "EDGE_DC1"
   secret_keys:
-    token: "TOKEN"          # reads env EDGE_MAD_TOKEN
+    token: "TOKEN"          # reads env EDGE_DC1_TOKEN
 ```
 
 ```yaml
 # central: sources.yaml — one remote source per DC
-src-madrid:
-  name: "DC Madrid"
+src-dc1:
+  name: "Datacenter A"
   connector_type: "remote"
   project_id: "prj-unused"        # required by schema; unused by remote
   script_path: "src-fleet"        # the source id ON THE EDGE
-  credential_ids: ["cred-edge-mad"]
+  credential_ids: ["cred-edge-dc1"]
   sync_interval_seconds: 120      # how often the central re-pulls the edge
   ttl_seconds: 600
   config:
-    url: "https://unified-api-mad.example.com"
+    url: "https://unified-api-dc1.example.com"
     # http_timeout_seconds: "30"  # default 30
     # insecure_tls: "true"        # only for self-signed edges; opt-in
 ```
@@ -117,11 +117,11 @@ prj-unused:
 # central: endpoints.yaml — one merged world view for consumers
 ep-global:
   name: "Global inventory"
-  source_ids: ["src-madrid"]      # add one id per DC
+  source_ids: ["src-dc1"]      # add one id per DC
   script_path: "tests/adapters/out/output/ansible_inventory.py"
 ```
 
-Secrets the central's deployment must inject: `EDGE_MAD_TOKEN` (the value of
+Secrets the central's deployment must inject: `EDGE_DC1_TOKEN` (the value of
 the edge's `UNIFIED_API_KEY_CENTRAL`) — one env var per DC — plus the
 central's own API keys for its consumers.
 
@@ -129,12 +129,12 @@ central's own API keys for its consumers.
 
 ```bash
 # 1. the edge has data of its own
-curl -s -H "x-api-key: $EDGE_KEY" https://unified-api-mad.../api/v1/sources/src-fleet/status \
+curl -s -H "x-api-key: $EDGE_KEY" https://unified-api-dc1.../api/v1/sources/src-fleet/status \
   | jq .dataset_age_seconds        # e.g. 42 — remember this number
 
 # 2. sync the central and read the same source through it
-curl -s -X POST -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-madrid/sync | jq .total_hosts
-curl -s -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-madrid/status \
+curl -s -X POST -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-dc1/sync | jq .total_hosts
+curl -s -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-dc1/status \
   | jq .dataset_age_seconds        # must be >= the edge's number, NOT 0
 ```
 

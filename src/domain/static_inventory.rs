@@ -405,7 +405,7 @@ all:
         let mut inv = input(BASIC);
         inv.group_vars.insert(
             "all".to_string(),
-            "timezone: Europe/Madrid\nntp_server: global.ntp\n".to_string(),
+            "timezone: UTC\nntp_server: global.ntp\n".to_string(),
         );
         // group file overrides the group's inline var
         inv.group_vars
@@ -430,7 +430,7 @@ all:
         // group_vars/all reaches every host, including ungrouped ones
         assert_eq!(
             dataset.hostvars["standalone.example.com"]["timezone"],
-            "Europe/Madrid"
+            "UTC"
         );
         // host_vars file beats the inline host var
         assert_eq!(dataset.hostvars["web02.example.com"]["http_port"], 9090);
@@ -442,22 +442,22 @@ all:
             r#"
 all:
   children:
-    europe:
+    region-a:
       vars:
-        dns: eu.dns
+        dns: region.dns
       children:
-        spain:
+        zone-a:
           hosts:
-            madrid.example.com: {}
+            host01.example.com: {}
           vars:
-            dns: es.dns
+            dns: zone.dns
 "#,
         );
 
         let (dataset, _) = parse(&inv).unwrap();
-        assert_eq!(dataset.hostvars["madrid.example.com"]["dns"], "es.dns");
-        // structure preserved: europe has spain as child
-        assert_eq!(dataset.groups["europe"].children, vec!["spain"]);
+        assert_eq!(dataset.hostvars["host01.example.com"]["dns"], "zone.dns");
+        // structure preserved: region-a has zone-a as child
+        assert_eq!(dataset.groups["region-a"].children, vec!["zone-a"]);
     }
 
     #[test]
@@ -568,7 +568,7 @@ all:
   children:
     dc1:
       vars:
-        site: madrid
+        site: site-a
       children:
         web:
           hosts:
@@ -583,7 +583,7 @@ all:
         let (dataset, _) = parse(&inv).unwrap();
 
         let vars = &dataset.hostvars["web01.example.com"];
-        assert_eq!(vars["site"], "madrid");
+        assert_eq!(vars["site"], "site-a");
         assert_eq!(vars["region"], "emea");
     }
 

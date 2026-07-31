@@ -10,9 +10,10 @@ use super::dataset::Dataset;
 //
 // What it buys is that a consumer stops needing to know the topology. With
 // federation (`connector_type: remote`) the central needs no credentials into a
-// datacenter, but the facts of a DC4 host still live in a different source id
-// than those of an aa1 host — so every consumer learned the split, and relearns
-// it whenever an edge is added. A view is one address for "the facts".
+// datacenter, but the facts of a datacenter B host still live in a different
+// source id than those of a datacenter A host — so every consumer learned the
+// split, and relearns it whenever an edge is added. A view is one address
+// for "the facts".
 //
 // `deny_unknown_fields` on the three view structs, unlike the rest of the
 // config: ownership is the routing table, and a typo in it (`grups:` instead of
@@ -69,7 +70,7 @@ pub struct ViewMember {
 // for a local `ssh` member and a `remote` one: a remote member has no
 // `hosts_from_source` at the central at all, so there is nothing else to ask.
 //
-// The cost is a duplicated truth (the edge says "I am datacenter_dc4" in its
+// The cost is a duplicated truth (the edge says "I am datacenter_dc2" in its
 // own config; the view repeats it). The no-drift version would have the edge
 // advertise its scope over the API and the view read it.
 #[derive(Debug, Deserialize, Clone)]
@@ -166,13 +167,13 @@ mod tests {
     fn dataset() -> Dataset {
         serde_json::from_value(serde_json::json!({
             "hostvars": {
-                "web01.aa1.example": {},
-                "web02.aa1.example": {},
-                "db01.dc4.example": {}
+                "web01.dc1.example": {},
+                "web02.dc1.example": {},
+                "db01.dc2.example": {}
             },
             "groups": {
-                "datacenter_aa1": {"hosts": ["web01.aa1.example", "web02.aa1.example"]},
-                "datacenter_dc4": {"hosts": ["db01.dc4.example", "web02.aa1.example"]}
+                "datacenter_dc1": {"hosts": ["web01.dc1.example", "web02.dc1.example"]},
+                "datacenter_dc2": {"hosts": ["db01.dc2.example", "web02.dc1.example"]}
             }
         }))
         .unwrap()
@@ -185,23 +186,23 @@ mod tests {
     const TWO_DATACENTERS: &str = "\
 name: All facts
 members:
-  - source: src-aa1
+  - source: src-dc1
     owns:
       source: src-d42
-      groups: [\"datacenter_aa1\"]
-  - source: src-dc4
+      groups: [\"datacenter_dc1\"]
+  - source: src-dc2
     owns:
       source: src-d42
-      groups: [\"datacenter_dc4\"]
+      groups: [\"datacenter_dc2\"]
 ";
 
     #[test]
     fn a_group_pattern_claims_that_groups_members() {
         let view = view(TWO_DATACENTERS);
         let ds = dataset();
-        assert!(view.members[0].owns.claims(&ds, "web01.aa1.example"));
-        assert!(!view.members[0].owns.claims(&ds, "db01.dc4.example"));
-        assert!(view.members[1].owns.claims(&ds, "db01.dc4.example"));
+        assert!(view.members[0].owns.claims(&ds, "web01.dc1.example"));
+        assert!(!view.members[0].owns.claims(&ds, "db01.dc2.example"));
+        assert!(view.members[1].owns.claims(&ds, "db01.dc2.example"));
     }
 
     #[test]
@@ -217,19 +218,19 @@ members:
         // the pattern itself simply says yes to both.
         let view = view(TWO_DATACENTERS);
         let ds = dataset();
-        assert!(view.members[0].owns.claims(&ds, "web02.aa1.example"));
-        assert!(view.members[1].owns.claims(&ds, "web02.aa1.example"));
+        assert!(view.members[0].owns.claims(&ds, "web02.dc1.example"));
+        assert!(view.members[1].owns.claims(&ds, "web02.dc1.example"));
     }
 
     #[test]
     fn an_explicitly_named_host_is_claimed_even_when_the_dataset_lacks_it() {
         let owns: Ownership =
-            serde_yaml_ng::from_str("source: src-d42\nhosts: [\"brandnew.dc4.example\"]\n")
+            serde_yaml_ng::from_str("source: src-d42\nhosts: [\"brandnew.dc2.example\"]\n")
                 .unwrap();
-        assert!(owns.claims(&dataset(), "brandnew.dc4.example"));
+        assert!(owns.claims(&dataset(), "brandnew.dc2.example"));
         assert!(
             owns.claimed_hosts(&dataset())
-                .contains("brandnew.dc4.example")
+                .contains("brandnew.dc2.example")
         );
     }
 
@@ -237,7 +238,7 @@ members:
     fn an_unknown_group_claims_nothing_rather_than_everything() {
         let owns: Ownership =
             serde_yaml_ng::from_str("source: src-d42\ngroups: [\"datacenter_ghost\"]\n").unwrap();
-        assert!(!owns.claims(&dataset(), "web01.aa1.example"));
+        assert!(!owns.claims(&dataset(), "web01.dc1.example"));
         assert!(owns.claimed_hosts(&dataset()).is_empty());
     }
 
@@ -245,7 +246,7 @@ members:
     fn an_empty_pattern_is_a_catch_all() {
         let owns: Ownership = serde_yaml_ng::from_str("source: src-d42\n").unwrap();
         assert!(owns.is_catch_all());
-        assert!(owns.claims(&dataset(), "web01.aa1.example"));
+        assert!(owns.claims(&dataset(), "web01.dc1.example"));
         assert!(!owns.claims(&dataset(), "nowhere.example"));
         assert_eq!(owns.claimed_hosts(&dataset()).len(), 3);
     }
@@ -254,9 +255,9 @@ members:
     fn group_members_without_hostvars_are_still_claimed() {
         let mut ds = dataset();
         ds.groups.insert(
-            "datacenter_aa1".to_string(),
+            "datacenter_dc1".to_string(),
             Group {
-                hosts: vec!["appliance.aa1.example".to_string()],
+                hosts: vec!["appliance.dc1.example".to_string()],
                 children: vec![],
                 vars: None,
             },
@@ -264,19 +265,19 @@ members:
         let view = view(TWO_DATACENTERS);
         // The 28 appliances that take no SSH: claimed by the member, absent
         // from its data, and still routable.
-        assert!(view.members[0].owns.claims(&ds, "appliance.aa1.example"));
+        assert!(view.members[0].owns.claims(&ds, "appliance.dc1.example"));
     }
 
     #[test]
     fn claimed_hosts_is_the_union_of_groups_and_hosts() {
         let owns: Ownership = serde_yaml_ng::from_str(
-            "source: src-d42\ngroups: [\"datacenter_aa1\"]\nhosts: [\"db01.dc4.example\"]\n",
+            "source: src-d42\ngroups: [\"datacenter_dc1\"]\nhosts: [\"db01.dc2.example\"]\n",
         )
         .unwrap();
         let ds = dataset();
         let claimed = owns.claimed_hosts(&ds);
         assert_eq!(claimed.len(), 3);
-        assert!(claimed.contains("db01.dc4.example"));
+        assert!(claimed.contains("db01.dc2.example"));
     }
 
     #[test]
@@ -290,7 +291,7 @@ members:
     fn member_ids_lists_the_sources_in_declared_order() {
         assert_eq!(
             view(TWO_DATACENTERS).member_ids(),
-            vec!["src-aa1", "src-dc4"]
+            vec!["src-dc1", "src-dc2"]
         );
     }
 }

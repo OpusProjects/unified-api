@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A conditional request can no longer talk a view out of refusing.** A view
+  minted its ETag and could answer `304 Not Modified` *before* routing the hosts
+  the request named, so `If-None-Match: *` turned a host no member claims into
+  "nothing changed" instead of the `404` that says the request cannot be routed
+  at all. That is the silent-nothing the refusal exists to prevent, and the
+  source routes never had it — they check the entry exists first. A view now
+  routes before any validator is minted.
+
 - **Changing a source's `ttl_seconds` now takes effect on an entry that already
   exists.** The TTL was applied only when a cache entry was *created*, so a
   source whose entry is patched in place rather than replaced — every

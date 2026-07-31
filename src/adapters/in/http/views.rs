@@ -72,6 +72,15 @@ pub async fn dataset(
 
     let snap = snapshot(&*state.cache, &state.sources, id, view);
 
+    // Routed before any validator is minted. A named host no member claims is a
+    // 404 — the request cannot be routed at all — and that has to be decided
+    // before the conditional-request machinery, or `If-None-Match: *` would
+    // answer 304 to a request the server cannot serve. The source routes check
+    // the entry exists first for the same reason.
+    let selection = snap
+        .select(params.host.as_deref(), params.group.as_deref())
+        .map_err(|unclaimed| unclaimed_error(id, view, unclaimed))?;
+
     // One validator for both the plain and the filtered shape, unlike a source,
     // whose plain path can derive a strong ETag from bytes it has already
     // serialized. A view serializes on the fly, so the validator is the cache
@@ -100,10 +109,6 @@ pub async fn dataset(
         .body(axum::body::Body::empty())
         .unwrap());
     }
-
-    let selection = snap
-        .select(params.host.as_deref(), params.group.as_deref())
-        .map_err(|unclaimed| unclaimed_error(id, view, unclaimed))?;
 
     // No params = the raw Dataset shape, exactly as a source returns it.
     let body = if params.is_plain() {

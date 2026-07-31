@@ -402,6 +402,7 @@ fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[
 
 // Failure classification drives the address fallback: only Connect errors
 // (nothing answered) justify trying the next candidate address.
+#[derive(Debug)]
 enum HostError {
     Connect(String),
     Other(String),
@@ -518,27 +519,55 @@ async fn execute_on_host(
         .map_err(|e| HostError::Other(format!("Exec on {} failed: {}", host, e)))?;
 
     let mut output = Vec::new();
+    let mut exit_status: Option<u32> = None;
     let mut channel = channel;
 
-    loop {
-        match channel.wait().await {
-            Some(russh::ChannelMsg::Data { data }) => {
-                output.extend_from_slice(&data);
-            }
-            Some(russh::ChannelMsg::Eof) => break,
-            Some(russh::ChannelMsg::ExitStatus { exit_status }) if exit_status != 0 => {
-                return Err(HostError::Other(format!(
-                    "Command on {} exited with status {}",
-                    host, exit_status
-                )));
-            }
-            None => break,
+    // Read until the channel closes rather than stopping at EOF.
+    //
+    // The exit status arrives as a message of its own, and the protocol fixes no
+    // order between it and EOF — EOF means "no more output", the exit status
+    // means "the process finished", and a command that closes stdout before
+    // exiting produces them the other way round. Breaking on EOF could therefore
+    // return before the status was ever seen, and a command that FAILED was then
+    // reported as a successful gather whose output happens to be an error
+    // message: `parse_host_output` stores that as the host's variables, so the
+    // inventory gains a host described by a shell error rather than a host
+    // marked unreachable (which would have kept its last known good data).
+    //
+    // Waiting for the close costs nothing on a well-behaved server, which sends
+    // it immediately, and a server that never closes is bounded by the per-host
+    // timeout this function is already called under.
+    while let Some(message) = channel.wait().await {
+        match message {
+            russh::ChannelMsg::Data { data } => output.extend_from_slice(&data),
+            russh::ChannelMsg::ExitStatus {
+                exit_status: status,
+            } => exit_status = Some(status),
             _ => {}
         }
     }
 
-    let stdout = String::from_utf8_lossy(&output).to_string();
-    Ok(stdout)
+    finish_host_output(output, exit_status, host)
+}
+
+// What a finished channel amounts to. Separated from the read loop so the rule
+// can be tested without an SSH server.
+//
+// No status reported at all is treated as success: some servers never send one,
+// and that was the behaviour before this was checked properly — newly failing
+// every host on such a server would be a worse bug than the one being fixed.
+fn finish_host_output(
+    output: Vec<u8>,
+    exit_status: Option<u32>,
+    host: &str,
+) -> Result<String, HostError> {
+    match exit_status {
+        Some(status) if status != 0 => Err(HostError::Other(format!(
+            "Command on {} exited with status {}",
+            host, status
+        ))),
+        _ => Ok(String::from_utf8_lossy(&output).to_string()),
+    }
 }
 
 fn parse_host_output(output: &str, host: &str) -> HostVars {
@@ -756,6 +785,45 @@ mod tests {
         let cmd = build_command("facts", "/etc/ansible/facts.d", "unused", &[]);
         assert!(cmd.contains("/etc/ansible/facts.d"));
         assert!(cmd.contains("basename"));
+    }
+
+    #[test]
+    fn a_zero_exit_status_yields_the_output() {
+        let result = finish_host_output(b"{\"a\": 1}".to_vec(), Some(0), "web01.example");
+        assert_eq!(result.unwrap(), "{\"a\": 1}");
+    }
+
+    // The bug this rule exists for: the command failed, but it had written
+    // something first. That output used to be returned and stored as the host's
+    // facts, so a broken command became a host described by its own error text.
+    #[test]
+    fn a_failed_command_is_an_error_even_when_it_produced_output() {
+        let result = finish_host_output(
+            b"bash: /etc/ansible/facts.d: No such file".to_vec(),
+            Some(127),
+            "web01.example",
+        );
+        let error = result.expect_err("a non-zero exit status must fail the host");
+        assert!(error.to_string().contains("127"), "error was: {}", error);
+        assert!(
+            error.to_string().contains("web01.example"),
+            "error was: {}",
+            error
+        );
+    }
+
+    // Some servers never send an exit status. Failing every host on one of those
+    // would be a worse bug than the one this check fixes.
+    #[test]
+    fn no_reported_exit_status_is_not_a_failure() {
+        let result = finish_host_output(b"{\"a\": 1}".to_vec(), None, "web01.example");
+        assert_eq!(result.unwrap(), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn output_that_is_not_utf8_is_kept_lossily_rather_than_failing() {
+        let result = finish_host_output(vec![0x7b, 0xff, 0x7d], Some(0), "web01.example");
+        assert!(result.is_ok());
     }
 
     #[test]

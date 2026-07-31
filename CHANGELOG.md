@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A failed SSH command is no longer stored as the host's facts.** The channel
+  read loop stopped at EOF, but the exit status arrives as a message of its own
+  and the protocol fixes no order between the two — EOF means "no more output",
+  the exit status means "the process finished", and a command that closes stdout
+  before exiting produces them the other way round. The loop could therefore
+  return before ever seeing a non-zero status.
+
+  A command that failed was then treated as a successful gather whose output
+  happens to be an error message, and `parse_host_output` stored that under
+  `raw_output` / `parse_error` as the host's variables. The inventory gained a
+  host described by a shell error instead of a host marked unreachable — which
+  since 0.10.1 would have kept its last known good data. The loop now reads to
+  channel close and judges the status afterwards. A server that reports no exit
+  status at all is still treated as success, as before.
+
 - **A talkative script no longer wedges its own run.** Enrichers and output
   endpoints were handed their input by writing the whole payload to the script's
   stdin *before* reading anything back. Pipe buffers hold 64 KiB, so any script

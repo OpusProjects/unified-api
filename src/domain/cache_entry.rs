@@ -185,6 +185,17 @@ impl CacheEntry {
         self.complete
     }
 
+    // Adopt the TTL the source is configured with.
+    //
+    // The TTL is set when an entry is created and belongs to the CONFIGURATION,
+    // not to the data — so an entry that outlives a config change has to pick
+    // the new value up. Without this, lowering a `ttl_seconds` had no effect on
+    // a source whose entry is patched in place rather than replaced, and disk
+    // persistence made that permanent: the old value came back on every restart.
+    pub fn set_ttl(&mut self, ttl_seconds: u64) {
+        self.ttl = Duration::from_secs(ttl_seconds);
+    }
+
     // Record that this entry holds hosts rather than a source: it exists
     // because a host- or group-scoped sync created it (a consumer asking for
     // one host on a cold cache), not because anything gathered the whole thing.

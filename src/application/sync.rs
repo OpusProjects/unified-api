@@ -796,6 +796,39 @@ mod tests {
         assert!(!entry.dataset.groups.contains_key("oracle_version"));
     }
 
+    // The TTL lives in config, and a merge-mode source's entry is patched in
+    // place rather than replaced — so before this it kept whatever TTL it was
+    // created with. Lowering `ttl_seconds` had no effect, and with disk
+    // persistence the old value came back on every restart.
+    #[test]
+    fn a_merge_sync_adopts_a_changed_ttl() {
+        let cache = MemoryCache::new();
+        let source: Source = serde_yaml_ng::from_str(
+            "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 60\nsync_mode: merge\n",
+        )
+        .expect("source fixture");
+
+        // The entry was created back when the source was configured for a day
+        cache.set(
+            "src",
+            CacheEntry::new(dataset_of(vec![host("a.example", "web")]), 86400),
+        );
+
+        apply_to_cache(
+            &cache,
+            "src",
+            &source,
+            &SyncScope::Full,
+            ConnectorOutput {
+                dataset: dataset_of(vec![host("b.example", "db")]),
+                ages: None,
+                unreachable: Vec::new(),
+            },
+        );
+
+        assert_eq!(cache.get("src").expect("entry").ttl.as_secs(), 60);
+    }
+
     // A merge-mode source patches its entry in place, so nothing renewed the
     // dataset-level clock: the age grew from the first sync forever and the
     // source read as stale one TTL after boot, however faithfully it had been

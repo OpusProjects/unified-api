@@ -22,11 +22,11 @@ host lived under a different source id than those of an aa1 host:
 ```
               before                                    after
 
-  consumer ──► src-ssh-pq-facts   (aa1)      consumer ──► vw-facts-all
-           └─► src-edge-pq-dc4    (dc4)                        │
-           └─► src-edge-cdi-dc01                       ┌───────┼───────┬────────┐
-           └─► src-edge-cdi-dc04                       ▼       ▼       ▼        ▼
-           └─► ...                                   aa1     dc4     dc01     dc04
+  consumer ──> src-ssh-pq-facts   (aa1)      consumer ──> vw-facts-all
+           └─> src-edge-pq-dc4    (dc4)                        │
+           └─> src-edge-cdi-dc01                       ┌───────┼───────┬────────┐
+           └─> src-edge-cdi-dc04                       v       v       v        v
+           └─> ...                                   aa1     dc4     dc01     dc04
 
   every consumer learns the split,          the view owns the routing table;
   and relearns it when an edge is added     consumers never see it change
@@ -165,16 +165,16 @@ API and the view to read it.
 ```
   GET /sources/vw-facts-all/dataset?host=bwkftp101.dc4.pqe&refresh=true
         │
-        ├─ 1. who claims it?  ── src-d42's datacenter_dc4 group ─► member src-edge-dc4
+        ├─ 1. who claims it?  ── src-d42's datacenter_dc4 group ─> member src-edge-dc4
         │                          (the inventory, synced every 2 h)
         │
-        ├─ 2. is it stale?    ── view ttl_seconds, or the member's ─► yes
+        ├─ 2. is it stale?    ── view ttl_seconds, or the member's ─> yes
         │
-        ├─ 3. delegate         ─► refresh_hosts(src-edge-dc4, [bwkftp101])
-        │                          └─► remote connector, refresh_origin ─► the edge
-        │                                └─► edge SSHes that one host (281 ms)
+        ├─ 3. delegate         ─> refresh_hosts(src-edge-dc4, [bwkftp101])
+        │                          └─> remote connector, refresh_origin ─> the edge
+        │                                └─> edge SSHes that one host (281 ms)
         │
-        └─ 4. read             ─► serve from src-edge-dc4's cache, now current
+        └─ 4. read             ─> serve from src-edge-dc4's cache, now current
 ```
 
 ### A host nobody claims is a 404

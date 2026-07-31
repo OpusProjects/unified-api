@@ -18,37 +18,37 @@ the local work, and **one central** that federates them with
           DC MADRID                                      DC FRANKFURT
 ┌─────────────────────────────┐               ┌─────────────────────────────┐
 │      local fleet (LAN)      │               │      local fleet (LAN)      │
-│   web01 · web02 · db01 · …  │               │   app01 · app02 · db02 · …  │
-│         ▲                   │               │         ▲                   │
+│   web01 . web02 . db01 . ...  │             │ app01 . app02 . db02 . ...  │
+│         ^                   │               │         ^                   │
 │         │ parallel SSH      │               │         │ parallel SSH      │
 │         │ (russh, key that  │               │         │ (russh, key that  │
 │         │  never leaves MAD)│               │         │  never leaves FRA)│
 │  ┌──────┴───────────────┐   │               │  ┌──────┴───────────────┐   │
 │  │  unified-api-mad     │   │               │  │  unified-api-fra     │   │
-│  │  ▸ src-fleet  (ssh)  │   │               │  │  ▸ src-fleet  (ssh)  │   │
-│  │  ▸ src-d42 (script)  │   │               │  │  ▸ src-netbox        │   │
-│  │  cache ⇄ PVC         │   │               │  │  cache ⇄ PVC         │   │
-│  │  key-central ······· │◄──┼── restricted  │  │  key-central ······· │   │
+│  │  > src-fleet  (ssh)  │   │               │  │  > src-fleet  (ssh)  │   │
+│  │  > src-d42 (script)  │   │               │  │  > src-netbox        │   │
+│  │  cache <-> PVC       │   │               │  │  cache <-> PVC       │   │
+│  │  key-central ....... │<──┼── restricted  │  │  key-central ....... │   │
 │  │   (src-fleet only)   │   │   per edge    │  │   (src-fleet only)   │   │
 │  └──────────┬───────────┘   │               │  └──────────┬───────────┘   │
 └─────────────┼───────────────┘               └─────────────┼───────────────┘
               │                                             │
-              │        HTTPS · GET /dataset + /status       │
+              │        HTTPS . GET /dataset + /status       │
               │        restricted X-API-Key                 │
               │        the data's REAL age travels along    │
               └──────────────────────┬──────────────────────┘
-                                     ▼
+                                     v
                      ┌───────────────────────────────┐
                      │      unified-api (CENTRAL)    │
-                     │   ▸ src-madrid    (remote) ─┐ │
-                     │   ▸ src-frankfurt (remote) ─┤ │
-                     │   cache ⇄ PVC               │ │
-                     │   ep-global ◄───────────────┘ │
+                     │   > src-madrid    (remote) ─┐ │
+                     │   > src-frankfurt (remote) ─┤ │
+                     │   cache <-> PVC             │ │
+                     │   ep-global <───────────────┘ │
                      │   (merged world inventory)    │
                      └───────────────┬───────────────┘
                                      │ POST /api/v1/endpoints/ep-global
-                                     ▼
-                     AWX / Ascender · AnsibleForms · curl
+                                     v
+                     AWX / Ascender . AnsibleForms . curl
 ```
 
 Arrows point in the direction the CONNECTION is initiated (the central
@@ -129,12 +129,12 @@ central's own API keys for its consumers.
 
 ```bash
 # 1. the edge has data of its own
-curl -s -H "x-api-key: $EDGE_KEY" https://unified-api-mad…/api/v1/sources/src-fleet/status \
+curl -s -H "x-api-key: $EDGE_KEY" https://unified-api-mad.../api/v1/sources/src-fleet/status \
   | jq .dataset_age_seconds        # e.g. 42 — remember this number
 
 # 2. sync the central and read the same source through it
-curl -s -X POST -H "x-api-key: $CENTRAL_KEY" https://central…/api/v1/sources/src-madrid/sync | jq .total_hosts
-curl -s -H "x-api-key: $CENTRAL_KEY" https://central…/api/v1/sources/src-madrid/status \
+curl -s -X POST -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-madrid/sync | jq .total_hosts
+curl -s -H "x-api-key: $CENTRAL_KEY" https://central.../api/v1/sources/src-madrid/status \
   | jq .dataset_age_seconds        # must be >= the edge's number, NOT 0
 ```
 

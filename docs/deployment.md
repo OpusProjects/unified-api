@@ -69,7 +69,7 @@ cred-d42:
     username: "USERNAME"
     password: "PASSWORD"
 
-# token from env: reads NETBOX_TOKEN → script sees CREDENTIAL_TOKEN
+# token from env: reads NETBOX_TOKEN > script sees CREDENTIAL_TOKEN
 cred-netbox:
   name: "NetBox API token"
   type: "token"
@@ -105,7 +105,7 @@ cred-gitlab:
 prj-connectors:
   name: "Connector scripts"
   git_url: "https://gitlab.example.com/infra/connectors.git"
-  credential_id: "cred-gitlab"        # private repo → token over https
+  credential_id: "cred-gitlab"        # private repo > token over https
   sync_interval_seconds: 1800
 
 # Manual / pipeline-driven: existing checkout used as-is at boot (pair with a
@@ -322,7 +322,7 @@ Secrets Operator — covered with a full ESO example in
 
 ```bash
 BASE=http://localhost:8182 ; KEY="$UNIFIED_API_KEY_AWX"
-curl -s $BASE/healthz                                    # → ok
+curl -s $BASE/healthz                                    # > ok
 curl -s $BASE/readyz | jq                                # pending sources listed until first syncs
 curl -s -H "x-api-key: $KEY" -X POST $BASE/api/v1/sources/src-inventory/sync | jq
 curl -s -H "x-api-key: $KEY" $BASE/api/v1/sources | jq   # freshness per source

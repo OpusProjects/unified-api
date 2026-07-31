@@ -22,7 +22,7 @@ and every one of them sees the same inventory.
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
 - **SSH connector**: gathers Ansible facts from whole fleets in parallel
 - **In-memory cache with TTLs**: per-dataset, per-host and per-group freshness, no database
-- **Gzip responses**: inventory JSON compresses ~10× for `Accept-Encoding: gzip` clients
+- **Gzip responses**: a client that accepts gzip transfers about a tenth of the bytes
 - **Enrichers**: post-process cached data on a schedule or on demand
 - **Output endpoints**: turn cached datasets into the format each consumer needs
 - **Federation**: one instance per datacenter, one central aggregating them, real ages intact
@@ -39,17 +39,18 @@ and every one of them sees the same inventory.
 | Document | What it covers |
 |---|---|
 | [API](docs/api.md) | All routes with authentication, status code semantics and curl examples |
-| [Architecture](docs/architecture.md) | The four layers, the dependency rule, request flows and the concurrency model |
-| [Caching & TTLs](docs/caching.md) | The three-level freshness model, sync modes, TTL overrides and atomicity rules |
-| [CLI](docs/cli.md) | Environment variables, log tuning, health checks, common curl operations and shutdown |
-| [Configuration](docs/configuration.md) | Every YAML file field by field, environment variables and startup validation |
-| [Connectors](docs/connectors.md) | The script contracts for source connectors, enrichers and output transformers |
-| [Deployment](docs/deployment.md) | Container image, the worked config example, CI/CD jobs, Kubernetes and ArgoCD |
-| [Federation](docs/federation.md) | One instance per datacenter and one central federating them, and why not to SSH across the WAN |
-| [Observability](docs/observability.md) | Scheduling behaviour, structured logs, and the Prometheus metrics worth alerting on |
-| [Refresh](docs/on-demand-refresh.md) | Getting current facts for a named host across a federated mesh, and the limits that stop consumers overloading a datacenter |
-| [Testing](docs/testing.md) | How to run the suite, what the unit and integration tests cover, and how to add more |
-| [Views](docs/views.md) | Presenting several sources as one id, how a host is routed to its owner, and why ownership is declared rather than inferred |
+| [Architecture](docs/architecture.md) | The four layers, the dependency rule and the concurrency model |
+| [CLI](docs/cli.md) | Environment variables, log tuning, health checks and common curl operations |
+| [Configuration](docs/configuration.md) | Every YAML file field by field, env vars and startup validation |
+| [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
+| [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
+| [Federation](docs/federation.md) | One instance per datacenter, one central federating them, no WAN SSH |
+| [Observability](docs/observability.md) | Scheduling, structured logs and the metrics worth alerting on |
+| [Refresh](docs/on-demand-refresh.md) | Bringing a named host up to date at its origin, and what bounds the cost |
+| [Testing](docs/testing.md) | Running the suite, what the tests cover, and where new ones belong |
+| [Troubleshooting](docs/troubleshooting.md) | Symptom first: what to check when data is stale or a read refuses |
+| [TTL](docs/caching.md) | The three-level freshness model, sync modes and TTL overrides |
+| [Views](docs/views.md) | Several sources as one id, and how a host is routed to its owner |
 
 ---
 

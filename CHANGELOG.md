@@ -8,6 +8,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **A static inventory no longer drops hosts from a group declared twice.**
+  Declaring one group under two parents is ordinary Ansible, and the parser
+  replaced the earlier declaration with the later one — so every host the first
+  carried disappeared from that group. Silently: the host stayed in `hostvars`,
+  so nothing looked wrong until an inventory rendered from `groups` failed to
+  target it, or a play matching the group skipped a machine that was plainly in
+  the file.
+
+  Declarations are now merged — hosts, children and group vars alike — and a
+  group's ancestry is a graph rather than a chain, so a host inherits the vars
+  of *every* parent its group is declared under instead of whichever was walked
+  last. A host or child named in both declarations is listed once.
+
 - **A timed-out run is now stopped, not just abandoned.** `timeout_seconds`
   bounded how long unified-api *waited*, never how long the script *ran*: the
   timeout dropped the future, and a dropped child process keeps executing. A

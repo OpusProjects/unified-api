@@ -15,7 +15,10 @@
 #
 # Release PRs legitimately change this region (renaming Unreleased to the new
 # version, adding its link ref), so the workflow skips this check on
-# release/* branches.
+# release/* branches. It skips it too on a PR labelled `changelog-rewrite`,
+# which is how a deliberate correction to published history gets through —
+# redacting a name, fixing a wrong date. That one is a label rather than a
+# branch prefix so the waiver shows up in review.
 #
 # Usage: check-changelog.sh [base-ref]      (default: origin/main)
 
@@ -42,8 +45,12 @@ Released sections are a record of what shipped; only "## [Unreleased]" is
 open for editing. If a rebase moved your entry, cut it from the released
 section and paste it under "## [Unreleased]".
 
-(Cutting a release is the exception — that work belongs on a release/*
-branch, where this check does not run.)
+Two exemptions, if the change above is deliberate:
+
+  - cutting a release — that work belongs on a release/* branch, where
+    this check does not run;
+  - correcting published history (redacting a name, fixing a date) — label
+    the PR `changelog-rewrite` and the check is skipped.
 MSG
     exit 1
 fi

@@ -6,6 +6,9 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+    # The defaults plus label events: applying `changelog-rewrite` has to
+    # re-run the check it exempts, and removing it has to re-assert it.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 env:
   REGISTRY: ghcr.io
@@ -20,10 +23,17 @@ jobs:
       # Released CHANGELOG sections are the record of what shipped; only
       # "## [Unreleased]" is open for editing. Rebasing a branch across a
       # release silently drops its entry into the just-released section, so
-      # this is checked rather than remembered. Release branches are exempt:
-      # cutting a version is exactly the case that rewrites that region.
+      # this is checked rather than remembered. Two exemptions, both explicit:
+      # release/* branches, since cutting a version rewrites that region by
+      # definition, and the `changelog-rewrite` label, for a deliberate
+      # correction to published history (a redaction, a wrong date). The label
+      # lives on the PR, so waiving the guard is a reviewable act rather than
+      # a branch name nobody looks at.
       - name: CHANGELOG history is immutable
-        if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release/')
+        if: >-
+          github.event_name == 'pull_request'
+          && !startsWith(github.head_ref, 'release/')
+          && !contains(github.event.pull_request.labels.*.name, 'changelog-rewrite')
         env:
           BASE: ${{ github.base_ref }}
         run: |

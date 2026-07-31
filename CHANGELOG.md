@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Listing projects no longer blocks the runtime.** `GET /api/v1/projects`
+  reported `checkout_present` with a blocking `Path::exists` per configured
+  project, from inside an async handler — the same shape as the `secret_file`
+  read fixed in 0.10.2, and small for the same reason and only on local disk. A
+  checkout on a network or overlay volume is the case that parks a worker thread
+  with unrelated requests queued behind it. It now uses `tokio::fs`.
+
 - **A hostname the caller chose can no longer panic the request.** The
   `x-unified-api-refreshed-hosts` header is built from the hosts a successful
   refresh was asked for — and a host the connector did not return is still among

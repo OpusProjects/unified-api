@@ -332,6 +332,30 @@ async fn a_host_no_member_claims_is_a_404_that_says_so() {
     );
 }
 
+// A conditional request must not be able to talk the server out of the refusal.
+// The ETag used to be minted, and a 304 answered, before the hosts were routed
+// at all — so `If-None-Match: *` turned an unroutable request into "nothing
+// changed", which is the same silent nothing the 404 exists to prevent.
+#[tokio::test]
+async fn a_conditional_request_for_an_unclaimed_host_is_still_a_404() {
+    let f = fixture("unclaimed-cond", 60, None, false);
+
+    let response = f
+        .app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/sources/vw-all/dataset?host=nobody.example")
+                .header("if-none-match", "*")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn an_unmatched_group_filter_is_still_an_empty_result_not_a_404() {
     let f = fixture("ghost-group", 60, None, false);

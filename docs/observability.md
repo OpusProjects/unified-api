@@ -55,6 +55,23 @@ probes — scrapers don't carry the API key):
 | `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired — and 0 for a source that has only ever received host- or group-scoped syncs, which have no full gather for the TTL to be measured against |
 | `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
 | `unified_api_source_groups` | `source` | Groups in the cached dataset |
+| `unified_api_view_fresh` | `view` | 1 while every member is cached and inside its TTL |
+| `unified_api_view_age_seconds` | `view` | Age of the **stalest** member — a view is no more current than the least current thing it serves |
+| `unified_api_view_ttl_seconds` | `view` | The view's declared TTL, or the loosest member's |
+| `unified_api_view_hosts` | `view` | Hosts the view can actually serve |
+| `unified_api_view_members_total` | `view` | Members declared |
+| `unified_api_view_members_cached` | `view` | Members that have data. Short of `_total` = the view is serving part of its inventory |
+| `unified_api_view_members_routable` | `view` | Members whose *ownership* source is cached. Short of `_total` = those members claim nothing beyond literally named hosts, so the view 404s hosts that plainly exist |
+
+A view holds no cache entry of its own, so it has none of the `unified_api_source_*`
+series — its members do. The names are separate rather than reusing the source
+ones with a view id, because a view's hosts *are* its members' hosts: folding
+them into one series would double-count every host in any sum across the label.
+
+`_members_routable` is the one with no equivalent elsewhere. Every member can be
+cached and fresh while the inventory source their ownership resolves against has
+never synced — the view then claims nothing, serves an empty dataset, and looks
+healthy in every other number.
 
 Timed-out and failed runs count as `result="error"`, so alerting on the error
 rate catches hung connectors too.

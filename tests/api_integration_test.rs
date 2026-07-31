@@ -1338,3 +1338,80 @@ async fn dataset_limit_parameter_carries_a_swagger_example() {
         "limit must not declare a default — the server applies none"
     );
 }
+
+// =========================================================================
+// Tests: every error carries a body, endpoints included
+// =========================================================================
+
+// The endpoint route answered its authorization and not-found cases with a bare
+// StatusCode, which axum renders with an EMPTY body — while every other route
+// explains itself. That is the one convention the project states outright, and
+// endpoints are the consumer-facing route: AWX and AnsibleForms call these.
+#[tokio::test]
+async fn endpoint_errors_carry_a_body_like_every_other_route() {
+    use std::collections::HashMap;
+    use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
+    use unified_api::domain::endpoint::OutputEndpoint;
+
+    let endpoints = HashMap::from([(
+        "ep-granted".to_string(),
+        OutputEndpoint {
+            name: "Granted".to_string(),
+            source_ids: vec![],
+            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: 30,
+        },
+    )]);
+
+    let app = unified_api::AppBuilder::new()
+        .endpoints(endpoints)
+        .api_keys(vec![ResolvedApiKey {
+            name: "scoped".to_string(),
+            secret: "scoped-secret".to_string(),
+            permissions: Permissions::Scoped {
+                sources: Default::default(),
+                endpoints: Default::default(),
+            },
+        }])
+        .build();
+
+    // Not granted: 403 naming the endpoint
+    let (status, body) =
+        get_with_key(app.clone(), "/api/v1/endpoints/ep-granted", "scoped-secret").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|_| panic!("403 should carry an error body, got {:?}", body));
+    assert!(
+        parsed["error"].as_str().unwrap().contains("ep-granted"),
+        "the error should name the endpoint: {}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_endpoint_id_says_so() {
+    use std::collections::HashMap;
+    use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
+
+    let app = unified_api::AppBuilder::new()
+        .endpoints(HashMap::new())
+        .api_keys(vec![ResolvedApiKey {
+            name: "admin".to_string(),
+            secret: "admin-secret".to_string(),
+            permissions: Permissions::Admin,
+        }])
+        .build();
+
+    let (status, body) = get_with_key(app, "/api/v1/endpoints/ep-ghost", "admin-secret").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|_| panic!("404 should carry an error body, got {:?}", body));
+    assert!(
+        parsed["error"].as_str().unwrap().contains("ep-ghost"),
+        "the error should name the id: {}",
+        body
+    );
+}

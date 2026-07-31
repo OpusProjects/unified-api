@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::domain::dataset::Dataset;
 
 #[derive(Serialize, ToSchema)]
@@ -71,8 +72,8 @@ pub async fn list_endpoints(
     request_body(content = Object, description = "Dynamic parameters for the endpoint script (optional)"),
     responses(
         (status = 200, description = "Transformed output from the endpoint script"),
-        (status = 403, description = "API key not allowed to run this endpoint"),
-        (status = 404, description = "Endpoint not configured"),
+        (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
+        (status = 404, description = "Endpoint not configured", body = ErrorBody),
         (status = 503, description = "Required sources not yet synced")
     )
 )]
@@ -81,7 +82,7 @@ pub async fn run_endpoint(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     body: Option<Json<serde_json::Value>>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
     execute_endpoint(&state, &auth, id, params).await
 }
@@ -95,8 +96,8 @@ pub async fn run_endpoint(
     ),
     responses(
         (status = 200, description = "Transformed output from the endpoint script. Query parameters become the endpoint's dynamic parameters, all as strings"),
-        (status = 403, description = "API key not allowed to run this endpoint"),
-        (status = 404, description = "Endpoint not configured"),
+        (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
+        (status = 404, description = "Endpoint not configured", body = ErrorBody),
         (status = 503, description = "Required sources not yet synced")
     )
 )]
@@ -105,7 +106,7 @@ pub async fn run_endpoint_get(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     // Rendering an inventory is a read, so it should be reachable with GET:
     // browsers, proxy caches and tools that only fetch URLs could not call
     // the POST-only route at all.
@@ -130,14 +131,20 @@ async fn execute_endpoint(
     auth: &AuthContext,
     id: String,
     params: serde_json::Value,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, ApiError> {
     // Granting an endpoint implicitly grants reading its output, even when
     // the key cannot read the underlying sources directly — the endpoint IS
     // the product being granted (e.g. a rendered inventory).
     if !auth.permissions.allows_endpoint(&id) {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(ApiError::forbidden(format!(
+            "this API key is not allowed to run endpoint '{}'",
+            id
+        )));
     }
-    let endpoint = state.endpoints.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let endpoint = state
+        .endpoints
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("endpoint '{}' is not configured", id)))?;
 
     // Collect datasets from configured sources (Arc clones — shared with the
     // cache, not deep copies)

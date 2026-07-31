@@ -41,11 +41,11 @@ by trusting consumers:
 ```
   refresh=true, in a loop, from 100 consumers, same host
         │
-        ├─ is the host still inside its TTL?  ── yes ─►  served from cache, 0 gathers
+        ├─ is the host still inside its TTL?  ── yes ─>  served from cache, 0 gathers
         │                                                (for the whole TTL window)
-        └─ no ─►  per-host lock: 1 gather, the rest wait and then find it fresh
+        └─ no ─>  per-host lock: 1 gather, the rest wait and then find it fresh
                         │
-                        └─►  ceiling: ONE gather per host per TTL window
+                        └─>  ceiling: ONE gather per host per TTL window
 ```
 
 With `ttl_seconds: 300` and 371 hosts, the absolute worst case — every host
@@ -84,28 +84,28 @@ Two limits sit under that one, covering what the TTL window does not:
                           │  GET /api/v1/sources/src-edge-dc4/dataset
                           │      ?host=itexenode100&refresh=true
                           │      X-API-Key: <consumer key>
-                          ▼
-      ┌───────────────────────────────────────────────────────┐
-      │   unified-api CENTRAL          (DC aa1, k8s)          │
+                          v
+      ┌────────────────────────────────────────────────────────┐
+      │   unified-api CENTRAL          (DC aa1, k8s)           │
       │                                                        │
       │   src-edge-dc4:  connector_type: remote                │
       │                  allow_on_demand_refresh: true         │
       │                  ttl_seconds: 300                      │
       │                                                        │
       │   1. is itexenode100 inside its 300s TTL?              │
-      │        yes ──────────────────────────► serve cache ────┼──► 200, 0 hops
+      │        yes ──────────────────────────> serve cache ────┼──> 200, 0 hops
       │        no  ──┐                                         │
-      │   2. take the per-host lock; re-check (someone else     │
+      │   2. take the per-host lock; re-check (someone else    │
       │      may have just refreshed it)                       │
-      │   3. take a permit from refresh_max_concurrent          │
-      │   4. RemoteConnector, budget = refresh_timeout_seconds  │
+      │   3. take a permit from refresh_max_concurrent         │
+      │   4. RemoteConnector, budget = refresh_timeout_seconds │
       └──────────────────────────┬─────────────────────────────┘
                                  │
         POST {edge}/api/v1/sources/src-ssh-facts/sync
              ?host=itexenode100&refresh_origin=true&refresh_depth=2
                                  │   X-API-Key: <edge key>
-                                 ▼
-      ┌───────────────────────────────────────────────────────┐
+                                 v
+      ┌────────────────────────────────────────────────────────┐
       │   unified-api EDGE             (DC dc4, podman)        │
       │                                                        │
       │   src-ssh-facts: connector_type: ssh                   │
@@ -114,18 +114,18 @@ Two limits sit under that one, covering what the TTL window does not:
       │   host scope honoured: SSH to itexenode100 ONLY        │
       └──────────────────────────┬─────────────────────────────┘
                                  │ russh, key that never leaves dc4
-                                 ▼
+                                 v
                           itexenode100  (facts)
                                  │
       ┌──────────────────────────┴─────────────────────────────┐
-      │  then the central reads what the edge now has:          │
-      │                                                         │
-      │  GET {edge}/…/dataset?host=itexenode100   ← ~KB, not MB │
-      │  GET {edge}/…/status?host=itexenode100    ← the REAL age│
-      │                                                         │
-      │  cached with that age, not with "now"                   │
+      │  then the central reads what the edge now has:         │
+      │                                                        │
+      │ GET {edge}/.../dataset?host=itexenode100 < ~KB, not MB │
+      │ GET {edge}/.../status?host=itexenode100  < the REAL age│
+      │                                                        │
+      │  cached with that age, not with "now"                  │
       └──────────────────────────┬─────────────────────────────┘
-                                 ▼
+                                 v
                      200 + the host's facts
                      x-unified-api-refreshed: true
                      x-unified-api-refreshed-hosts: itexenode100
@@ -258,7 +258,7 @@ src-edge-dc4:
       # A box whose state changes fast enough to be worth gathering more often
       itexenode100: 60
     groups:
-      # …or a whole group of them
+    # ...or a whole group of them
       oracle_db: 120
   config:
     url: "https://unified-api-dc4.example.com"
@@ -348,12 +348,12 @@ Then confirm the age really moved, at both ends:
 # on the central
 curl -s -H "X-API-Key: $FORMS_KEY" \
   "$CENTRAL/api/v1/sources/src-edge-dc4/status?host=itexenode100" \
-  | jq '.hosts[0].age_seconds'   # → a small number, single digits
+  | jq '.hosts[0].age_seconds'   # > a small number, single digits
 
 # on the edge, proving the SSH actually happened there
 curl -s -H "X-API-Key: $CENTRAL_KEY" \
   "$EDGE/api/v1/sources/src-ssh-facts/status?host=itexenode100" \
-  | jq '.hosts[0].age_seconds'   # → also small
+  | jq '.hosts[0].age_seconds'   # > also small
 ```
 
 ### 3. A refresh that correctly does nothing
@@ -376,14 +376,14 @@ ceiling working.
 # no hosts named
 curl -s -H "X-API-Key: $FORMS_KEY" \
   "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?refresh=true" | jq -r .error
-# → refresh=true requires ?host=: a refresh of a whole source on a read would
+# > refresh=true requires ?host=: a refresh of a whole source on a read would
 #   gather the entire inventory, so the hosts have to be named. POST the
 #   source's /sync endpoint for a full refresh.
 
 # a source without the capability
 curl -s -H "X-API-Key: $FORMS_KEY" \
   "$CENTRAL/api/v1/sources/src-other/dataset?host=x&refresh=true" | jq -r .error
-# → source 'src-other' does not allow on-demand refresh — set
+# > source 'src-other' does not allow on-demand refresh — set
 #   allow_on_demand_refresh: true on it to let a read trigger a gather
 ```
 
@@ -394,14 +394,14 @@ Stop the edge (or break the link), wait for the host to pass its TTL, then read:
 ```
 HTTP/1.1 200 OK
 x-unified-api-refreshed: false
-x-unified-api-refresh-error: request to 'http://…/sync?host=itexenode100&refresh_origin=true&refresh_depth=2' failed: error sending request for url (…)
+x-unified-api-refresh-error: request to 'http://.../sync?host=itexenode100&refresh_origin=true&refresh_depth=2' failed: error sending request for url (...)
 ```
 
 ```bash
 curl -s -H "X-API-Key: $FORMS_KEY" \
   "$CENTRAL/api/v1/sources/src-edge-dc4/dataset?host=itexenode100&refresh=true" \
   | jq -c '{returned, has_facts: (.hostvars["itexenode100"].memory != null)}'
-# → {"returned":1,"has_facts":true}
+# > {"returned":1,"has_facts":true}
 ```
 
 **The read still returns 200 with the cached data.** A form that renders stale
@@ -481,7 +481,7 @@ So a source configured like this:
 
 ```yaml
 ttl_seconds: 60              # "my data is old after a minute"
-sync_interval_seconds: 3600  # "…but I only sync hourly"
+sync_interval_seconds: 3600  # "...but I only sync hourly"
 ```
 
 will refresh on nearly every consumer request once the flag goes on. Still

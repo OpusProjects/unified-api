@@ -9,23 +9,23 @@ in process memory (DashMap) and configuration comes from YAML files.
 ```
             ┌───────────────────────── adapters (outside) ─────────────────────────┐
             │                                                                      │
- driving →  │  http/ (axum handlers, auth, routes, OpenAPI)     scheduler/         │
+ driving >  │  http/ (axum handlers, auth, routes, OpenAPI)     scheduler/         │
             │            │                                          │              │
-            │            ▼                                          ▼              │
+            │            v                                          v              │
             │  ┌──────────────────── application/ ────────────────────┐            │
             │  │   sync.rs        enrich.rs        credentials.rs     │            │
             │  └──────────────────────────┬───────────────────────────┘            │
-            │                             ▼                                        │
+            │                             v                                        │
             │  ┌───────────────────── ports/ ─────────────────────────┐            │
             │  │  CachePort  ConnectorPort  EnricherPort              │            │
             │  │  OutputPort  SecretsPort                             │            │
             │  └──────────────────────────┬───────────────────────────┘            │
-            │                             ▼                                        │
+            │                             v                                        │
             │  ┌───────────────────── domain/ ────────────────────────┐            │
             │  │  Dataset  CacheEntry  Source  Credential  Enricher   │            │
             │  └──────────────────────────────────────────────────────┘            │
             │                                                                      │
- driven  →  │  cache/  connectors/  enrichers/  output/  secrets/                  │
+ driven  >  │  cache/  connectors/  enrichers/  output/  secrets/                  │
             └──────────────────────────────────────────────────────────────────────┘
 ```
 

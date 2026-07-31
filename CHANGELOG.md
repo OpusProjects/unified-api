@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A talkative script no longer wedges its own run.** Enrichers and output
+  endpoints were handed their input by writing the whole payload to the script's
+  stdin *before* reading anything back. Pipe buffers hold 64 KiB, so any script
+  that wrote past that to stdout or stderr before draining its stdin deadlocked:
+  it blocked on a full output pipe, we blocked on a full input pipe, and nothing
+  moved until `timeout_seconds` expired — 300 seconds by default, answering an
+  endpoint caller with a 504 for a script that was working perfectly. A verbose
+  script logging its progress was enough to trigger it, and the payloads are the
+  largest in the process (a whole dataset for an enricher, every configured
+  source for an endpoint).
+
+  The input is now written on a task of its own, so the script's output is
+  drained while it is being fed. A script that stops reading early is no longer
+  an error either — it is a legitimate thing to do, and the broken pipe it
+  causes was previously reported as a failure.
+
 ### Changed
 
 - **Reading a view is no longer quadratic in the size of the inventory.** Every

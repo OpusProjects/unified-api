@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 
@@ -108,6 +109,15 @@ pub struct ViewSnapshot<'a> {
     pub view_id: &'a str,
     pub view: &'a View,
     pub members: Vec<MemberSnapshot<'a>>,
+    // hostname → index of the member that owns it, built at most once per
+    // snapshot. See `routing()` for why this exists rather than resolving each
+    // host against each member on demand.
+    //
+    // OnceLock, so a snapshot that never routes anything (reporting a member's
+    // age and TTL needs no ownership at all) pays nothing. Owned Strings rather
+    // than borrows: the hostnames live inside the `ownership` cache entries this
+    // very struct owns, and a struct cannot borrow from itself.
+    routing: OnceLock<HashMap<String, usize>>,
 }
 
 // Take the snapshot. Cheap on purpose — a few cache reads and no host
@@ -135,6 +145,7 @@ pub fn snapshot<'a>(
         view_id,
         view,
         members,
+        routing: OnceLock::new(),
     }
 }
 
@@ -147,16 +158,65 @@ pub fn snapshot<'a>(
 pub struct UnclaimedHosts(pub Vec<String>);
 
 impl<'a> ViewSnapshot<'a> {
+    // The routing table: every claimed host mapped to the member that owns it.
+    //
+    // Resolved once per snapshot rather than per question. Asking each member
+    // in turn whether it claims a host means a linear scan of that member's
+    // ownership group — a thousand hostnames for a datacenter — and a whole-view
+    // read asks it once per host, then again for every host it serves. On a
+    // 2000-host view that was ~6 ms of string comparison per call and quadratic
+    // in the inventory, on the read path a consumer polls.
+    //
+    // Built in declared order with `or_insert`, so the FIRST member to claim a
+    // host keeps it — the same rule the per-member scan implemented, and the one
+    // a multi-homed host in two datacenter groups depends on.
+    fn routing(&self) -> &HashMap<String, usize> {
+        self.routing.get_or_init(|| {
+            let mut routing: HashMap<String, usize> = HashMap::new();
+            for (index, member) in self.members.iter().enumerate() {
+                for hostname in member.claimed_hosts() {
+                    routing.entry(hostname.to_string()).or_insert(index);
+                }
+            }
+            routing
+        })
+    }
+
+    // Above this many hosts in one question, indexing the whole inventory pays
+    // for itself. Below it, asking the members directly is cheaper than building
+    // a table of thousands of entries to answer a handful of lookups — and the
+    // commonest view read names exactly one host. The gap between the two costs
+    // is wide, so the precise value does not matter.
+    const ROUTING_TABLE_WORTH_IT: usize = 16;
+
+    // Build the table if the caller is about to route enough hosts to justify it.
+    fn prepare_routing(&self, hosts_in_question: usize) {
+        if hosts_in_question > Self::ROUTING_TABLE_WORTH_IT {
+            let _ = self.routing();
+        }
+    }
+
     // Which member owns this host. First claim wins, so overlap resolves by
     // declared order.
     pub fn owner_of<'s>(&'s self, hostname: &str) -> Option<&'s MemberSnapshot<'a>> {
-        self.members.iter().find(|member| member.claims(hostname))
+        self.owner_index(hostname).map(|index| &self.members[index])
     }
 
-    fn owner_index(&self, hostname: &str) -> Option<usize> {
-        self.members
-            .iter()
-            .position(|member| member.claims(hostname))
+    // Public so the HTTP layer routes through the same answer the reads do,
+    // instead of keeping a second copy of "which member claims this".
+    //
+    // Uses the table once it exists; before that, asks the members directly.
+    // The two agree by construction — the table is built from `claimed_hosts`,
+    // which is the set form of the `claims` predicate this falls back to, in the
+    // same declared order with the same first-claim-wins rule.
+    pub fn owner_index(&self, hostname: &str) -> Option<usize> {
+        match self.routing.get() {
+            Some(routing) => routing.get(hostname).copied(),
+            None => self
+                .members
+                .iter()
+                .position(|member| member.claims(hostname)),
+        }
     }
 
     // Every host the view can serve: claimed by some member AND present in
@@ -166,25 +226,18 @@ impl<'a> ViewSnapshot<'a> {
     // here — the same answer a member gives for a host it has not gathered —
     // while still being routable for a refresh, which is what `owner_of` is for.
     pub fn hosts(&self) -> Vec<&str> {
-        let mut hosts: Vec<&str> = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::new();
-
-        for member in &self.members {
-            for hostname in member.claimed_hosts() {
-                // The owner may be an EARLIER member that has no data for it;
-                // the host then belongs to that member and is absent, rather
-                // than silently served by this one. Ownership is the contract.
-                if !seen.insert(hostname) {
-                    continue;
-                }
-                if self
-                    .owner_of(hostname)
-                    .is_some_and(|owner| owner.has(hostname))
-                {
-                    hosts.push(hostname);
-                }
-            }
-        }
+        // One pass over the routing table, which has already resolved each host
+        // to its owner and deduplicated them. This routes the whole inventory,
+        // so the table is always worth building here. The owner may be a member
+        // that has no data for the host; it then belongs to that member and is
+        // absent here, rather than silently served by a later one. Ownership is
+        // the contract.
+        let mut hosts: Vec<&str> = self
+            .routing()
+            .iter()
+            .filter(|(hostname, index)| self.members[**index].has(hostname))
+            .map(|(hostname, _)| hostname.as_str())
+            .collect();
 
         hosts.sort_unstable();
         hosts
@@ -252,6 +305,8 @@ impl<'a> ViewSnapshot<'a> {
         &'s self,
         hosts: &[String],
     ) -> Result<Vec<(&'s MemberSnapshot<'a>, Vec<String>)>, UnclaimedHosts> {
+        self.prepare_routing(hosts.len());
+
         let mut by_member: BTreeMap<usize, Vec<String>> = BTreeMap::new();
         let mut unclaimed: Vec<String> = Vec::new();
 
@@ -276,6 +331,7 @@ impl<'a> ViewSnapshot<'a> {
     // Borrowed straight out of the cache entries the snapshot holds: no clone
     // of the facts, which on a federated pair is 17 MB.
     pub fn hostvars(&self, selection: &[&str]) -> HashMap<&str, &HostVars> {
+        self.prepare_routing(selection.len());
         selection
             .iter()
             .filter_map(|hostname| {
@@ -479,6 +535,64 @@ mod tests {
         assert_eq!(s.owner_of("web01.aa1").unwrap().source_id, "src-aa1");
         assert_eq!(s.owner_of("db01.dc4").unwrap().source_id, "src-dc4");
         assert!(s.owner_of("nobody.example").is_none());
+    }
+
+    // There are two ways to answer "who owns this host": the routing table, and
+    // asking each member directly for a question too small to justify building
+    // it. They must never disagree — a host served by one and refreshed against
+    // the other would be a bug in both directions at once.
+    #[test]
+    fn the_routing_table_and_the_direct_scan_agree() {
+        let (cache, sources, mut view) = fixture();
+        // A multi-homed host in both datacenter groups, so declared order is
+        // load bearing for this comparison too.
+        cache.update("src-d42", &mut |entry| {
+            entry.merge_dataset(dataset(serde_json::json!({
+                "groups": {"datacenter_dc4": {"hosts": ["db01.dc4", "web01.aa1"]}}
+            })));
+        });
+
+        for members_reversed in [false, true] {
+            if members_reversed {
+                view.members.reverse();
+            }
+
+            let direct = snap(&cache, &sources, &view);
+            let indexed = snap(&cache, &sources, &view);
+            indexed.routing(); // force the table on one of them
+
+            for host in [
+                "web01.aa1",
+                "web02.aa1",
+                "db01.dc4",
+                "appliance.dc4",
+                "nobody.example",
+            ] {
+                assert_eq!(
+                    direct.owner_index(host),
+                    indexed.owner_index(host),
+                    "the two routing paths disagree about '{}' (reversed: {})",
+                    host,
+                    members_reversed
+                );
+            }
+        }
+    }
+
+    // The fast path exists so a single-host read does not index the whole
+    // inventory; this pins that it really is not built for one host.
+    #[test]
+    fn a_single_host_question_does_not_build_the_table() {
+        let (cache, sources, view) = fixture();
+        let s = snap(&cache, &sources, &view);
+
+        let routed = s.route(&["db01.dc4".to_string()]).unwrap();
+        assert_eq!(routed[0].0.source_id, "src-dc4");
+        assert!(s.routing.get().is_none());
+
+        // ...while a whole-view read does build it
+        let _ = s.hosts();
+        assert!(s.routing.get().is_some());
     }
 
     #[test]

@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Reading a view is no longer quadratic in the size of the inventory.** Every
+  question a view read asks — which member owns this host, which hosts can I
+  serve, whose data do I return — was answered by asking each member in turn,
+  and a member answers by scanning its ownership group's host list. A whole-view
+  read therefore did that scan once per host, then again for every host it
+  served, so the cost grew with the square of the inventory on the read path
+  consumers poll.
+
+  A snapshot now resolves the ownership table once and answers from it. Measured
+  on a two-member view (release build):
+
+  | Hosts | `/dataset` routing before | after |
+  |---|---|---|
+  | 2 000 | ~9.7 ms | ~0.5 ms |
+  | 4 000 | ~50 ms | ~1.8 ms |
+
+  Growth is now roughly linear rather than quadratic — doubling the inventory
+  roughly doubles the cost instead of quadrupling it.
+
+  A read that names a **single host** still answers without building the table,
+  so the common `?host=` query keeps costing microseconds rather than paying to
+  index a datacenter it will not look at. Both paths resolve ownership by the
+  same rule, in the same declared order, and a test pins them to the same answer.
+
 ## [0.10.1] - 2026-07-31
 
 ### Fixed

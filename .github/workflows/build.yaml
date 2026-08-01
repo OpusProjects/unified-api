@@ -63,7 +63,7 @@ jobs:
       # rather than rustsec/audit-check so the job needs no checks:write token
       # (the default token is read-only) and avoids the deprecated Node 20
       # action runtime.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.85.4
         with:
           tool: cargo-audit
       - run: cargo audit

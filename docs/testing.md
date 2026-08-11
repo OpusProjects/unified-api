@@ -43,6 +43,7 @@ The integration files:
 | `tests/sync_test.rs` | Sync and enrich use cases — scopes, sync modes, TTLs, timeouts |
 | `tests/on_demand_refresh_test.rs` | `?refresh=true`: the TTL gate, coalescing and the load ceiling, counted in real gathers |
 | `tests/views_test.rs` | Views: which member pays for a gather, the unclaimed-host 404, the read-only refusals |
+| `tests/ssh_connector_test.rs` | The SSH connector against an in-process russh server: host key verification (recorded/changed/unknown keys) and the accept-any default |
 | `tests/remote_connector_test.rs` | Federation: the remote connector against a stub upstream |
 | `tests/static_inventory_test.rs` | Ansible YAML inventories read from disk |
 | `tests/git_test.rs` | Project checkouts through the git CLI adapter |

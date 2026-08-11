@@ -3,8 +3,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
+use crate::adapters::out::process_env;
 use crate::domain::dataset::Dataset;
 use crate::ports::output::{OutputError, OutputPort, OutputResult};
 
@@ -54,7 +54,10 @@ impl OutputPort for ProcessOutput {
                 message: format!("Failed to serialize params: {}", e),
             })?;
 
-            let mut cmd = Command::new(&script_path);
+            // The environment is scrubbed (see adapters/out/process_env.rs):
+            // the script sees the passthrough list plus what we inject below,
+            // not the service's API-key secrets or the sources' credentials.
+            let mut cmd = process_env::scrubbed_command(&script_path);
             // Killed if this future is dropped — which is what a timeout
             // does. Without it `timeout_seconds` bounded only how long WE
             // waited: the script kept running, so a wedged one got a fresh

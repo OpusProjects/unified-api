@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Scripts no longer inherit the service's environment.** Every spawned
+  connector, enricher and output script received the full parent environment —
+  every API-key secret and every other source's credential variables, alongside
+  the scoped `CREDENTIAL_*` set it was actually granted. A single careless (or
+  compromised) connector script could read the admin API key and another
+  source's password even though it was only ever given its own.
+
+  The environment is now cleared before the adapter injects the script's own
+  variables (`SOURCE_CONFIG`, `CREDENTIAL_*`, `ENDPOINT_CONFIG`,
+  `ENDPOINT_PARAMS`). The only variables that pass through from the service are
+  the ones a script legitimately needs from the host: `PATH`, `HOME`, `TMPDIR`,
+  `LANG`, `LC_ALL`, `TZ`, `PYTHONPATH`, the proxy variables
+  (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`ALL_PROXY`, upper- and lowercase) and
+  the CA-bundle variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`,
+  `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`).
+
+  **Breaking (scripts reading undocumented environment variables):** a script
+  that read arbitrary variables from the service's environment no longer sees
+  them. Put such values in the source's/endpoint's `config` map (delivered as
+  `SOURCE_CONFIG`/`ENDPOINT_CONFIG`) or in a credential definition (delivered
+  as `CREDENTIAL_*`) instead.
+
 ## [0.11.0] - 2026-08-01
 
 ### Fixed

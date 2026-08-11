@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use tokio::process::Command;
 use tracing::{debug, warn};
+
+use crate::adapters::out::process_env;
 
 use crate::domain::dataset::Dataset;
 use crate::domain::source::OutputFormat;
@@ -55,7 +56,10 @@ impl ConnectorPort for ProcessConnector {
             // - CREDENTIAL_* with each credential field
             // Command::args never goes through a shell, so the arguments are
             // passed verbatim — no quoting or injection concerns.
-            let mut cmd = Command::new(&script_path);
+            // The environment is scrubbed (see adapters/out/process_env.rs):
+            // the script sees the passthrough list plus what we inject below,
+            // not the service's API-key secrets or other sources' credentials.
+            let mut cmd = process_env::scrubbed_command(&script_path);
             // Killed if this future is dropped — which is what a timeout
             // does. Without it `timeout_seconds` bounded only how long WE
             // waited: the script kept running, so a wedged one got a fresh
@@ -161,5 +165,43 @@ fn parse_dataset(
 
             Ok(dataset)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The fixture prints its whole environment as one host's vars, so the
+    // test sees exactly what a real connector script would.
+    #[tokio::test]
+    async fn a_script_sees_its_credentials_but_not_the_parents_secrets() {
+        // set_var is `unsafe` in edition 2024 because other threads may read
+        // the environment concurrently; a uniquely named test variable keeps
+        // this harmless. It stands in for another source's credential or an
+        // API-key secret living in the service's environment.
+        unsafe { std::env::set_var("UNIFIED_API_TEST_OTHER_SECRET", "leaked") };
+
+        let mut credentials = HashMap::new();
+        credentials.insert("username".to_string(), "admin".to_string());
+
+        let output = ProcessConnector::new()
+            .execute(
+                "tests/adapters/out/connectors/env_probe.py",
+                &[],
+                OutputFormat::Native,
+                &HashMap::new(),
+                &credentials,
+            )
+            .await
+            .expect("the probe connector should succeed");
+
+        let vars = &output.dataset.hostvars["probe"];
+        assert_eq!(vars["CREDENTIAL_USERNAME"], "admin");
+        assert!(vars.contains_key("SOURCE_CONFIG"));
+        assert!(
+            !vars.contains_key("UNIFIED_API_TEST_OTHER_SECRET"),
+            "the script saw an environment variable that is not its own"
+        );
     }
 }

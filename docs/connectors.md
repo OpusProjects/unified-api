@@ -52,6 +52,13 @@ Without `script_args` the script is invoked bare, exactly as before.
 | `SOURCE_CONFIG` | The source's `config` map as a JSON object. On scoped syncs it additionally carries `scope` (`host`/`group`) and `target` |
 | `CREDENTIAL_<KEY>` | One per resolved credential key, uppercased — e.g. `CREDENTIAL_USERNAME`, `CREDENTIAL_PASSWORD`, `CREDENTIAL_SSH_KEY_PATH` |
 
+These are the only variables the service sets, and the rest of the script's
+environment is **scrubbed**: apart from a small passthrough list (`PATH`,
+`HOME`, `TMPDIR`, `LANG`/`LC_ALL`, `TZ`, `PYTHONPATH`, and the usual proxy and
+CA-bundle variables), nothing from the service's own environment reaches the
+script — in particular not the API-key secrets or other sources' credentials.
+Anything else a script needs must travel in its `config` map or a credential.
+
 **Output:** the full Dataset JSON on stdout. Exit non-zero to fail the sync; stderr
 is captured into the error message.
 
@@ -306,7 +313,8 @@ reachability, tag hosts, drop stale entries.
 
 **Input:** `SOURCE_CONFIG` env var (the enricher's `config`), the enricher's
 `script_args` as CLI arguments (default: none), and the **current dataset on
-stdin** as JSON.
+stdin** as JSON. The environment is scrubbed the same way as for connector
+scripts (see above).
 
 **Output:** a *partial* Dataset on stdout — only what changed:
 
@@ -343,6 +351,8 @@ needs — the shipped example renders a merged Ansible inventory.
 | `ENDPOINT_CONFIG` env var | The endpoint's static `config` as JSON |
 | `ENDPOINT_PARAMS` env var | The JSON body of the `POST` request (`{}` if none) |
 | stdin | `{ "<source_id>": <Dataset>, ... }` for every configured source |
+
+The environment is scrubbed the same way as for connector scripts (see above).
 
 **Output:** anything on stdout — it is returned to the HTTP caller verbatim.
 

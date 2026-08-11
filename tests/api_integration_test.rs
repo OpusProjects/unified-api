@@ -659,6 +659,94 @@ async fn metrics_exposes_freshness_gauges() {
     );
 }
 
+// Sync health was tracked (consecutive failures, last error) but only /status
+// could see it: alerting had to infer a failing connector from the lossy
+// `unified_api_source_fresh == 0` proxy, which only fires once the whole TTL
+// has run out. These gauges export the registry itself, at scrape time.
+#[tokio::test]
+async fn metrics_exposes_sync_health_gauges() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert(
+        "src-health-ok".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    );
+    sources.insert(
+        "src-health-bad".to_string(),
+        script_source("tests/adapters/out/connectors/does_not_exist.py"),
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    // Before any sync there is no record, so there is no series: absent means
+    // "never attempted", exactly like the sync_health block on /sources
+    let (_, body) = get(app.clone(), "/metrics").await;
+    assert_eq!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_consecutive_failures",
+            "src-health-ok"
+        ),
+        None
+    );
+
+    for id in ["src-health-ok", "src-health-bad"] {
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/sources/{}/sync", id))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        // Always 200: a failed connector reports success=false in the body
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let (_, body) = get(app.clone(), "/metrics").await;
+
+    // The healthy source: zero failures, both ages present
+    assert_eq!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_consecutive_failures",
+            "src-health-ok"
+        ),
+        Some(0.0)
+    );
+    assert!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_last_attempt_age_seconds",
+            "src-health-ok"
+        )
+        .is_some()
+    );
+    assert!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_last_success_age_seconds",
+            "src-health-ok"
+        )
+        .is_some()
+    );
+
+    // The broken source: a failure streak to alert on, and no success age at
+    // all — it has never synced successfully, and an absent series says so
+    assert_eq!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_consecutive_failures",
+            "src-health-bad"
+        ),
+        Some(1.0)
+    );
+    assert_eq!(
+        gauge_value(
+            &body,
+            "unified_api_source_sync_last_success_age_seconds",
+            "src-health-bad"
+        ),
+        None
+    );
+}
+
 // =========================================================================
 // Tests: CORS is off by default, opt-in via allowed origins
 // =========================================================================

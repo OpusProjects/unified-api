@@ -44,6 +44,33 @@ fn record_source_gauges(state: &AppState) {
     for source_id in state.sources.keys() {
         metrics::gauge!("unified_api_source_cached", "source" => source_id.clone())
             .set(if cached.contains(source_id) { 1.0 } else { 0.0 });
+
+        // Sync health, exported instead of trapped in /status. The freshness
+        // gauges above say how old the data is; these say whether anything is
+        // still managing to refresh it — the difference between "syncs hourly,
+        // fine" and "failing since Tuesday", which until now could only be
+        // alerted on through the lossy `unified_api_source_fresh == 0` proxy.
+        // (`last_error` stays API-only: an error string as a label value is
+        // unbounded cardinality.)
+        //
+        // Scrape-time like everything here, and the attempt age doubly earns
+        // it: a scheduler task that stops running pushes nothing, so only a
+        // clock-driven gauge can show its silence — the attempt age just keeps
+        // growing.
+        if let Some(health) = state.sync_health.get(source_id) {
+            metrics::gauge!("unified_api_source_sync_consecutive_failures", "source" => source_id.clone())
+                .set(health.consecutive_failures as f64);
+            if let Some(age) = health.last_attempt_age_seconds {
+                metrics::gauge!("unified_api_source_sync_last_attempt_age_seconds", "source" => source_id.clone())
+                    .set(age as f64);
+            }
+            // Absent until the first success: a source that has NEVER synced
+            // successfully has no age to report, and an absent series says so
+            if let Some(age) = health.last_success_age_seconds {
+                metrics::gauge!("unified_api_source_sync_last_success_age_seconds", "source" => source_id.clone())
+                    .set(age as f64);
+            }
+        }
     }
 
     // Driven by the cache, not by config: an entry can outlive its config

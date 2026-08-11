@@ -33,7 +33,10 @@ pub enum OutputFormat {
     Ansible,
 }
 
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Source {
     pub name: String,
     pub project_id: String,
@@ -105,6 +108,7 @@ pub struct Source {
 // Dynamic host list: which source to read, which slice of it, and how to
 // connect to each host.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct HostsFromSource {
     // Source id whose cached dataset provides the hosts
     pub source: String,
@@ -120,6 +124,7 @@ pub struct HostsFromSource {
 // The UNION of: members of the listed groups + the individually listed
 // hosts. Names are matched exactly.
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct MatchPattern {
     #[serde(default)]
     pub groups: Vec<String>,
@@ -288,6 +293,7 @@ impl Source {
 
 // TTL Overrides: you can give different TTLs to specific groups or hosts
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TtlOverrides {
     // HashMap<String, u64> = dict[str, int] in Python
     // ex: {"production": 900} → the "production" group refreshes every 15 min

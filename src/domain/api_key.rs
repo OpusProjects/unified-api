@@ -7,7 +7,13 @@ use serde::Deserialize;
 // deployment (a k8s Secret, Vault via ESO, a .env file...). Rotating a key is
 // therefore an external process: swap the env var's value and restart — no
 // config or code change.
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
+// Here the stakes are highest: this file is the access-control list, and a
+// silently dropped key means a permission the operator believes is in force
+// and is not.
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ApiKeyDef {
     pub name: String,
 

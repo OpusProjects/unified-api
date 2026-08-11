@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Unknown configuration keys are now startup errors.** Only the view structs
+  rejected unknown keys; everywhere else a typo'd key was silently dropped and
+  the field's default silently applied — `sync_interval_second:` (no `s`) meant
+  a source that never syncs on its own, and a misspelled
+  `metrics_require_auth:` meant a security setting failing open with no
+  indication anywhere. Every configuration struct (`config.yaml`,
+  `sources.yaml`, `credentials.yaml`, `enrichers.yaml`, `projects.yaml`,
+  `endpoints.yaml`, `api_keys.yaml`) now carries `deny_unknown_fields`, so a
+  key the schema does not define refuses to start and names the key — the
+  same guarantee the view ownership patterns have had since they existed.
+
+  **Breaking (configs carrying stray keys):** a config file with a key the
+  schema does not define — a typo, or a leftover from an older version — now
+  fails startup instead of being ignored. The error names the key; fix or
+  remove it. Free-form data is unaffected: it belongs under the `config:` maps,
+  which remain arbitrary key/value pairs.
+
 ## [0.12.0] - 2026-08-11
 
 ### Added

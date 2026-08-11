@@ -8,7 +8,10 @@ use std::collections::HashMap;
 //   and returns a partial dataset (modified/removed hosts).
 // - Declarative merge: copies specified fields from one source's hostvars
 //   into another — no script needed.
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Enricher {
     pub name: String,
 

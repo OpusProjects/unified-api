@@ -12,7 +12,10 @@ pub enum CredentialType {
 // Reference to a credential — comes from configuration YAML.
 // Does not store secrets, only knows WHERE to read them from the environment.
 // The infrastructure (ESO, docker secrets, .env) is responsible for injecting them.
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Credential {
     pub name: String,
 

@@ -31,6 +31,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
     snapshot task via `consecutive_failures`, not the success age — an idle
     cache skips its snapshots on purpose.
 
+- **Source sync health is exported to Prometheus.** The registry behind the
+  `sync_health` block on `GET /sources` and `/status` — consecutive failures,
+  last attempt, last success — was invisible to `/metrics`, so alerting had to
+  infer a failing connector from the `unified_api_source_fresh == 0` proxy,
+  which only fires once the whole TTL has run out: a source failing for two
+  hours on a six-hour TTL still read as healthy. Three new per-source gauges,
+  computed at scrape time like the freshness ones:
+
+  - `unified_api_source_sync_consecutive_failures` — the streak to alert on
+    directly;
+  - `unified_api_source_sync_last_attempt_age_seconds` — grows past the sync
+    interval when the scheduler task is not running at all, the one failure
+    mode that produces no errors anywhere;
+  - `unified_api_source_sync_last_success_age_seconds` — absent until a sync
+    has ever succeeded, so "never worked" and "stopped working" read
+    differently.
+
+  `last_error` deliberately stays API-only: an error string as a label value
+  is unbounded cardinality. `docs/observability.md` now carries alert examples
+  for the failure streak and the silent-scheduler case.
+
 ### Changed
 
 - **Unknown configuration keys are now startup errors.** Only the view structs

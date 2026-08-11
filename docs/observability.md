@@ -55,6 +55,9 @@ probes — scrapers don't carry the API key):
 | `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired — and 0 for a source that has only ever received host- or group-scoped syncs, which have no full gather for the TTL to be measured against |
 | `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
 | `unified_api_source_groups` | `source` | Groups in the cached dataset |
+| `unified_api_source_sync_consecutive_failures` | `source` | Failed syncs since the last success — 0 while healthy. Appears once the source has attempted a sync in this process |
+| `unified_api_source_sync_last_attempt_age_seconds` | `source` | Seconds since a sync was last **attempted**, successful or not. Growing past the sync interval = the scheduler task is not running at all |
+| `unified_api_source_sync_last_success_age_seconds` | `source` | Seconds since the last successful sync. Absent until one has succeeded |
 | `unified_api_view_fresh` | `view` | 1 while every member is cached and inside its TTL |
 | `unified_api_view_age_seconds` | `view` | Age of the **stalest** member — a view is no more current than the least current thing it serves |
 | `unified_api_view_ttl_seconds` | `view` | The view's declared TTL, or the loosest member's |
@@ -98,13 +101,32 @@ grows while nothing is wrong.
   for: 5m
 ```
 
-The `unified_api_source_*` gauges are read from the cache on every scrape
-rather than pushed on sync, so age keeps growing while a source is not
-syncing — the case worth alerting on. A source whose scheduler task died
-produces no errors at all, so the error rate alone will not catch it:
+The `unified_api_source_*` gauges are read from the cache and the sync-health
+registry on every scrape rather than pushed on sync, so the ages keep growing
+while a source is not syncing — the case worth alerting on.
+
+The sync-health gauges mirror the `sync_health` block on `GET /sources` and
+`/status` (only `last_error` stays API-only: an error string as a label value
+is unbounded cardinality). They exist because the freshness gauges alone made
+a failing connector something to *infer*: `unified_api_source_fresh` only
+drops once the whole TTL has run out, so a source failing for two hours on a
+six-hour TTL still read as healthy. Alert on the failure streak directly, and
+on the attempt age for the failure mode that produces no errors at all — a
+scheduler task that has stopped running pushes nothing, and only a
+clock-driven gauge can show its silence:
 
 ```yaml
-# Data older than three sync intervals, or never synced at all
+# The connector has been failing for at least three attempts in a row
+- alert: UnifiedApiSourceSyncFailing
+  expr: unified_api_source_sync_consecutive_failures >= 3
+  for: 5m
+
+# Nothing is even trying: no sync attempt for over three 10-minute intervals
+- alert: UnifiedApiSourceSyncSilent
+  expr: unified_api_source_sync_last_attempt_age_seconds > 1800
+  for: 5m
+
+# The backstop on the data itself: older than its TTL, or never synced at all
 - alert: UnifiedApiSourceStale
   expr: unified_api_source_fresh == 0 or unified_api_source_cached == 0
   for: 15m

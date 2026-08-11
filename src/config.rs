@@ -25,7 +25,16 @@ pub struct AppConfig {
 }
 
 // HTTP server configuration — config.yaml
+//
+// `deny_unknown_fields`, here and on every other struct that parses a config
+// file: a key the schema does not know is a typo, and serde's default is to
+// silently drop it and silently apply the field's default. For most settings
+// that is a source syncing on an interval nobody chose; for a security setting
+// (`metrics_require_auth`) it is failing open. Refusing to start, naming the
+// key, is strictly better in every case. The pattern started on the view
+// structs (see domain/view.rs) and proved itself there.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
@@ -75,6 +84,7 @@ fn default_refresh_max_concurrent() -> usize {
 
 // Cache behavior — config.yaml, `cache:` section (optional)
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CacheConfig {
     // Without a `persistence` block the cache is purely in-memory (the
     // original behavior): nothing is ever written to disk.
@@ -83,6 +93,7 @@ pub struct CacheConfig {
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PersistenceConfig {
     // Snapshot file, e.g. /var/lib/unified-api/cache.json
     pub path: String,
@@ -98,6 +109,7 @@ fn default_persistence_interval() -> u64 {
 
 // Where git projects are cloned — config.yaml, `projects:` section (optional)
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectsConfig {
     // Working directory for checkouts: one subdirectory per project id
     #[serde(default = "default_projects_dir")]
@@ -118,6 +130,7 @@ fn default_projects_dir() -> String {
 
 // Intermediate struct to parse config.yaml (server + optional sections)
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ServerFile {
     server: ServerConfig,
     #[serde(default)]
@@ -527,10 +540,13 @@ mod tests {
         )
         .unwrap();
 
-        // Write credentials.yaml in map format
+        // Write credentials.yaml in map format. (This fixture used to carry a
+        // `vault_path` key that no longer exists in the schema — silently
+        // ignored for as long as unknown keys were dropped, caught the moment
+        // they stopped being.)
         fs::write(
             dir.path().join("credentials.yaml"),
-            "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  vault_path: \"secret/test\"\n",
+            "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  env_prefix: \"TEST\"\n",
         )
         .unwrap();
 
@@ -993,6 +1009,85 @@ mod tests {
         // Not a validation error but a parse error: an unknown key in the
         // routing table must never deserialize into "claims everything"
         assert!(load_err(&dir).contains("grups"));
+    }
+
+    // The same guarantee the views always had, now for every config file: a
+    // typo'd key must fail startup naming the key, not silently apply the
+    // default it was meant to override.
+    #[test]
+    fn a_typo_in_a_source_key_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        // sync_interval_second (no s): the sync interval this operator thinks
+        // they configured would silently not exist
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  sync_interval_second: 300\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a typo'd source key must not load")
+            .to_string();
+        assert!(err.contains("sync_interval_second"), "error was: {}", err);
+    }
+
+    #[test]
+    fn a_typo_in_an_api_key_definition_fails_to_load() {
+        let dir = dir_with_one_source();
+        // `source:` instead of `sources:` — the grant this key was meant to
+        // carry would silently become an empty one
+        fs::write(
+            dir.path().join("api_keys.yaml"),
+            "key-forms:\n  name: \"Forms\"\n  env: \"X\"\n  source: [\"src-a\"]\n",
+        )
+        .unwrap();
+
+        assert!(load_err(&dir).contains("source"));
+    }
+
+    #[test]
+    fn a_typo_in_the_server_config_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        // metrics_required_auth: the security setting would silently stay off
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  metrics_required_auth: true\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a typo'd server key must not load")
+            .to_string();
+        assert!(err.contains("metrics_required_auth"), "error was: {}", err);
+    }
+
+    #[test]
+    fn an_unknown_top_level_section_in_config_yaml_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        // `caches:` instead of `cache:` — persistence would silently not run
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\ncaches:\n  persistence:\n    path: \"/tmp/cache.json\"\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("an unknown section must not load")
+            .to_string();
+        assert!(err.contains("caches"), "error was: {}", err);
     }
 
     #[test]

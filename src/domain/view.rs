@@ -15,9 +15,9 @@ use super::dataset::Dataset;
 // split, and relearns it whenever an edge is added. A view is one address
 // for "the facts".
 //
-// `deny_unknown_fields` on the three view structs, unlike the rest of the
-// config: ownership is the routing table, and a typo in it (`grups:` instead of
-// `groups:`) would otherwise deserialize into an empty pattern, which claims
+// `deny_unknown_fields` is where the config-wide policy (see config.rs)
+// started: ownership is the routing table, and a typo in it (`grups:` instead
+// of `groups:`) would otherwise deserialize into an empty pattern, which claims
 // everything. A hard startup error beats a member that silently swallows the
 // whole inventory.
 #[derive(Debug, Deserialize, Clone)]

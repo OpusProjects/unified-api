@@ -4,7 +4,10 @@ use serde::Deserialize;
 // connector scripts and/or transformations.
 // A single project can have multiple scripts inside
 // (ex: device42/fetch.py, vmware/fetch.py, outputs/format.py)
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GitProject {
     pub name: String,
     pub git_url: String,

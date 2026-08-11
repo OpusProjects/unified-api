@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The SSH connector can verify host keys.** It accepted any server key: the
+  handler's `check_server_key` returned true unconditionally, so the connector
+  would open sessions — and authenticate — against whatever answered on the
+  port. On a spoofed network path that means handing a signature from the
+  fleet key to an impostor and ingesting whatever inventory it invents.
+
+  A new per-source config key, `ssh_known_hosts`, points at an OpenSSH
+  `known_hosts` file (plain, `[host]:port` and hashed entries are all
+  understood — `ssh-keyscan` output works as-is). When set, every server key
+  is checked **before authentication**: an unknown or changed key refuses the
+  connection with both fingerprints in the log, and the host is reported
+  `unreachable` — so, as with any unreachable host, its last known data is
+  kept rather than replaced. The file is re-read on every sync, so rotating
+  a host key needs no restart; startup validation fails fast on a missing
+  file.
+
+  Without `ssh_known_hosts` the behaviour is unchanged — any key is accepted —
+  but every such sync now logs a warning instead of staying silent about it.
+
 ### Security
 
 - **Scripts no longer inherit the service's environment.** Every spawned

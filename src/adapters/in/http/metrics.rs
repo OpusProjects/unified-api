@@ -24,6 +24,7 @@ fn handle() -> &'static PrometheusHandle {
 // probes: scrapers don't carry the API key.
 pub async fn metrics(State(state): State<Arc<AppState>>) -> String {
     record_source_gauges(&state);
+    record_task_health_gauges(&state);
     handle().render()
 }
 
@@ -122,6 +123,55 @@ fn record_view_gauges(state: &AppState) {
             .set(cached as f64);
         metrics::gauge!("unified_api_view_members_routable", "view" => view_id.clone())
             .set(routable as f64);
+    }
+}
+
+// Health of the periodic work that is NOT a source sync: enricher runs,
+// project pulls, and the cache snapshot task. Their registries record last
+// attempt / last success / consecutive failures; exporting them is what turns
+// "a warn! per interval" into something an alert can fire on.
+//
+// Computed at scrape time like the freshness gauges, and for the same reason:
+// the ages grow with the clock, so a value pushed when the task last ran would
+// freeze exactly when the task stops running. Keyed by the CONFIGURED ids, so
+// a configured-but-never-run job simply has no series yet (like a source with
+// no cache entry), and a job removed from config stops being re-set.
+fn record_task_health_gauges(state: &AppState) {
+    for enricher_id in state.enrichers.keys() {
+        if let Some(health) = state.enrich_health.get(enricher_id) {
+            metrics::gauge!("unified_api_enricher_consecutive_failures", "enricher" => enricher_id.clone())
+                .set(health.consecutive_failures as f64);
+            if let Some(age) = health.last_success_age_seconds {
+                metrics::gauge!("unified_api_enricher_last_success_age_seconds", "enricher" => enricher_id.clone())
+                    .set(age as f64);
+            }
+        }
+    }
+
+    for project_id in state.projects.keys() {
+        if let Some(health) = state.project_health.get(project_id) {
+            metrics::gauge!("unified_api_project_sync_consecutive_failures", "project" => project_id.clone())
+                .set(health.consecutive_failures as f64);
+            if let Some(age) = health.last_success_age_seconds {
+                metrics::gauge!("unified_api_project_sync_last_success_age_seconds", "project" => project_id.clone())
+                    .set(age as f64);
+            }
+        }
+    }
+
+    // One snapshot task per process: no label. Note that an idle cache skips
+    // its snapshots on purpose, so last_success age grows while nothing
+    // changes — alert on consecutive_failures, which only moves on real
+    // attempts.
+    if let Some(health) = state
+        .snapshot_health
+        .get(crate::adapters::out::cache::persistence::SNAPSHOT_HEALTH_KEY)
+    {
+        metrics::gauge!("unified_api_snapshot_consecutive_failures")
+            .set(health.consecutive_failures as f64);
+        if let Some(age) = health.last_success_age_seconds {
+            metrics::gauge!("unified_api_snapshot_last_success_age_seconds").set(age as f64);
+        }
     }
 }
 

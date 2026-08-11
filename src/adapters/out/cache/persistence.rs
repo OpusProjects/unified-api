@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::Dataset;
+use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports::cache::CachePort;
 
 // Disk persistence for the in-memory cache: an OPTIONAL snapshot file.
@@ -56,6 +57,11 @@ fn complete_unless_stated() -> bool {
 }
 
 const SNAPSHOT_VERSION: u32 = 1;
+
+// The key the snapshot task records its health under. There is one snapshot
+// task per process, so the registry holds a single entry; a well-known key
+// keeps the readers (metrics) from having to guess it.
+pub const SNAPSHOT_HEALTH_KEY: &str = "snapshot";
 
 // Serialize the whole cache and write it to `path` atomically: write to a
 // sibling temp file first, then rename over the target. rename() on the same
@@ -164,7 +170,16 @@ pub async fn load_or_warn(cache: &dyn CachePort, path: &Path) {
 // Spawn the periodic snapshot task. The first tick of tokio's interval fires
 // immediately, so we skip it — there is nothing worth saving at boot beyond
 // what was just loaded.
-pub fn start_snapshot_task(cache: Arc<dyn CachePort>, path: PathBuf, interval_seconds: u64) {
+pub fn start_snapshot_task(
+    cache: Arc<dyn CachePort>,
+    // A failing snapshot (full disk, permissions revoked, volume gone) used to
+    // be an error! per interval and nothing else — meanwhile every restart
+    // quietly degrades to older and older data. Recorded like any other
+    // periodic job, under SNAPSHOT_HEALTH_KEY.
+    health: Arc<SyncHealthRegistry>,
+    path: PathBuf,
+    interval_seconds: u64,
+) {
     // Only write when something actually changed since the last successful
     // save. The generation is read BEFORE saving: writes that land mid-save
     // bump it past `saved_generation`, so the next tick saves again — an
@@ -189,9 +204,13 @@ pub fn start_snapshot_task(cache: Arc<dyn CachePort>, path: PathBuf, interval_se
             match save(&*cache, &path).await {
                 Ok(count) => {
                     saved_generation = generation;
+                    health.record_success(SNAPSHOT_HEALTH_KEY);
                     tracing::debug!(path = %path.display(), entries = count, "Cache snapshot saved");
                 }
-                Err(e) => error!(path = %path.display(), error = %e, "Cache snapshot failed"),
+                Err(e) => {
+                    health.record_failure(SNAPSHOT_HEALTH_KEY, &e);
+                    error!(path = %path.display(), error = %e, "Cache snapshot failed");
+                }
             }
         }
     });
@@ -352,6 +371,75 @@ mod tests {
 
         let cache = MemoryCache::new();
         assert!(load(&cache, &path).await.is_err());
+    }
+
+    // Wait for the spawned snapshot task to record something, yielding so its
+    // IO (which runs in real time even on the paused clock) can complete.
+    async fn wait_for_record(
+        health: &SyncHealthRegistry,
+    ) -> crate::domain::sync_health::SyncHealth {
+        for _ in 0..1000 {
+            if let Some(recorded) = health.get(SNAPSHOT_HEALTH_KEY) {
+                return recorded;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the snapshot task never recorded its health");
+    }
+
+    // The task, not just save(): a full disk or revoked permission used to be
+    // an error! per interval and nothing an operator could query.
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_snapshot_records_into_the_health_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        // A path UNDER a regular file: create_dir_all fails on every attempt
+        let blocker = dir.path().join("blocker");
+        tokio::fs::write(&blocker, b"not a directory")
+            .await
+            .unwrap();
+        let path = blocker.join("deeper").join("cache.json");
+
+        let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new());
+        let health = Arc::new(SyncHealthRegistry::new());
+        start_snapshot_task(
+            Arc::clone(&cache) as Arc<dyn CachePort>,
+            Arc::clone(&health),
+            path,
+            1,
+        );
+
+        // Written AFTER the task captured its baseline generation, so the next
+        // tick has something to save
+        cache.set("src-1", CacheEntry::new(dataset(), 3600));
+
+        let recorded = wait_for_record(&health).await;
+        assert!(recorded.consecutive_failures >= 1);
+        assert!(
+            recorded.last_error.is_some(),
+            "the failure must carry its reason"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_successful_snapshot_records_into_the_health_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new());
+        let health = Arc::new(SyncHealthRegistry::new());
+        start_snapshot_task(
+            Arc::clone(&cache) as Arc<dyn CachePort>,
+            Arc::clone(&health),
+            path.clone(),
+            1,
+        );
+
+        cache.set("src-1", CacheEntry::new(dataset(), 3600));
+
+        let recorded = wait_for_record(&health).await;
+        assert_eq!(recorded.consecutive_failures, 0);
+        assert!(recorded.last_success_age_seconds.is_some());
+        assert!(path.exists());
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ use utoipa::ToSchema;
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::sources::SyncHealthInfo;
 use crate::application::enrich::run_enricher as application_run_enricher;
 
 #[derive(Serialize, ToSchema)]
@@ -36,6 +37,13 @@ pub struct EnricherInfo {
     /// Whether the target is in the cache. An enricher whose target has never
     /// synced cannot run, and said so only when you tried it.
     pub target_ready: bool,
+    /// Whether anything is still managing to run this enricher — last attempt,
+    /// last success, last error, consecutive failures. Absent until it has run
+    /// at least once through this process. Same shape as a source's
+    /// `sync_health`, for the same reason: a permanently failing enricher used
+    /// to be visible only in the logs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_health: Option<SyncHealthInfo>,
 }
 
 #[utoipa::path(
@@ -65,6 +73,7 @@ pub async fn list_enrichers(
             script_path: enricher.script_path.clone(),
             sync_interval_seconds: enricher.sync_interval_seconds,
             target_ready: state.cache.get(&enricher.target_id).is_some(),
+            sync_health: state.enrich_health.get(id).map(Into::into),
         })
         .collect();
 
@@ -107,14 +116,20 @@ pub async fn run_enricher(
     // None = target not in cache. Same status as an unknown enricher id before
     // this change, which sent a caller looking for a config typo that wasn't
     // there.
-    let outcome = application_run_enricher(&*state.cache, &*state.enricher, enricher_def)
-        .await
-        .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "target '{}' of enricher '{}' is not in the cache — sync it first",
-                enricher_def.target_id, id
-            ))
-        })?;
+    let outcome = application_run_enricher(
+        &*state.cache,
+        &*state.enricher,
+        &state.enrich_health,
+        &id,
+        enricher_def,
+    )
+    .await
+    .ok_or_else(|| {
+        ApiError::not_found(format!(
+            "target '{}' of enricher '{}' is not in the cache — sync it first",
+            enricher_def.target_id, id
+        ))
+    })?;
 
     Ok(Json(EnrichResult {
         target_id: enricher_def.target_id.clone(),

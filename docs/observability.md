@@ -62,6 +62,12 @@ probes — scrapers don't carry the API key):
 | `unified_api_view_members_total` | `view` | Members declared |
 | `unified_api_view_members_cached` | `view` | Members that have data. Short of `_total` = the view is serving part of its inventory |
 | `unified_api_view_members_routable` | `view` | Members whose *ownership* source is cached. Short of `_total` = those members claim nothing beyond literally named hosts, so the view 404s hosts that plainly exist |
+| `unified_api_enricher_consecutive_failures` | `enricher` | Failed runs since this enricher last succeeded — 0 while healthy. A target that is not in the cache counts as a failure: the enricher is not doing its job either way |
+| `unified_api_enricher_last_success_age_seconds` | `enricher` | Seconds since this enricher last ran successfully |
+| `unified_api_project_sync_consecutive_failures` | `project` | Failed git pulls since this project's checkout last updated |
+| `unified_api_project_sync_last_success_age_seconds` | `project` | Seconds since the checkout last updated |
+| `unified_api_snapshot_consecutive_failures` | — | Failed cache snapshot writes since one last succeeded (a full disk, revoked permissions, a vanished volume) |
+| `unified_api_snapshot_last_success_age_seconds` | — | Seconds since a snapshot was last written |
 
 A view holds no cache entry of its own, so it has none of the `unified_api_source_*`
 series — its members do. The names are separate rather than reusing the source
@@ -75,6 +81,22 @@ healthy in every other number.
 
 Timed-out and failed runs count as `result="error"`, so alerting on the error
 rate catches hung connectors too.
+
+The `_consecutive_failures` / `_last_success_age_seconds` pairs are read from
+the health registries at scrape time, like the freshness gauges. A series
+appears once the job has run at least once in this process — a
+configured-but-never-run enricher has no series yet, exactly as a never-synced
+source has no dataset gauges. For the snapshot task, alert on
+`unified_api_snapshot_consecutive_failures` rather than the success age: an
+idle cache **skips** its snapshots on purpose, so the age since the last write
+grows while nothing is wrong.
+
+```yaml
+# Persistence has been failing for three straight intervals
+- alert: UnifiedApiSnapshotFailing
+  expr: unified_api_snapshot_consecutive_failures >= 3
+  for: 5m
+```
 
 The `unified_api_source_*` gauges are read from the cache on every scrape
 rather than pushed on sync, so age keeps growing while a source is not

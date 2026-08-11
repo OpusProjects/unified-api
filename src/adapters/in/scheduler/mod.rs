@@ -9,6 +9,7 @@ use crate::application::enrich::run_enricher;
 use crate::application::projects::sync_project;
 use crate::application::sync::{SyncScope, sync_source};
 use crate::domain::project::GitProject;
+use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports::cache::CachePort;
 use crate::ports::git::GitPort;
 use crate::ports::secrets::SecretsPort;
@@ -137,6 +138,9 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
 pub fn start_project_sync_tasks(
     git: Arc<dyn GitPort>,
     secrets: Arc<dyn SecretsPort>,
+    // The same registry instance AppState exposes: main hands it in because
+    // these tasks start before the AppState exists
+    health: Arc<SyncHealthRegistry>,
     projects: HashMap<String, GitProject>,
     projects_dir: PathBuf,
 ) {
@@ -148,6 +152,7 @@ pub fn start_project_sync_tasks(
 
         let git = Arc::clone(&git);
         let secrets = Arc::clone(&secrets);
+        let health = Arc::clone(&health);
         let projects_dir = projects_dir.clone();
 
         tokio::spawn(async move {
@@ -159,7 +164,16 @@ pub fn start_project_sync_tasks(
 
             loop {
                 ticker.tick().await;
-                match sync_project(&*git, &*secrets, &project_id, &project, &projects_dir).await {
+                match sync_project(
+                    &*git,
+                    &*secrets,
+                    &health,
+                    &project_id,
+                    &project,
+                    &projects_dir,
+                )
+                .await
+                {
                     Ok(()) => info!(project = %project_id, "Project updated"),
                     Err(e) => error!(project = %project_id, error = %e, "Project update failed"),
                 }
@@ -193,7 +207,15 @@ fn start_enricher_tasks(state: Arc<AppState>) {
                 ticker.tick().await;
                 info!(enricher = %enricher_id, "Running");
 
-                match run_enricher(&*state.cache, &*state.enricher, &enricher).await {
+                match run_enricher(
+                    &*state.cache,
+                    &*state.enricher,
+                    &state.enrich_health,
+                    &enricher_id,
+                    &enricher,
+                )
+                .await
+                {
                     None => {
                         warn!(
                             enricher = %enricher_id,

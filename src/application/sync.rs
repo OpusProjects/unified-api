@@ -179,6 +179,10 @@ impl SyncOutcome {
 pub struct Enrichment<'a> {
     pub port: &'a dyn EnricherPort,
     pub enrichers: &'a HashMap<String, Enricher>,
+    // Enricher runs record their outcome (keyed by enricher id), wherever
+    // they are triggered from — the enrichers' own health registry, not the
+    // sources' one
+    pub health: &'a SyncHealthRegistry,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -217,8 +221,14 @@ pub async fn sync_source(
     // own interval stays as the backstop for the write paths that do not come
     // through this function.
     if let Some(enrichment) = enrichment.filter(|_| outcome.success()) {
-        let applied =
-            run_enrichers_for_target(cache, enrichment.port, enrichment.enrichers, source_id).await;
+        let applied = run_enrichers_for_target(
+            cache,
+            enrichment.port,
+            enrichment.health,
+            enrichment.enrichers,
+            source_id,
+        )
+        .await;
         if applied > 0 {
             tracing::debug!(
                 source = source_id,

@@ -56,6 +56,12 @@ async fn main() {
     let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> =
         std::sync::Arc::new(EnvSecrets::new(cfg.credentials.clone()));
 
+    // Created before the AppState exists because the boot clones below already
+    // record into it; handed to the builder so the HTTP layer reads the same
+    // instance those clones and the periodic project task write.
+    let project_health =
+        std::sync::Arc::new(unified_api::domain::sync_health::SyncHealthRegistry::new());
+
     // Bring project checkouts up to date BEFORE building the app, so script
     // paths can be resolved into them. A failed clone logs an error and the
     // boot continues: the affected source fails loudly at sync time and the
@@ -79,6 +85,7 @@ async fn main() {
             match unified_api::application::projects::sync_project(
                 &*git,
                 &*secrets,
+                &project_health,
                 project_id,
                 project,
                 &projects_dir,
@@ -95,6 +102,7 @@ async fn main() {
         unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
             git,
             std::sync::Arc::clone(&secrets),
+            std::sync::Arc::clone(&project_health),
             cfg.projects.clone(),
             projects_dir,
         );
@@ -110,6 +118,7 @@ async fn main() {
             std::path::PathBuf::from(&cfg.projects_config.dir),
         )
         .secrets(std::sync::Arc::clone(&secrets))
+        .project_health(std::sync::Arc::clone(&project_health))
         .api_keys(api_keys)
         .cors_allowed_origins(cfg.server.cors_allowed_origins)
         .readyz_require_all_sources(cfg.server.readyz_require_all_sources)
@@ -129,6 +138,7 @@ async fn main() {
         unified_api::adapters::out::cache::persistence::load_or_warn(&*state.cache, &path).await;
         unified_api::adapters::out::cache::persistence::start_snapshot_task(
             std::sync::Arc::clone(&state.cache),
+            std::sync::Arc::clone(&state.snapshot_health),
             path,
             persistence.interval_seconds,
         );

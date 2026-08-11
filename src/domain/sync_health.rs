@@ -31,11 +31,16 @@ struct Record {
     consecutive_failures: u32,
 }
 
-// Shared, mutable, keyed by source id.
+// Shared, mutable, keyed by whatever the owning registry tracks: source ids
+// for syncs, enricher ids for enrichment runs, project ids for git pulls, and
+// a single well-known key for the cache snapshot task. One registry instance
+// per kind (see AppState), so the id spaces cannot collide.
 //
 // It lives outside the cache on purpose: the interesting case is a source with
 // NO cache entry — one that has never synced successfully — and a registry
 // keyed independently keeps that record instead of having nowhere to put it.
+// The same reasoning extends to the other kinds: a periodic task that is
+// failing leaves nothing behind BUT this record.
 //
 // A std Mutex rather than the DashMap used by the cache: writes happen once per
 // sync attempt (seconds apart at best), so there is no contention to design

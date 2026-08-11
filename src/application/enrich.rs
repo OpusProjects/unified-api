@@ -6,6 +6,7 @@ use tokio::time::timeout;
 
 use crate::domain::dataset::{Dataset, HostVars};
 use crate::domain::enricher::Enricher;
+use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports::cache::CachePort;
 use crate::ports::enricher::EnricherPort;
 
@@ -27,16 +28,38 @@ impl EnrichOutcome {
 // against the cached dataset and merge the partial result.
 //
 // Returns None if the target is not in cache — there is nothing to enrich.
+// That case is still recorded as a failure in the health registry: an enricher
+// whose target never syncs is exactly as broken as one whose script fails,
+// and until now both were visible only in the logs.
+//
+// Health is recorded here rather than at the call sites so the scheduler, the
+// HTTP handler and the post-sync re-apply cannot drift — the same reasoning
+// as sync_source recording sync health.
 pub async fn run_enricher(
     cache: &dyn CachePort,
     enricher_port: &dyn EnricherPort,
+    health: &SyncHealthRegistry,
+    enricher_id: &str,
     enricher: &Enricher,
 ) -> Option<EnrichOutcome> {
-    let outcome = if enricher.is_declarative() {
-        execute_declarative_merge(cache, enricher)?
+    let result = if enricher.is_declarative() {
+        execute_declarative_merge(cache, enricher)
     } else {
-        execute_enricher(cache, enricher_port, enricher).await?
+        execute_enricher(cache, enricher_port, enricher).await
     };
+
+    let Some(outcome) = result else {
+        health.record_failure(
+            enricher_id,
+            &format!("target '{}' is not in the cache", enricher.target_id),
+        );
+        return None;
+    };
+
+    match &outcome.error {
+        None => health.record_success(enricher_id),
+        Some(error) => health.record_failure(enricher_id, error),
+    }
 
     let result_label = if outcome.success() {
         "success"
@@ -67,6 +90,7 @@ pub async fn run_enricher(
 pub async fn run_enrichers_for_target(
     cache: &dyn CachePort,
     enricher_port: &dyn EnricherPort,
+    health: &SyncHealthRegistry,
     enrichers: &HashMap<String, Enricher>,
     target_id: &str,
 ) -> usize {
@@ -77,8 +101,11 @@ pub async fn run_enrichers_for_target(
     matching.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut applied = 0;
-    for (_, enricher) in matching {
-        if run_enricher(cache, enricher_port, enricher).await.is_some() {
+    for (id, enricher) in matching {
+        if run_enricher(cache, enricher_port, health, id, enricher)
+            .await
+            .is_some()
+        {
             applied += 1;
         }
     }
@@ -314,9 +341,15 @@ mod tests {
         let cached = cache.get("src-a").expect("entry").dataset;
 
         let spy = SpyEnricher::default();
-        run_enricher(&cache, &spy, &script_enricher())
-            .await
-            .expect("target is cached, so the enricher runs");
+        run_enricher(
+            &cache,
+            &spy,
+            &SyncHealthRegistry::new(),
+            "en-spy",
+            &script_enricher(),
+        )
+        .await
+        .expect("target is cached, so the enricher runs");
 
         let received = spy
             .received
@@ -366,9 +399,15 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = run_enricher(&cache, &spy, &script_enricher())
-            .await
-            .expect("target is cached");
+        let outcome = run_enricher(
+            &cache,
+            &spy,
+            &SyncHealthRegistry::new(),
+            "en-spy",
+            &script_enricher(),
+        )
+        .await
+        .expect("target is cached");
         assert!(outcome.success());
 
         let entry = cache.get("src-a").expect("entry");
@@ -395,24 +434,63 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let outcome = run_enricher(&cache, &spy, &script_enricher())
+        let health = SyncHealthRegistry::new();
+        let outcome = run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
             .await
             .expect("target is cached");
 
         assert!(!outcome.success());
         assert_eq!(outcome.error.as_deref(), Some("spy failure"));
+
+        // ...and the reason lands in the health registry, where /enrichers
+        // and /metrics can see it — not only in a log line
+        let recorded = health.get("en-spy").expect("failure must be recorded");
+        assert_eq!(recorded.last_error.as_deref(), Some("spy failure"));
+        assert_eq!(recorded.consecutive_failures, 1);
     }
 
     #[tokio::test]
     async fn an_uncached_target_does_not_run_the_enricher() {
         let cache = MemoryCache::new();
         let spy = SpyEnricher::default();
+        let health = SyncHealthRegistry::new();
 
         assert!(
-            run_enricher(&cache, &spy, &script_enricher())
+            run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
                 .await
                 .is_none()
         );
         assert!(spy.received.lock().expect("spy lock").is_none());
+
+        // Not running IS the failure mode worth surfacing: an enricher whose
+        // target never syncs used to be a warn! on every tick and nothing else
+        let recorded = health.get("en-spy").expect("skip must be recorded");
+        assert!(
+            recorded
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("not in the cache"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_success_clears_an_earlier_failure() {
+        let cache = MemoryCache::new();
+        let health = SyncHealthRegistry::new();
+
+        // First run: target missing, recorded as a failure
+        let spy = SpyEnricher::default();
+        run_enricher(&cache, &spy, &health, "en-spy", &script_enricher()).await;
+        assert_eq!(health.get("en-spy").unwrap().consecutive_failures, 1);
+
+        // Target appears, the enricher runs: healthy again
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
+            .await
+            .expect("target is cached now");
+
+        let recorded = health.get("en-spy").unwrap();
+        assert_eq!(recorded.consecutive_failures, 0);
+        assert_eq!(recorded.last_error, None);
     }
 }

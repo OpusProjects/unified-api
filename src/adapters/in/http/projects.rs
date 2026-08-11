@@ -9,6 +9,7 @@ use utoipa::ToSchema;
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::sources::SyncHealthInfo;
 use crate::application::projects::sync_project;
 
 // Operational routes for git project checkouts. Admin-only: this is deploy
@@ -26,6 +27,13 @@ pub struct ProjectInfo {
     /// Seconds between periodic re-pulls (absent/0 = only boot and on demand)
     pub sync_interval_seconds: Option<u64>,
     pub sync_on_boot: bool,
+    /// Whether anything is still managing to pull this checkout — last
+    /// attempt, last success, last error, consecutive failures. Absent until a
+    /// sync has run through this process (boot, interval or on demand). This
+    /// is where "the checkout exists but is stuck on a stale commit" becomes
+    /// visible: `checkout_present` stays true while every pull fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_health: Option<SyncHealthInfo>,
 }
 
 #[utoipa::path(
@@ -68,6 +76,7 @@ pub async fn list_projects(
             checkout_present,
             sync_interval_seconds: project.sync_interval_seconds,
             sync_on_boot: project.sync_on_boot,
+            sync_health: state.project_health.get(id).map(Into::into),
         });
     }
 
@@ -114,6 +123,7 @@ pub async fn sync_project_now(
     let result = sync_project(
         &*state.git,
         &*state.secrets,
+        &state.project_health,
         &id,
         project,
         &state.projects_dir,

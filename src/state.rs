@@ -41,6 +41,15 @@ pub struct AppState {
     // success, last error). Not a port: it is in-process state with no
     // outside world behind it, like the cache's contents.
     pub sync_health: Arc<SyncHealthRegistry>,
+    // The same record for the OTHER periodic work, one registry per kind so
+    // the id spaces cannot collide: enricher runs (keyed by enricher id),
+    // project pulls (keyed by project id) and the cache snapshot task (a
+    // single well-known key). Before these, a permanently broken enricher, a
+    // project stuck on a stale commit, or a full disk killing persistence
+    // were warn! lines and nothing else.
+    pub enrich_health: Arc<SyncHealthRegistry>,
+    pub project_health: Arc<SyncHealthRegistry>,
+    pub snapshot_health: Arc<SyncHealthRegistry>,
     // Coalescing and limits for reads that are allowed to refresh before
     // answering. In-process state like sync_health: no outside world behind it.
     pub refresh: Arc<RefreshCoordinator>,
@@ -62,6 +71,7 @@ impl AppState {
         crate::application::sync::Enrichment {
             port: &*self.enricher,
             enrichers: &self.enrichers,
+            health: &self.enrich_health,
         }
     }
     // Chooses the appropriate connector based on the type declared in the source

@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Enricher runs, project pulls and cache snapshots record health, like syncs
+  always did.** A permanently failing enricher, a project checkout stuck on a
+  stale commit because every `git pull` fails, or a full disk killing cache
+  persistence were `warn!`/`error!` lines per interval and nothing else —
+  nothing an operator could query or alert on. All three now record last
+  attempt / last success / last error / consecutive failures into health
+  registries, the same pattern (and the same shape) as source sync health:
+
+  - `GET /api/v1/enrichers` carries a `sync_health` block per enricher (a
+    target that is not in the cache counts as a failure — the enricher is not
+    doing its job either way);
+  - `GET /api/v1/projects` carries one per project, which is where "the
+    checkout exists but every pull fails" becomes visible, since
+    `checkout_present` stays `true` the whole time;
+  - `GET /metrics` gains `unified_api_enricher_consecutive_failures` /
+    `_last_success_age_seconds` (per enricher),
+    `unified_api_project_sync_consecutive_failures` /
+    `_last_success_age_seconds` (per project) and
+    `unified_api_snapshot_consecutive_failures` /
+    `_last_success_age_seconds` (one snapshot task per process). Alert on the
+    snapshot task via `consecutive_failures`, not the success age — an idle
+    cache skips its snapshots on purpose.
+
 ### Changed
 
 - **Unknown configuration keys are now startup errors.** Only the view structs

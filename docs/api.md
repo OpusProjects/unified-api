@@ -149,6 +149,13 @@ connector that has failed twelve times since. A long sync interval and a
 broken connector both look like a dataset slowly getting older — only
 `last_error` and `consecutive_failures` tell them apart.
 
+The same block, in the same shape, appears on the other periodic work:
+`GET /enrichers` carries one per enricher (a permanently failing enricher, or
+one whose target never syncs, is the same "only in the logs" problem), and
+`GET /projects` carries one per project — which is where "the checkout exists
+but is stuck on a stale commit because every pull fails" becomes visible,
+since `checkout_present` stays `true` the whole time.
+
 A successful sync clears `last_error` and resets `consecutive_failures` to 0,
 but `last_success_age_seconds` is deliberately kept across failures.
 
@@ -293,7 +300,7 @@ Operational routes for git project checkouts — restricted keys always get `403
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/projects` | Configured projects with `checkout_present` and their sync settings |
+| `GET /api/v1/projects` | Configured projects with `checkout_present`, their sync settings and `sync_health` |
 | `POST /api/v1/projects/{id}/sync` | Clone/update the checkout to the branch tip, on demand |
 
 The sync route is how a pipeline in the scripts repository rolls new script

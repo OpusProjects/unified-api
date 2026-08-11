@@ -44,6 +44,7 @@ pub struct AppBuilder {
     projects_dir: std::path::PathBuf,
     secrets: Arc<dyn SecretsPort>,
     api_keys: Vec<ResolvedApiKey>,
+    project_health: Arc<domain::sync_health::SyncHealthRegistry>,
     cors_allowed_origins: Vec<String>,
     readyz_require_all_sources: bool,
     metrics_require_auth: bool,
@@ -63,6 +64,7 @@ impl AppBuilder {
             // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
             api_keys: Vec::new(),
+            project_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             cors_allowed_origins: Vec::new(),
             readyz_require_all_sources: false,
             metrics_require_auth: false,
@@ -127,6 +129,18 @@ impl AppBuilder {
         self
     }
 
+    // Project pulls start at boot, before the AppState exists (main clones the
+    // checkouts so script paths can be resolved into them). Handing the
+    // registry in lets those boot syncs and the periodic task write into the
+    // same instance the HTTP layer reads. Defaults to a fresh one for tests.
+    pub fn project_health(
+        mut self,
+        registry: Arc<domain::sync_health::SyncHealthRegistry>,
+    ) -> Self {
+        self.project_health = registry;
+        self
+    }
+
     pub fn cors_allowed_origins(mut self, origins: Vec<String>) -> Self {
         self.cors_allowed_origins = origins;
         self
@@ -176,6 +190,9 @@ impl AppBuilder {
             projects: self.projects,
             projects_dir: self.projects_dir,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            enrich_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            project_health: self.project_health,
+            snapshot_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             refresh: Arc::new(application::refresh::RefreshCoordinator::new(
                 self.refresh_max_concurrent,
                 self.refresh_timeout_seconds,

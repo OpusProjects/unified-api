@@ -46,7 +46,7 @@ src/
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # Source, TtlOverrides, ConnectorType
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
-│   ├── sync_health.rs        # SyncHealth + registry (last attempt/success/error)
+│   ├── sync_health.rs        # SyncHealth + registry (one per kind: sync/enrich/project/snapshot)
 │   ├── credential.rs         # Credential, CredentialType
 │   ├── api_key.rs            # ApiKeyDef, ApiKeyRole (admin / restricted)
 │   ├── enricher.rs           # Enricher
@@ -116,7 +116,11 @@ translators that call it; don't put orchestration logic in either.
 No external data dependencies (no Redis, no PostgreSQL). All cache in-memory with DashMap.
 Cache mutations must use the atomic `CachePort::update`/`merge_or_insert` operations —
 never the get → modify → set pattern (it loses concurrent writes).
-Configuration from YAML files; secrets resolved from env vars / JSON files via
+Configuration from YAML files, parsed STRICTLY: every config struct carries
+`deny_unknown_fields`, so a typo'd key fails startup naming the key instead of
+silently applying the default (policy comment in `config.rs`). Free-form data
+belongs in the `config:` maps, which stay arbitrary.
+Secrets resolved from env vars / JSON files via
 `SecretsPort` (a Vault adapter is roadmap, not built).
 
 ## Runtime behavior worth knowing
@@ -133,7 +137,12 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   id and host count) — sync,
   enrich and endpoint counters + duration histograms, plus per-source gauges
   (`unified_api_source_age_seconds`, `_fresh`, `_cached`, `_hosts`, `_groups`,
-  `_ttl_seconds`). The gauges are computed from the cache **on each scrape**,
+  `_ttl_seconds`) and health gauges from the registries: per-source
+  `unified_api_source_sync_consecutive_failures` / `_last_attempt_age_seconds`
+  / `_last_success_age_seconds`, and `_consecutive_failures` /
+  `_last_success_age_seconds` per enricher, per project and for the snapshot
+  task (`last_error` stays API-only — an error string as a label value is
+  unbounded cardinality). All gauges are computed **on each scrape**,
   not pushed on sync: age grows with the clock, so a pushed value would read
   "0 seconds old" exactly when a source stops syncing. The recorder is a
   process global installed once via `OnceLock`, so tests building many apps
@@ -153,6 +162,14 @@ Configuration from YAML files; secrets resolved from env vars / JSON files via
   `SyncHealthRegistry` on `AppState`. `GET /sources` and `/status` expose it as
   `sync_health`. It lives outside the cache on purpose — a source that has
   never synced has no cache entry but still needs somewhere to record why.
+  The same pattern covers the other periodic work, one registry per kind on
+  `AppState` so id spaces cannot collide: enricher runs (recorded in
+  `application::enrich`, exposed on `GET /enrichers`; a target missing from
+  the cache counts as a failure), project pulls (`application::projects`,
+  exposed on `GET /projects`; the project registry is created in `main`
+  because boot clones run before `AppState` exists, and handed to the builder
+  via `AppBuilder::project_health`), and the cache snapshot task (recorded
+  under a well-known key in `adapters/out/cache/persistence.rs`).
 - **Read path is shared, not copied:** `CacheEntry` holds its dataset (and
   host timestamps) behind `Arc`; reads bump a refcount, writers go through
   `Arc::make_mut` (copy-on-write). The entry also caches its serialized JSON +

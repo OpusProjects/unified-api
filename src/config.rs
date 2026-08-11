@@ -289,6 +289,25 @@ impl AppConfig {
             }
         }
 
+        // ssh_known_hosts must name an existing file, checked at startup —
+        // a typo'd path would otherwise fail every host of every sync at
+        // runtime instead of failing the deploy.
+        for (id, source) in &self.sources {
+            if let Some(path) = source.config.get("ssh_known_hosts") {
+                if source.connector_type != crate::domain::source::ConnectorType::Ssh {
+                    errors.push(format!(
+                        "Source '{}' sets ssh_known_hosts but is not an ssh source",
+                        id
+                    ));
+                } else if !std::path::Path::new(path).is_file() {
+                    errors.push(format!(
+                        "Source '{}': ssh_known_hosts file '{}' does not exist",
+                        id, path
+                    ));
+                }
+            }
+        }
+
         // Remote (federation) sources need the remote base URL
         for (id, source) in &self.sources {
             if source.connector_type == crate::domain::source::ConnectorType::Remote
@@ -589,6 +608,64 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("prj-ghost"));
+    }
+
+    #[test]
+    fn validate_catches_a_missing_ssh_known_hosts_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        let kh_path = dir.path().join("known_hosts");
+        fs::write(
+            dir.path().join("sources.yaml"),
+            format!(
+                "src-fleet:\n  name: \"Fleet\"\n  project_id: \"prj-test\"\n  script_path: \"unused\"\n  connector_type: \"ssh\"\n  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n    ssh_known_hosts: \"{}\"\n",
+                kh_path.display()
+            ),
+        )
+        .unwrap();
+
+        // The file does not exist yet: startup must fail and name the path,
+        // not refuse every host of every sync at runtime.
+        let result = load_config(dir.path().to_str().unwrap());
+        let err = result.err().expect("expected validation error").to_string();
+        assert!(err.contains("ssh_known_hosts"), "{}", err);
+
+        // Creating the file is all it takes.
+        fs::write(&kh_path, "").unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("an existing file must validate");
+    }
+
+    #[test]
+    fn validate_catches_ssh_known_hosts_on_a_non_ssh_source() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-script:\n  name: \"Script\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n  config:\n    ssh_known_hosts: \"/anywhere\"\n",
+        )
+        .unwrap();
+
+        let result = load_config(dir.path().to_str().unwrap());
+        let err = result.err().expect("expected validation error").to_string();
+        assert!(err.contains("not an ssh source"), "{}", err);
     }
 
     #[test]

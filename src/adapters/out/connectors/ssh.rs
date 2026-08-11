@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client;
-use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
+use super::known_hosts::{HostKeyCheck, KnownHosts};
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::source::HostSpec;
 use crate::ports::connector::{ConnectorError, ConnectorOutput, ConnectorPort, ConnectorResult};
@@ -28,18 +29,54 @@ impl SshConnector {
     }
 }
 
-struct SshClientHandler;
+struct SshClientHandler {
+    // None preserves the historical accept-any behaviour (warned about once
+    // per sync in execute()); Some verifies against the source's
+    // ssh_known_hosts file. The address/port ride along because
+    // check_server_key does not receive them.
+    verification: Option<HostKeyVerification>,
+}
+
+struct HostKeyVerification {
+    known_hosts: Arc<KnownHosts>,
+    address: String,
+    port: u16,
+}
 
 impl client::Handler for SshClientHandler {
     type Error = russh::Error;
 
-    // We accept any server key: hosts come from trusted config, and there is
-    // no known_hosts store to check against in this deployment model.
+    // Returning Ok(false) makes russh abort the handshake BEFORE
+    // authentication — a mismatched server never sees a signature from our
+    // key. The refusal reaches execute_on_host as russh::Error::UnknownKey.
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let Some(v) = &self.verification else {
+            // No known_hosts configured: accept any key, as before.
+            return Ok(true);
+        };
+        match v.known_hosts.check(&v.address, v.port, server_public_key) {
+            HostKeyCheck::Known => Ok(true),
+            HostKeyCheck::Unknown => {
+                warn!(
+                    host = %v.address,
+                    offered = %server_public_key.fingerprint(HashAlg::Sha256),
+                    "no known_hosts entry for this host; refusing to connect"
+                );
+                Ok(false)
+            }
+            HostKeyCheck::Changed { expected } => {
+                warn!(
+                    host = %v.address,
+                    offered = %server_public_key.fingerprint(HashAlg::Sha256),
+                    expected = ?expected,
+                    "HOST KEY MISMATCH — refusing to connect (possible MITM, or a reinstalled host whose known_hosts entry is stale)"
+                );
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -85,6 +122,33 @@ impl ConnectorPort for SshConnector {
             let legacy_algorithms = config
                 .get("ssh_legacy_algorithms")
                 .is_some_and(|v| v == "true");
+
+            // Parsed once per sync, shared across the fan-out. Re-read on
+            // every sync ON PURPOSE: rotating a host key means editing the
+            // file, and that must not require a restart. An unreadable file
+            // fails the whole sync — silently gathering nothing (every host
+            // refused as unknown) would look like a fleet-wide outage, and
+            // silently verifying nothing would betray the setting.
+            let known_hosts = match config.get("ssh_known_hosts") {
+                Some(path) => match tokio::fs::read_to_string(path).await {
+                    Ok(content) => Some(Arc::new(KnownHosts::parse(&content))),
+                    Err(e) => {
+                        return Err(ConnectorError {
+                            message: format!("Cannot read ssh_known_hosts '{}': {}", path, e),
+                            stderr: String::new(),
+                            exit_code: None,
+                        });
+                    }
+                },
+                None => {
+                    warn!(
+                        "SSH host keys are NOT verified for this sync — any server \
+                         answering on the port is trusted; set ssh_known_hosts on the \
+                         source to pin them"
+                    );
+                    None
+                }
+            };
 
             let username = credentials
                 .get("USERNAME")
@@ -148,6 +212,7 @@ impl ConnectorPort for SshConnector {
                     let key = Arc::clone(&private_key);
                     let user = username.clone();
                     let cmd = command.clone();
+                    let known_hosts = known_hosts.clone();
 
                     tasks.spawn(async move {
                         // acquire() only errors if the semaphore is closed, which
@@ -173,6 +238,7 @@ impl ConnectorPort for SshConnector {
                                     &key,
                                     &cmd,
                                     legacy_algorithms,
+                                    known_hosts.clone(),
                                 ),
                             )
                             .await;
@@ -473,12 +539,31 @@ async fn execute_on_host(
     key: &Arc<PrivateKey>,
     command: &str,
     legacy_algorithms: bool,
+    known_hosts: Option<Arc<KnownHosts>>,
 ) -> Result<String, HostError> {
     let ssh_config = client_config(legacy_algorithms);
 
-    let mut session = client::connect(Arc::new(ssh_config), (host, port), SshClientHandler)
+    let handler = SshClientHandler {
+        verification: known_hosts.map(|kh| HostKeyVerification {
+            known_hosts: kh,
+            address: host.to_string(),
+            port,
+        }),
+    };
+
+    let mut session = client::connect(Arc::new(ssh_config), (host, port), handler)
         .await
-        .map_err(|e| HostError::Connect(format!("Connection to {} failed: {}", host, e)))?;
+        .map_err(|e| match e {
+            // Our own handler said no. Classified as Other, not Connect:
+            // the address-fallback loop retries Connect failures on the
+            // next candidate, and a refused key is a decision, not a
+            // network hiccup. The handler already logged the fingerprints.
+            russh::Error::UnknownKey => HostError::Other(format!(
+                "Host key verification failed for {} (see the preceding warning for fingerprints)",
+                host
+            )),
+            e => HostError::Connect(format!("Connection to {} failed: {}", host, e)),
+        })?;
 
     // Non-RSA keys (ed25519, ecdsa) don't have a signature hash to negotiate;
     // skipping the lookup also skips its up-to-1s wait for the server's

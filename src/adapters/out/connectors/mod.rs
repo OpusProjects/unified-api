@@ -5,4 +5,7 @@
 pub mod process;
 pub mod remote;
 pub mod ssh;
+// OpenSSH known_hosts parsing/matching for the SSH connector's host key
+// verification — kept out of ssh.rs so the format rules are testable alone.
+pub(crate) mod known_hosts;
 pub mod static_inventory;

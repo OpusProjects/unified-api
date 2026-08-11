@@ -17,6 +17,11 @@ bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
 # git operation, so the SIMD engines' unsafe code buys nothing here.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 dashmap = "6"
+# Hashed known_hosts entries (|1|salt|hash) are HMAC-SHA1 of the hostname.
+# Both crates are already in the tree as russh dependencies — pinning the
+# same versions adds no new code to the build.
+hmac = "0.13"
+sha1 = "0.11"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # Remote connector (federation): fetch datasets from other unified-api
@@ -43,6 +48,10 @@ futures = "0.3"
 # behaviour is a property of a 40-second schedule, and this exercises it in
 # microseconds instead of making the suite wait
 tokio = { version = "1", features = ["test-util"] }
+# The SSH connector's integration tests run an in-process russh SERVER, so
+# the suite needs no sshd and no network. Same version as the main
+# dependency — Cargo unifies them.
+russh = "0.62.1"
 tempfile = "3"
 tower = "0.5"            # to call the app as a service (no TCP)
 http-body-util = "0.1"   # to read the body of responses

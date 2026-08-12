@@ -87,9 +87,10 @@ async fn refresh_before_reading(
     id: &str,
     host: Option<&str>,
 ) -> Result<RefreshOutcome, ApiError> {
+    // source_for_sync rather than sources.get: the refresh executes the
+    // connector, so the script path resolves into its checkout per execution
     let source = state
-        .sources
-        .get(id)
+        .source_for_sync(id)
         .ok_or_else(|| ApiError::source_not_configured(id))?;
 
     if !source.allow_on_demand_refresh {
@@ -120,7 +121,7 @@ async fn refresh_before_reading(
         &state.refresh,
         &state.syncs,
         id,
-        source,
+        &source,
         &hosts,
         // No view in play: the source's own TTL is the gate
         None,

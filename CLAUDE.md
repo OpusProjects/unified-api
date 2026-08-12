@@ -58,7 +58,8 @@ src/
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
 │   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
 │   ├── enrich.rs             # run_enricher, EnrichOutcome
-│   ├── projects.rs           # sync_project (git checkout up to date)
+│   ├── projects.rs           # sync_project (git checkout up to date, bounded by timeout_seconds)
+│   ├── scripts.rs            # per-execution script path resolution into project checkouts
 │   ├── views.rs              # ViewSnapshot: owner resolution + merged reads
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
@@ -131,6 +132,14 @@ Secrets resolved from env vars / JSON files via
   the SSH connector's per-host tasks) rather than abandoning it — otherwise a
   wedged script accumulated a live copy per interval. Scripts must therefore be
   interruptible: nothing cleans up a half-written file for them.
+- **Boot never blocks on git:** the listener binds and serves before the
+  project clones — one unreachable remote used to mean no `/healthz` at all.
+  Clones run concurrently in a background task, each bounded by the project's
+  `timeout_seconds`; the sync schedulers start after they finish. This works
+  because script paths resolve into checkouts PER EXECUTION
+  (`application/scripts.rs`, via `AppState::source_for_sync` and the
+  `Enrichment` bundle), not once at boot — which also means a script that
+  first appears after startup is picked up on the next run, no restart.
 - **Metrics:** `GET /metrics` (Prometheus; public by default, since a scrape
   config carries no API key — set `server.metrics_require_auth: true` to move
   it behind the key on a shared network, as the exposition labels every source

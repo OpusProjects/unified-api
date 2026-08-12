@@ -376,7 +376,12 @@ async fn refresh_before_reading(
     let mut errors: Vec<String> = Vec::new();
 
     for (member, member_hosts) in routed {
-        let source = member.source.expect("validated above");
+        // Resolved for execution (script path into its checkout), not the bare
+        // config entry: the refresh is about to run the member's connector.
+        // Members come from state.sources, so the id is always configured.
+        let source = state
+            .source_for_sync(member.source_id)
+            .expect("view members are configured sources");
         let connector = state.connector_for(&source.connector_type);
         let enrichment = state.enrichment();
 
@@ -388,7 +393,7 @@ async fn refresh_before_reading(
             &state.refresh,
             &state.syncs,
             member.source_id,
-            source,
+            &source,
             &member_hosts,
             // The view's TTL is the refresh GATE, not just a freshness label:
             // refresh_hosts only gathers hosts older than it. Passing None

@@ -183,6 +183,9 @@ pub struct Enrichment<'a> {
     // they are triggered from — the enrichers' own health registry, not the
     // sources' one
     pub health: &'a SyncHealthRegistry,
+    // Where project checkouts live, so an enricher's script resolves into its
+    // checkout at execution time (see application::scripts)
+    pub projects_dir: &'a std::path::Path,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -225,6 +228,7 @@ pub async fn sync_source(
             cache,
             enrichment.port,
             enrichment.health,
+            enrichment.projects_dir,
             enrichment.enrichers,
             source_id,
         )

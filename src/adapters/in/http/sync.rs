@@ -76,10 +76,10 @@ pub async fn sync_source(
         ));
     }
     // Not the same 404 as the read routes: this one means the id is absent
-    // from sources.yaml, not merely uncached
+    // from sources.yaml, not merely uncached. source_for_sync also resolves
+    // the script path into its project checkout, per execution.
     let source = state
-        .sources
-        .get(&id)
+        .source_for_sync(&id)
         .ok_or_else(|| ApiError::source_not_configured(&id))?;
 
     // `?host=` accepts a comma-separated list, like everywhere else in the API.
@@ -112,7 +112,7 @@ pub async fn sync_source(
         &state.sync_health,
         &state.syncs,
         &id,
-        source,
+        &source,
         request,
         Some(&enrichment),
     )

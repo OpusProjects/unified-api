@@ -16,7 +16,7 @@ async fn main() {
         .init();
 
     let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
-    let mut cfg = match unified_api::config::load_config(&config_dir) {
+    let cfg = match unified_api::config::load_config(&config_dir) {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("Failed to load configuration: {}", e);
@@ -62,52 +62,6 @@ async fn main() {
     let project_health =
         std::sync::Arc::new(unified_api::domain::sync_health::SyncHealthRegistry::new());
 
-    // Bring project checkouts up to date BEFORE building the app, so script
-    // paths can be resolved into them. A failed clone logs an error and the
-    // boot continues: the affected source fails loudly at sync time and the
-    // periodic project task (if configured) retries.
-    if !cfg.projects.is_empty() {
-        let git: std::sync::Arc<dyn unified_api::ports::git::GitPort> =
-            std::sync::Arc::new(CliGit::new());
-        let projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
-
-        for (project_id, project) in &cfg.projects {
-            // sync_on_boot=false + existing checkout (e.g. a persistent
-            // volume) = start offline from what is on disk; updates then come
-            // from the interval or POST /api/v1/projects/{id}/sync. A missing
-            // checkout is always cloned — no scripts, nothing to run.
-            let checkout_exists = projects_dir.join(project_id).join(".git").exists();
-            if !project.sync_on_boot && checkout_exists {
-                info!(project = %project_id, "Using existing checkout (sync_on_boot: false)");
-                continue;
-            }
-
-            match unified_api::application::projects::sync_project(
-                &*git,
-                &*secrets,
-                &project_health,
-                project_id,
-                project,
-                &projects_dir,
-            )
-            .await
-            {
-                Ok(()) => info!(project = %project_id, "Project checkout ready"),
-                Err(e) => error!(project = %project_id, error = %e, "Project sync failed"),
-            }
-        }
-
-        cfg.resolve_script_paths(&projects_dir);
-
-        unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
-            git,
-            std::sync::Arc::clone(&secrets),
-            std::sync::Arc::clone(&project_health),
-            cfg.projects.clone(),
-            projects_dir,
-        );
-    }
-
     let (app, state) = unified_api::AppBuilder::new()
         .sources(cfg.sources)
         .views(cfg.views)
@@ -144,8 +98,6 @@ async fn main() {
         );
     }
 
-    unified_api::adapters::r#in::scheduler::start_sync_tasks(std::sync::Arc::clone(&state));
-
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
 
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -156,6 +108,84 @@ async fn main() {
         });
 
     info!(addr = %addr, "Listening");
+
+    // The rest of the boot happens BEHIND the listener: project checkouts and
+    // the sync schedulers must never gate /healthz. One unreachable git remote
+    // used to mean the listener never bound at all — a failed startup probe
+    // for a service whose HTTP layer was perfectly able to serve. Script paths
+    // resolve per execution (application::scripts), so nothing here depends on
+    // the checkouts existing before the router does; /readyz stays red until
+    // the first sync lands, exactly as before.
+    {
+        let state = std::sync::Arc::clone(&state);
+        let secrets = std::sync::Arc::clone(&secrets);
+        let project_health = std::sync::Arc::clone(&project_health);
+        let projects = cfg.projects.clone();
+        let projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
+
+        tokio::spawn(async move {
+            if !projects.is_empty() {
+                let git: std::sync::Arc<dyn unified_api::ports::git::GitPort> =
+                    std::sync::Arc::new(CliGit::new());
+
+                // Concurrently rather than one after the other: boot waits for
+                // the slowest clone, not the sum — and every clone is bounded
+                // by its project's timeout_seconds (applied in sync_project).
+                let mut clones = tokio::task::JoinSet::new();
+                for (project_id, project) in projects.clone() {
+                    // sync_on_boot=false + existing checkout (e.g. a persistent
+                    // volume) = start offline from what is on disk; updates then
+                    // come from the interval or POST /api/v1/projects/{id}/sync.
+                    // A missing checkout is always cloned — no scripts, nothing
+                    // to run.
+                    let checkout_exists =
+                        tokio::fs::try_exists(projects_dir.join(&project_id).join(".git"))
+                            .await
+                            .unwrap_or(false);
+                    if !project.sync_on_boot && checkout_exists {
+                        info!(project = %project_id, "Using existing checkout (sync_on_boot: false)");
+                        continue;
+                    }
+
+                    let git = std::sync::Arc::clone(&git);
+                    let secrets = std::sync::Arc::clone(&secrets);
+                    let project_health = std::sync::Arc::clone(&project_health);
+                    let projects_dir = projects_dir.clone();
+                    clones.spawn(async move {
+                        match unified_api::application::projects::sync_project(
+                            &*git,
+                            &*secrets,
+                            &project_health,
+                            &project_id,
+                            &project,
+                            &projects_dir,
+                        )
+                        .await
+                        {
+                            Ok(()) => info!(project = %project_id, "Project checkout ready"),
+                            Err(e) => {
+                                error!(project = %project_id, error = %e, "Project sync failed")
+                            }
+                        }
+                    });
+                }
+                while clones.join_next().await.is_some() {}
+
+                unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
+                    git,
+                    secrets,
+                    project_health,
+                    projects,
+                    projects_dir,
+                );
+            }
+
+            // After the boot clones had their chance (bounded by their
+            // timeouts), so a source's first sync does not race its own
+            // script's clone and fail for no reason but start order.
+            unified_api::adapters::r#in::scheduler::start_sync_tasks(state);
+        });
+    }
 
     // Graceful shutdown — waits for SIGTERM or Ctrl+C
     axum::serve(listener, app)

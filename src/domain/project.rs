@@ -24,6 +24,12 @@ pub struct GitProject {
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
 
+    // Maximum seconds a clone/pull may take before it is aborted (default 300,
+    // same convention as sources and enrichers). Bounds whatever awaits the
+    // sync — an unreachable remote used to hang git (and its caller) forever.
+    #[serde(default = "crate::domain::default_timeout_seconds")]
+    pub timeout_seconds: u64,
+
     // Update the checkout at boot? With `false` an EXISTING checkout is used
     // as-is (no network at startup) and updates happen only on demand
     // (POST /api/v1/projects/{id}/sync, e.g. from a pipeline) or on the

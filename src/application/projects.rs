@@ -47,9 +47,22 @@ async fn run(
     };
 
     let dir = projects_dir.join(project_id);
-    git.ensure(&dir, project, &credentials)
-        .await
-        .map_err(|e| e.message)
+    // Bounded like every connector/enricher/output run: a git remote that
+    // never answers used to hang this future — and with it whatever awaited
+    // the sync. Dropping the future on timeout kills the git child
+    // (kill_on_drop in the adapter), so nothing keeps running behind our back.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(project.timeout_seconds),
+        git.ensure(&dir, project, &credentials),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(|e| e.message),
+        Err(_elapsed) => Err(format!(
+            "git operation timed out after {}s",
+            project.timeout_seconds
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +92,20 @@ mod tests {
                     None => Ok(()),
                 }
             })
+        }
+    }
+
+    // A GitPort that never answers — the unreachable remote.
+    struct HungGit;
+
+    impl GitPort for HungGit {
+        fn ensure(
+            &self,
+            _dir: &Path,
+            _project: &GitProject,
+            _credentials: &HashMap<String, String>,
+        ) -> GitFuture<'_> {
+            Box::pin(std::future::pending())
         }
     }
 
@@ -112,6 +139,40 @@ mod tests {
         let recorded = health.get("prj-a").unwrap();
         assert_eq!(recorded.consecutive_failures, 0);
         assert_eq!(recorded.last_error, None);
+    }
+
+    // The unreachable remote used to hang this future forever — and boot, the
+    // scheduler task or the HTTP request along with it.
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_git_remote_times_out_and_records_the_failure() {
+        let secrets = MockSecrets::new();
+        let health = SyncHealthRegistry::new();
+
+        let project: GitProject = serde_yaml_ng::from_str(
+            "name: Test\ngit_url: \"https://example.com/repo.git\"\ntimeout_seconds: 30\n",
+        )
+        .expect("project fixture");
+
+        sync_project(
+            &HungGit,
+            &secrets,
+            &health,
+            "prj-a",
+            &project,
+            &std::path::PathBuf::from("unused"),
+        )
+        .await
+        .expect_err("the hung remote must time out");
+
+        let recorded = health.get("prj-a").expect("failure must be recorded");
+        assert!(
+            recorded
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("timed out after 30s")),
+            "error was: {:?}",
+            recorded.last_error
+        );
     }
 
     #[tokio::test]

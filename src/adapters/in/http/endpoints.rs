@@ -172,11 +172,23 @@ async fn execute_endpoint(
 
     let start = Instant::now();
 
+    // An endpoint that names a project runs its transformer from the checkout;
+    // resolved per execution like sources and enrichers (application::scripts)
+    let script_path = match &endpoint.project_id {
+        Some(project_id) => crate::application::scripts::resolve_script_path(
+            &state.projects_dir,
+            &id,
+            project_id,
+            &endpoint.script_path,
+        ),
+        None => endpoint.script_path.clone(),
+    };
+
     // A hung transformer must not hang the HTTP request forever
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(endpoint.timeout_seconds),
         state.output.execute(
-            &endpoint.script_path,
+            &script_path,
             &endpoint.script_args,
             &endpoint.config,
             &params,

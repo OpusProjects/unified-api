@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Boot no longer waits for git.** The listener now binds and serves before
+  the project clones: one unreachable git remote used to mean no `/healthz` at
+  all — a failed Kubernetes startup probe for a service whose HTTP layer was
+  perfectly able to answer. Clones run in a background task, concurrently
+  rather than one after the other, and each is bounded by the project's new
+  `timeout_seconds` (default 300; a timed-out git child is killed, not
+  abandoned). The sync schedulers start once the clones have had their bounded
+  chance, so a source's first sync does not race its own script's clone.
+  `/readyz` semantics are unchanged: it stays red until the first sync lands.
+
+- **Script paths resolve into project checkouts at every execution, not once
+  at boot.** Same conservative rules as before (absolute paths untouched, the
+  checkout wins only when the file exists in it, otherwise the configured path
+  stays). Two visible improvements: a script that first appears after startup
+  — a slow clone, a pipeline's first push to a new project — is used on the
+  very next run instead of after the next restart, and boot no longer needs
+  the checkouts before it can build the router.
+
+### Added
+
+- **`timeout_seconds` on projects** (`projects.yaml`, default 300): a
+  clone/pull that runs longer is aborted and recorded as a failure in the
+  project's `sync_health`, the same convention sources, enrichers and
+  endpoints already follow. Before this, a git remote that never answered hung
+  its caller forever.
+
 ## [0.13.0] - 2026-08-12
 
 ### Added

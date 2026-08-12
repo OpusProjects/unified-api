@@ -39,13 +39,16 @@ pub async fn run_enricher(
     cache: &dyn CachePort,
     enricher_port: &dyn EnricherPort,
     health: &SyncHealthRegistry,
+    // Where project checkouts live: a script enricher's path resolves into
+    // its checkout at execution time (see application::scripts)
+    projects_dir: &std::path::Path,
     enricher_id: &str,
     enricher: &Enricher,
 ) -> Option<EnrichOutcome> {
     let result = if enricher.is_declarative() {
         execute_declarative_merge(cache, enricher)
     } else {
-        execute_enricher(cache, enricher_port, enricher).await
+        execute_enricher(cache, enricher_port, projects_dir, enricher_id, enricher).await
     };
 
     let Some(outcome) = result else {
@@ -91,6 +94,7 @@ pub async fn run_enrichers_for_target(
     cache: &dyn CachePort,
     enricher_port: &dyn EnricherPort,
     health: &SyncHealthRegistry,
+    projects_dir: &std::path::Path,
     enrichers: &HashMap<String, Enricher>,
     target_id: &str,
 ) -> usize {
@@ -102,7 +106,7 @@ pub async fn run_enrichers_for_target(
 
     let mut applied = 0;
     for (id, enricher) in matching {
-        if run_enricher(cache, enricher_port, health, id, enricher)
+        if run_enricher(cache, enricher_port, health, projects_dir, id, enricher)
             .await
             .is_some()
         {
@@ -189,6 +193,8 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
 async fn execute_enricher(
     cache: &dyn CachePort,
     enricher_port: &dyn EnricherPort,
+    projects_dir: &std::path::Path,
+    enricher_id: &str,
     enricher: &Enricher,
 ) -> Option<EnrichOutcome> {
     let current_entry = cache.get(&enricher.target_id)?;
@@ -205,12 +211,25 @@ async fn execute_enricher(
         }
     };
 
+    // An enricher that names a project runs the script from its checkout;
+    // resolved per execution so a checkout that appears after boot is picked
+    // up by the next run (see application::scripts)
+    let script_path = match &enricher.project_id {
+        Some(project_id) => crate::application::scripts::resolve_script_path(
+            projects_dir,
+            enricher_id,
+            project_id,
+            script_path,
+        ),
+        None => script_path.clone(),
+    };
+
     let start = Instant::now();
 
     let result = match timeout(
         Duration::from_secs(enricher.timeout_seconds),
         enricher_port.execute(
-            script_path,
+            &script_path,
             &enricher.script_args,
             &enricher.config,
             // An Arc clone: the enricher reads the very dataset the cache holds
@@ -345,6 +364,7 @@ mod tests {
             &cache,
             &spy,
             &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
         )
@@ -403,6 +423,7 @@ mod tests {
             &cache,
             &spy,
             &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
         )
@@ -435,9 +456,16 @@ mod tests {
             ..Default::default()
         };
         let health = SyncHealthRegistry::new();
-        let outcome = run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
-            .await
-            .expect("target is cached");
+        let outcome = run_enricher(
+            &cache,
+            &spy,
+            &health,
+            std::path::Path::new("unused"),
+            "en-spy",
+            &script_enricher(),
+        )
+        .await
+        .expect("target is cached");
 
         assert!(!outcome.success());
         assert_eq!(outcome.error.as_deref(), Some("spy failure"));
@@ -456,9 +484,16 @@ mod tests {
         let health = SyncHealthRegistry::new();
 
         assert!(
-            run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
-                .await
-                .is_none()
+            run_enricher(
+                &cache,
+                &spy,
+                &health,
+                std::path::Path::new("unused"),
+                "en-spy",
+                &script_enricher(),
+            )
+            .await
+            .is_none()
         );
         assert!(spy.received.lock().expect("spy lock").is_none());
 
@@ -480,14 +515,29 @@ mod tests {
 
         // First run: target missing, recorded as a failure
         let spy = SpyEnricher::default();
-        run_enricher(&cache, &spy, &health, "en-spy", &script_enricher()).await;
+        run_enricher(
+            &cache,
+            &spy,
+            &health,
+            std::path::Path::new("unused"),
+            "en-spy",
+            &script_enricher(),
+        )
+        .await;
         assert_eq!(health.get("en-spy").unwrap().consecutive_failures, 1);
 
         // Target appears, the enricher runs: healthy again
         cache.set("src-a", CacheEntry::new(dataset(), 3600));
-        run_enricher(&cache, &spy, &health, "en-spy", &script_enricher())
-            .await
-            .expect("target is cached now");
+        run_enricher(
+            &cache,
+            &spy,
+            &health,
+            std::path::Path::new("unused"),
+            "en-spy",
+            &script_enricher(),
+        )
+        .await
+        .expect("target is cached now");
 
         let recorded = health.get("en-spy").unwrap();
         assert_eq!(recorded.consecutive_failures, 0);

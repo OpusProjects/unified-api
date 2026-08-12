@@ -9,9 +9,13 @@ see [deployment](deployment.md).
 
 ## Scheduling behavior
 
-Background sync tasks start at boot for every source with
+Background sync tasks start for every source with
 `sync_interval_seconds > 0` (tokio `interval`, first tick immediately). Enrichers
-with an interval likewise. A failed run logs the error and waits for the next tick —
+with an interval likewise. They start once the boot project clones have had
+their bounded chance (concurrent, each capped by the project's
+`timeout_seconds`) — and all of that happens **behind the listener**, so
+`/healthz` answers while clones are still running and an unreachable git
+remote can no longer fail a startup probe. A failed run logs the error and waits for the next tick —
 there is no retry/backoff beyond the interval itself. Every script execution is
 bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
 cannot wedge its scheduler task. Exceeding it **kills** the process rather than

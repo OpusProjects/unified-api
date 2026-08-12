@@ -405,64 +405,10 @@ impl AppConfig {
         }
     }
 
-    // After the project checkouts exist on disk, point script paths into them.
-    // Called by main once the boot git sync ran; a no-op without projects.
-    //
-    // The rewrite is deliberately conservative — a path is only redirected
-    // when the file actually exists inside the checkout:
-    // - SSH sources are skipped (their script_path is a REMOTE command)
-    // - absolute paths are kept as-is
-    // - if the project failed to clone, or the file is not in it, the original
-    //   path stays (it may be baked into the image or mounted) and syncs keep
-    //   working exactly as before this feature existed
-    pub fn resolve_script_paths(&mut self, projects_dir: &Path) {
-        use crate::domain::source::ConnectorType;
-
-        for (id, source) in self.sources.iter_mut() {
-            if matches!(source.connector_type, ConnectorType::Ssh) {
-                continue;
-            }
-            resolve_one(
-                projects_dir,
-                id,
-                &source.project_id,
-                &mut source.script_path,
-            );
-        }
-        for (id, enricher) in self.enrichers.iter_mut() {
-            if let Some(project_id) = enricher.project_id.clone()
-                && let Some(ref mut sp) = enricher.script_path
-            {
-                resolve_one(projects_dir, id, &project_id, sp);
-            }
-        }
-        for (id, endpoint) in self.endpoints.iter_mut() {
-            if let Some(project_id) = endpoint.project_id.clone() {
-                resolve_one(projects_dir, id, &project_id, &mut endpoint.script_path);
-            }
-        }
-    }
-}
-
-fn resolve_one(projects_dir: &Path, owner_id: &str, project_id: &str, script_path: &mut String) {
-    if Path::new(script_path.as_str()).is_absolute() {
-        return;
-    }
-    let candidate = projects_dir.join(project_id).join(script_path.as_str());
-    if candidate.is_file() {
-        tracing::debug!(id = %owner_id, path = %candidate.display(), "Script resolved in project checkout");
-        *script_path = candidate.to_string_lossy().into_owned();
-    } else if projects_dir.join(project_id).is_dir() {
-        // The checkout exists but the script is not in it — likely a typo in
-        // config. Keep the original path (it may still resolve against the
-        // working directory) but say something.
-        tracing::warn!(
-            id = %owner_id,
-            project = %project_id,
-            script = %script_path,
-            "Script not found in project checkout, keeping the configured path"
-        );
-    }
+    // Script paths are NOT resolved into project checkouts here. They used to
+    // be (a one-shot rewrite after the boot clones), which coupled serving to
+    // the clones finishing and froze whatever the disk looked like at startup.
+    // Resolution now happens per execution — see application::scripts.
 }
 
 pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
@@ -723,69 +669,6 @@ mod tests {
 
         let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(cfg.projects.len(), 1);
-    }
-
-    #[test]
-    fn resolve_script_paths_points_into_existing_checkout() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(
-            dir.path().join("config.yaml"),
-            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"fetch.py\"\n  ttl_seconds: 60\n",
-        ).unwrap();
-
-        let mut cfg = load_config(dir.path().to_str().unwrap()).unwrap();
-
-        // Simulate the checkout the git adapter would have produced
-        let projects_dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(projects_dir.path().join("prj-test")).unwrap();
-        fs::write(projects_dir.path().join("prj-test/fetch.py"), "#!/bin/sh\n").unwrap();
-
-        cfg.resolve_script_paths(projects_dir.path());
-
-        let resolved = &cfg.sources["src-test"].script_path;
-        assert!(resolved.ends_with("prj-test/fetch.py"));
-        assert!(
-            Path::new(resolved).is_absolute()
-                || resolved.starts_with(projects_dir.path().to_str().unwrap())
-        );
-    }
-
-    #[test]
-    fn resolve_script_paths_keeps_path_when_script_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(
-            dir.path().join("config.yaml"),
-            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"local/fetch.py\"\n  ttl_seconds: 60\n",
-        ).unwrap();
-
-        let mut cfg = load_config(dir.path().to_str().unwrap()).unwrap();
-
-        // No checkout at all (clone failed / never ran): path must not change,
-        // so scripts baked into the image keep working
-        let projects_dir = tempfile::tempdir().unwrap();
-        cfg.resolve_script_paths(projects_dir.path());
-
-        assert_eq!(cfg.sources["src-test"].script_path, "local/fetch.py");
     }
 
     #[test]

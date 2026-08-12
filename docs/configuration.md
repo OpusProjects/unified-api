@@ -211,7 +211,12 @@ ep-ansible-full:
 Git repositories that hold connector/enricher/transformer scripts. At boot the
 app clones each project (shallow, one directory per project id under the
 `projects.dir` from `config.yaml`, default `./projects`) and re-pulls it every
-`sync_interval_seconds` (fetch + hard reset: local drift is discarded).
+`sync_interval_seconds` (fetch + hard reset: local drift is discarded). The
+boot clones run in the **background, after the listener is up**: they run
+concurrently and each is bounded by the project's `timeout_seconds`, so an
+unreachable git remote delays that project's scripts — never `/healthz` or a
+Kubernetes startup probe. The sync schedulers start once the clones have had
+their bounded chance.
 
 ```yaml
 prj-connectors-infra:
@@ -220,6 +225,7 @@ prj-connectors-infra:
   branch: "main"                  # default "main"
   credential_id: "cred-github-token"  # optional, for private repos
   sync_interval_seconds: 1800     # 0/absent = no periodic re-pull
+  timeout_seconds: 300            # abort a clone/pull that runs longer (default 300)
   sync_on_boot: true              # default true; see below
 ```
 
@@ -243,6 +249,9 @@ How script paths resolve: a *relative* `script_path` whose file exists inside
 the checkout runs from there (`<projects.dir>/<project_id>/<script_path>`);
 otherwise the configured path is kept as-is (image-baked and mounted scripts
 keep working, with a warning when the checkout exists but the file doesn't).
+Resolution happens at **every execution**, not once at boot, so a script that
+first appears after startup — a slow clone, a pipeline's first push — is used
+on the very next run without a restart.
 SSH sources are never resolved — their `script_path` is a remote command.
 Sources always declare `project_id`; enrichers and endpoints may add an
 optional `project_id` to resolve their scripts the same way. Scripts must

@@ -161,6 +161,10 @@ async fn run_git(args: &[&str], envs: &[(String, String)]) -> Result<(), GitErro
     // Never let git fall back to an interactive credential prompt — in a
     // container there is no terminal and the process would just hang.
     cmd.env("GIT_TERMINAL_PROMPT", "0");
+    // The caller bounds `ensure` with the project's timeout_seconds; dropping
+    // this future must KILL the git child rather than abandon it, or a hung
+    // remote would accumulate a live git process per attempt.
+    cmd.kill_on_drop(true);
 
     let output = cmd.output().await.map_err(|e| GitError {
         message: format!("failed to run git {:?}: {}", args.first().unwrap_or(&""), e),

@@ -131,10 +131,10 @@ pub async fn sync_project_now(
     .await;
     let duration_ms = start.elapsed().as_millis();
 
-    // Scripts are read from disk on every execution, so an updated checkout
-    // takes effect on the next sync/enrich/endpoint run — no restart needed.
-    // (Only a script that did NOT exist at boot keeps its unresolved path
-    // until the next restart, because path resolution runs once at startup.)
+    // Scripts are read from disk on every execution, and their paths resolve
+    // into the checkout per run (application::scripts) — so both an updated
+    // script and one that first APPEARS with this sync take effect on the
+    // next sync/enrich/endpoint run. No restart for either case.
     match result {
         Ok(()) => Ok((
             StatusCode::OK,

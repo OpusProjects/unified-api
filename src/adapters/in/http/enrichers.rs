@@ -120,6 +120,7 @@ pub async fn run_enricher(
         &*state.cache,
         &*state.enricher,
         &state.enrich_health,
+        &state.projects_dir,
         &id,
         enricher_def,
     )

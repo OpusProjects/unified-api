@@ -72,7 +72,29 @@ impl AppState {
             port: &*self.enricher,
             enrichers: &self.enrichers,
             health: &self.enrich_health,
+            projects_dir: &self.projects_dir,
         }
+    }
+
+    // The source as a sync should execute it: script_path resolved into the
+    // project checkout when the file is there (SSH sources excepted — their
+    // script_path is a REMOTE command). Resolved per sync rather than once at
+    // boot, so a checkout that appears after startup — a slow clone, a
+    // pipeline's first push — is picked up by the next run without a restart.
+    // The cost is one Source clone and one stat() next to spawning a process.
+    //
+    // None = the id is not in sources.yaml, same contract as sources.get().
+    pub fn source_for_sync(&self, id: &str) -> Option<crate::domain::source::Source> {
+        let mut source = self.sources.get(id)?.clone();
+        if !matches!(source.connector_type, ConnectorType::Ssh) {
+            source.script_path = crate::application::scripts::resolve_script_path(
+                &self.projects_dir,
+                id,
+                &source.project_id,
+                &source.script_path,
+            );
+        }
+        Some(source)
     }
     // Chooses the appropriate connector based on the type declared in the source
     pub fn connector_for(

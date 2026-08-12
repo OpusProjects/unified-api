@@ -97,6 +97,14 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                 ticker.tick().await;
                 info!(source = %source_id, "Syncing");
 
+                // Re-resolved every tick rather than once at task start: the
+                // checkout this script lives in may not have existed when the
+                // task spawned (boot no longer waits for clones), and a
+                // pipeline may move the script between runs.
+                let source = state
+                    .source_for_sync(&source_id)
+                    .unwrap_or_else(|| source.clone());
+
                 let connector = state.connector_for(&source.connector_type);
                 let enrichment = state.enrichment();
                 let outcome = sync_source(
@@ -211,6 +219,7 @@ fn start_enricher_tasks(state: Arc<AppState>) {
                     &*state.cache,
                     &*state.enricher,
                     &state.enrich_health,
+                    &state.projects_dir,
                     &enricher_id,
                     &enricher,
                 )

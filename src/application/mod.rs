@@ -8,5 +8,6 @@ pub mod credentials;
 pub mod enrich;
 pub mod projects;
 pub mod refresh;
+pub mod scripts;
 pub mod sync;
 pub mod views;

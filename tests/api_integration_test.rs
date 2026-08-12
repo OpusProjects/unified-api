@@ -1503,3 +1503,64 @@ async fn an_unknown_endpoint_id_says_so() {
         body
     );
 }
+
+// =========================================================================
+// Test: script paths resolve into project checkouts at execution time
+// =========================================================================
+// The checkout is created AFTER the app is built — the situation every boot
+// is in now that serving starts before the clones. Boot-time resolution
+// would keep the unresolved path until a restart; per-execution resolution
+// picks the script up on the very next sync.
+#[tokio::test]
+async fn a_script_appearing_in_a_checkout_after_boot_is_used_by_the_next_sync() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let projects_dir = tempfile::tempdir().unwrap();
+
+    let mut source = script_source("fetch.py");
+    source.project_id = "prj-test".to_string();
+    let mut sources = std::collections::HashMap::new();
+    sources.insert("src-checkout".to_string(), source);
+
+    let app = unified_api::AppBuilder::new()
+        .sources(sources)
+        .projects(
+            std::collections::HashMap::new(),
+            projects_dir.path().to_path_buf(),
+        )
+        .build();
+
+    let sync = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/sources/src-checkout/sync")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+
+    // No checkout yet: the relative path resolves nowhere and the sync fails
+    let response = app.clone().oneshot(sync()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(result["success"], false, "no script yet: {}", result);
+
+    // The checkout appears — what a finished clone produces
+    std::fs::create_dir_all(projects_dir.path().join("prj-test")).unwrap();
+    let script = projects_dir.path().join("prj-test/fetch.py");
+    std::fs::write(
+        &script,
+        "#!/usr/bin/env python3\nprint('{\"hostvars\": {\"checkout.example\": {}}, \"groups\": {}}')\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // ...and the NEXT sync runs it. No restart, no rebuild.
+    let response = app.clone().oneshot(sync()).await.unwrap();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(result["success"], true, "sync failed: {}", result);
+
+    let (status, body) = get(app, "/api/v1/sources/src-checkout/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("checkout.example"), "body was: {}", body);
+}

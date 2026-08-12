@@ -34,6 +34,11 @@ server:
   # bounds repeat requests for the same host; this bounds requests for many
   # different hosts arriving together.
   refresh_max_concurrent: 8
+  # Optional, default 20. How long shutdown waits for background tasks (syncs,
+  # enrichers, project pulls, the snapshot task) to finish in-flight work
+  # before writing the final cache snapshot anyway. Size it to fit inside the
+  # pod's terminationGracePeriodSeconds with room for the snapshot write.
+  shutdown_grace_seconds: 20
 
 # Optional. Absent = purely in-memory cache (restarts start empty).
 # With the block, the cache is snapshotted to `path` every `interval_seconds`

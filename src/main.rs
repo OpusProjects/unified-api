@@ -83,6 +83,19 @@ async fn main() {
         )
         .build_with_state();
 
+    // One switch for every background task. Flipped after the HTTP server has
+    // drained; each task returns at its next wait point (a running sync is
+    // finished, never cut mid-write) and main joins the handles below before
+    // the final snapshot — so the snapshot cannot serialize a cache a sync
+    // task is still mutating, and the periodic snapshot task cannot race the
+    // final save on the same temp file.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    // The handles to join at shutdown. Shared with the background boot task,
+    // which is what starts the schedulers (after the clones) and therefore is
+    // the one holding their handles.
+    let background_tasks: std::sync::Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::default();
+
     // With persistence configured, reload the last snapshot BEFORE the
     // schedulers start: /readyz is green from second zero and consumers get
     // the pre-restart data while the first syncs run. Then keep snapshotting
@@ -90,12 +103,17 @@ async fn main() {
     if let Some(persistence) = &cfg.cache.persistence {
         let path = std::path::PathBuf::from(&persistence.path);
         unified_api::adapters::out::cache::persistence::load_or_warn(&*state.cache, &path).await;
-        unified_api::adapters::out::cache::persistence::start_snapshot_task(
+        let handle = unified_api::adapters::out::cache::persistence::start_snapshot_task(
             std::sync::Arc::clone(&state.cache),
             std::sync::Arc::clone(&state.snapshot_health),
             path,
             persistence.interval_seconds,
+            shutdown_rx.clone(),
         );
+        background_tasks
+            .lock()
+            .expect("handle registry")
+            .push(handle);
     }
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
@@ -122,8 +140,11 @@ async fn main() {
         let project_health = std::sync::Arc::clone(&project_health);
         let projects = cfg.projects.clone();
         let projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
+        let shutdown_rx = shutdown_rx.clone();
+        let mut boot_shutdown = shutdown_rx.clone();
+        let tasks = std::sync::Arc::clone(&background_tasks);
 
-        tokio::spawn(async move {
+        let boot_handle = tokio::spawn(async move {
             if !projects.is_empty() {
                 let git: std::sync::Arc<dyn unified_api::ports::git::GitPort> =
                     std::sync::Arc::new(CliGit::new());
@@ -169,22 +190,49 @@ async fn main() {
                         }
                     });
                 }
-                while clones.join_next().await.is_some() {}
+                // A shutdown arriving mid-clone aborts the remaining clones
+                // (dropping them kills the git children) instead of starting
+                // schedulers nobody wants anymore.
+                loop {
+                    tokio::select! {
+                        next = clones.join_next() => {
+                            if next.is_none() {
+                                break;
+                            }
+                        }
+                        _ = boot_shutdown.changed() => {
+                            clones.abort_all();
+                            return;
+                        }
+                    }
+                }
 
-                unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
-                    git,
-                    secrets,
-                    project_health,
-                    projects,
-                    projects_dir,
-                );
+                let project_tasks =
+                    unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
+                        git,
+                        secrets,
+                        project_health,
+                        projects,
+                        projects_dir,
+                        shutdown_rx.clone(),
+                    );
+                tasks.lock().expect("handle registry").extend(project_tasks);
             }
 
+            if *boot_shutdown.borrow() {
+                return;
+            }
             // After the boot clones had their chance (bounded by their
             // timeouts), so a source's first sync does not race its own
             // script's clone and fail for no reason but start order.
-            unified_api::adapters::r#in::scheduler::start_sync_tasks(state);
+            let sync_tasks =
+                unified_api::adapters::r#in::scheduler::start_sync_tasks(state, shutdown_rx);
+            tasks.lock().expect("handle registry").extend(sync_tasks);
         });
+        background_tasks
+            .lock()
+            .expect("handle registry")
+            .push(boot_handle);
     }
 
     // Graceful shutdown — waits for SIGTERM or Ctrl+C
@@ -195,6 +243,29 @@ async fn main() {
             error!("Server error: {}", e);
             std::process::exit(1);
         });
+
+    // Drain the background tasks before touching the disk: signal them, then
+    // wait — bounded by shutdown_grace_seconds — for in-flight runs to finish.
+    // Past the grace the snapshot proceeds anyway (best effort, exactly the
+    // pre-drain behavior), because blocking exit on a wedged sync would trade
+    // a possibly-torn snapshot for a SIGKILL and no snapshot at all.
+    let _ = shutdown_tx.send(true);
+    let handles: Vec<tokio::task::JoinHandle<()>> =
+        std::mem::take(background_tasks.lock().expect("handle registry").as_mut());
+    let grace = std::time::Duration::from_secs(cfg.server.shutdown_grace_seconds);
+    let drain = async {
+        for handle in handles {
+            let _ = handle.await;
+        }
+    };
+    if tokio::time::timeout(grace, drain).await.is_err() {
+        warn!(
+            grace_seconds = cfg.server.shutdown_grace_seconds,
+            "Background tasks still running after the grace period — snapshotting anyway"
+        );
+    } else {
+        info!("Background tasks drained");
+    }
 
     // Final snapshot on graceful shutdown, so the file reflects everything up
     // to the last second (the interval task may not have fired recently).

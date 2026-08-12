@@ -72,6 +72,15 @@ pub struct ServerConfig {
     // does not bound at all.
     #[serde(default = "default_refresh_max_concurrent")]
     pub refresh_max_concurrent: usize,
+
+    // How long shutdown waits for the background tasks (syncs, enricher runs,
+    // project pulls, the snapshot task) to finish their in-flight work before
+    // writing the final cache snapshot anyway. Sized to fit inside a
+    // Kubernetes terminationGracePeriodSeconds (default 30) with room for the
+    // snapshot write itself; a sync that outlives it keeps the pre-drain
+    // behavior — the snapshot is best-effort — rather than blocking exit.
+    #[serde(default = "default_shutdown_grace_seconds")]
+    pub shutdown_grace_seconds: u64,
 }
 
 fn default_refresh_timeout_seconds() -> u64 {
@@ -80,6 +89,10 @@ fn default_refresh_timeout_seconds() -> u64 {
 
 fn default_refresh_max_concurrent() -> usize {
     8
+}
+
+fn default_shutdown_grace_seconds() -> u64 {
+    20
 }
 
 // Cache behavior — config.yaml, `cache:` section (optional)

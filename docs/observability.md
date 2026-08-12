@@ -51,8 +51,16 @@ pulls. A source using `hosts_from_source` additionally waits, once, for the sour
 it reads to have data before its first sync (up to five minutes) — see
 [connectors](connectors.md#dynamic-host-lists-hosts_from_source).
 
-Shutdown is graceful for
-in-flight HTTP requests (SIGTERM/Ctrl-C); scheduler tasks stop with the process.
+Shutdown (SIGTERM/Ctrl-C) is graceful end to end: in-flight HTTP requests
+drain first, then every background task is signalled and given up to
+`server.shutdown_grace_seconds` (default 20) to finish its in-flight run — a
+sync mid-gather completes and lands in the cache, it is never cut mid-write —
+and only then is the final cache snapshot written. That ordering is what makes
+the final snapshot consistent: nothing is still mutating the cache while it
+serializes, and the periodic snapshot task has already stopped, so it cannot
+race the final save on the same temp file. A task that outlives the grace is
+logged and the snapshot proceeds anyway (best effort beats a SIGKILL with no
+snapshot at all).
 
 ## Logs and metrics
 

@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shutdown now drains the background tasks before the final snapshot.** The
+  final cache snapshot could serialize the cache while a detached sync task
+  was still mutating it, and the periodic snapshot task could race the final
+  save on the same temp file — renaming a half-written snapshot over a
+  complete one. On SIGTERM the service now drains in-flight HTTP requests,
+  signals every background task (syncs, enricher runs, project pulls, the
+  snapshot task) through a watch channel, waits — bounded by the new
+  `server.shutdown_grace_seconds` (default 20) — for their in-flight runs to
+  finish, and only then writes the final snapshot. A run mid-gather completes
+  and lands in the cache instead of being cut; a task that outlives the grace
+  is logged and the snapshot proceeds anyway, since best effort still beats a
+  SIGKILL with no snapshot at all. A shutdown arriving during the boot clones
+  aborts the remaining clones (killing their git children) instead of
+  starting schedulers nobody wants anymore.
+
 ### Added
 
 - **The scheduler now survives and softens failure.** Three changes to every

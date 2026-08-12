@@ -141,7 +141,9 @@ Behavior:
   startup.
 - **Runtime:** every `interval_seconds` the cache is serialized and written
   atomically (temp file + rename), so a crash mid-write leaves the previous
-  snapshot intact. A final snapshot is written on graceful shutdown.
+  snapshot intact. A final snapshot is written on graceful shutdown — after
+  the background tasks have drained (`server.shutdown_grace_seconds`), so
+  nothing is still mutating the cache while it serializes.
 - **Unchanged means untouched:** the cache keeps a generation counter that
   every write bumps (`CachePort::generation`). The snapshot task compares it
   to the generation of the last successful save and skips the tick when

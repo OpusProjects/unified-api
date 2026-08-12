@@ -132,6 +132,13 @@ Secrets resolved from env vars / JSON files via
   the SSH connector's per-host tasks) rather than abandoning it — otherwise a
   wedged script accumulated a live copy per interval. Scripts must therefore be
   interruptible: nothing cleans up a half-written file for them.
+- **Shutdown drains before it snapshots:** SIGTERM first drains HTTP, then
+  flips a watch channel every background task selects on; tasks finish their
+  in-flight run (never cut mid-write) and main joins their handles — bounded
+  by `server.shutdown_grace_seconds` (default 20) — BEFORE writing the final
+  cache snapshot. That ordering is the point: no task is still mutating the
+  cache while it serializes, and the periodic snapshot task has stopped, so it
+  cannot race the final save on the same temp file.
 - **The scheduler assumes things fail:** every periodic task (sync, enricher,
   project pull) starts with a deterministic per-id jitter (≤30s, capped at the
   interval) so nothing fires in lockstep; a failing task backs off by letting

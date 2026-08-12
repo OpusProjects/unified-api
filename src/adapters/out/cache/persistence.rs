@@ -179,7 +179,12 @@ pub fn start_snapshot_task(
     health: Arc<SyncHealthRegistry>,
     path: PathBuf,
     interval_seconds: u64,
-) {
+    // Flipped by main on SIGTERM. The task must STOP before the final
+    // snapshot is written: both write the same temp file next to `path`, so a
+    // periodic tick racing the final save could rename a half-written file
+    // over a complete one.
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
     // Only write when something actually changed since the last successful
     // save. The generation is read BEFORE saving: writes that land mid-save
     // bump it past `saved_generation`, so the next tick saves again — an
@@ -195,7 +200,10 @@ pub fn start_snapshot_task(
         info!(path = %path.display(), interval_seconds, "Cache persistence scheduled");
 
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = shutdown.changed() => return,
+            }
             let generation = cache.generation();
             if generation == saved_generation {
                 tracing::debug!(path = %path.display(), "Cache unchanged, snapshot skipped");
@@ -213,7 +221,7 @@ pub fn start_snapshot_task(
                 }
             }
         }
-    });
+    })
 }
 
 #[cfg(test)]
@@ -401,11 +409,14 @@ mod tests {
 
         let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new());
         let health = Arc::new(SyncHealthRegistry::new());
+        // The sender must outlive the test: a dropped sender reads as shutdown
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         start_snapshot_task(
             Arc::clone(&cache) as Arc<dyn CachePort>,
             Arc::clone(&health),
             path,
             1,
+            shutdown_rx,
         );
 
         // Written AFTER the task captured its baseline generation, so the next
@@ -427,11 +438,13 @@ mod tests {
 
         let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new());
         let health = Arc::new(SyncHealthRegistry::new());
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         start_snapshot_task(
             Arc::clone(&cache) as Arc<dyn CachePort>,
             Arc::clone(&health),
             path.clone(),
             1,
+            shutdown_rx,
         );
 
         cache.set("src-1", CacheEntry::new(dataset(), 3600));
@@ -440,6 +453,33 @@ mod tests {
         assert_eq!(recorded.consecutive_failures, 0);
         assert!(recorded.last_success_age_seconds.is_some());
         assert!(path.exists());
+    }
+
+    // The drain contract: after the shutdown signal the task RETURNS, so the
+    // final save (written by main afterwards) cannot race a periodic tick on
+    // the same temp file.
+    #[tokio::test(start_paused = true)]
+    async fn the_snapshot_task_stops_on_the_shutdown_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        let cache: Arc<MemoryCache> = Arc::new(MemoryCache::new());
+        let health = Arc::new(SyncHealthRegistry::new());
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = start_snapshot_task(
+            Arc::clone(&cache) as Arc<dyn CachePort>,
+            health,
+            path,
+            60,
+            shutdown_rx,
+        );
+
+        shutdown_tx.send(true).expect("receiver is alive");
+
+        tokio::time::timeout(Duration::from_secs(120), handle)
+            .await
+            .expect("the task must stop when told, not at its next interval")
+            .expect("the task must not panic");
     }
 
     #[tokio::test]

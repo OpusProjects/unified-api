@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::watch;
 use tokio::time::{Duration, Interval, MissedTickBehavior, interval};
 use tracing::{debug, error, info, warn};
 
@@ -137,7 +138,17 @@ where
     })
 }
 
-pub fn start_sync_tasks(state: Arc<AppState>) {
+// Every start_* function takes the shutdown receiver and returns the spawned
+// handles: on SIGTERM main flips the watch, each body returns at its next
+// wait point (a running sync is finished, never cut mid-write), and main joins
+// the handles before the final snapshot — so the snapshot cannot serialize a
+// cache a sync task is still mutating.
+pub fn start_sync_tasks(
+    state: Arc<AppState>,
+    shutdown: watch::Receiver<bool>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let mut handles = Vec::new();
+
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
             Some(secs) if secs > 0 => secs,
@@ -149,17 +160,25 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
         let task_state = Arc::clone(&state);
         let task_source_id = source_id.clone();
         let task_source = source.clone();
+        let task_shutdown = shutdown.clone();
 
-        spawn_supervised(
+        handles.push(spawn_supervised(
             format!("sync:{}", source_id),
             Duration::from_secs(interval_secs),
             move || {
                 let state = Arc::clone(&task_state);
                 let source_id = task_source_id.clone();
                 let source = task_source.clone();
+                let mut shutdown = task_shutdown.clone();
 
                 async move {
-                    tokio::time::sleep(startup_jitter(&source_id, interval_secs)).await;
+                    if *shutdown.borrow() {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(startup_jitter(&source_id, interval_secs)) => {}
+                        _ = shutdown.changed() => return,
+                    }
 
                     // A source that resolves its host list from another source's cache
                     // cannot sync until that source has data. Every source's first tick
@@ -173,13 +192,18 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     // failure and belongs in sync_health immediately, not behind a wait.
                     if let Some(hosts_from) = &source.hosts_from_source {
                         let budget = Duration::from_secs(DEPENDENCY_WAIT_SECONDS);
-                        if !wait_for_dependency(&*state.cache, &hosts_from.source, budget).await {
-                            warn!(
-                                source = %source_id,
-                                dependency = %hosts_from.source,
-                                waited_seconds = DEPENDENCY_WAIT_SECONDS,
-                                "Source providing the host list has not synced — syncing anyway to record why"
-                            );
+                        tokio::select! {
+                            arrived = wait_for_dependency(&*state.cache, &hosts_from.source, budget) => {
+                                if !arrived {
+                                    warn!(
+                                        source = %source_id,
+                                        dependency = %hosts_from.source,
+                                        waited_seconds = DEPENDENCY_WAIT_SECONDS,
+                                        "Source providing the host list has not synced — syncing anyway to record why"
+                                    );
+                                }
+                            }
+                            _ = shutdown.changed() => return,
                         }
                     }
 
@@ -188,7 +212,10 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     let mut skip: u32 = 0;
 
                     loop {
-                        ticker.tick().await;
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = shutdown.changed() => return,
+                        }
                         if skip > 0 {
                             skip -= 1;
                             debug!(source = %source_id, ticks_left = skip, "Backing off, tick skipped");
@@ -243,10 +270,11 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
                     }
                 }
             },
-        );
+        ));
     }
 
-    start_enricher_tasks(state);
+    handles.extend(start_enricher_tasks(state, shutdown));
+    handles
 }
 
 // Periodic re-pull of git project checkouts. Separate from start_sync_tasks
@@ -260,7 +288,10 @@ pub fn start_project_sync_tasks(
     health: Arc<SyncHealthRegistry>,
     projects: HashMap<String, GitProject>,
     projects_dir: PathBuf,
-) {
+    shutdown: watch::Receiver<bool>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let mut handles = Vec::new();
+
     for (project_id, project) in projects {
         let interval_secs = match project.sync_interval_seconds {
             Some(secs) if secs > 0 => secs,
@@ -273,8 +304,9 @@ pub fn start_project_sync_tasks(
         let task_secrets = Arc::clone(&secrets);
         let task_health = Arc::clone(&health);
         let task_projects_dir = projects_dir.clone();
+        let task_shutdown = shutdown.clone();
 
-        spawn_supervised(
+        handles.push(spawn_supervised(
             format!("project:{}", project_id),
             Duration::from_secs(interval_secs),
             move || {
@@ -284,9 +316,16 @@ pub fn start_project_sync_tasks(
                 let projects_dir = task_projects_dir.clone();
                 let project_id = project_id.clone();
                 let project = project.clone();
+                let mut shutdown = task_shutdown.clone();
 
                 async move {
-                    tokio::time::sleep(startup_jitter(&project_id, interval_secs)).await;
+                    if *shutdown.borrow() {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(startup_jitter(&project_id, interval_secs)) => {}
+                        _ = shutdown.changed() => return,
+                    }
 
                     let mut ticker = ticker(interval_secs);
                     // The boot sequence already cloned; skip the immediate first tick
@@ -296,7 +335,10 @@ pub fn start_project_sync_tasks(
                     let mut skip: u32 = 0;
 
                     loop {
-                        ticker.tick().await;
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = shutdown.changed() => return,
+                        }
                         if skip > 0 {
                             skip -= 1;
                             debug!(project = %project_id, ticks_left = skip, "Backing off, tick skipped");
@@ -330,11 +372,18 @@ pub fn start_project_sync_tasks(
                     }
                 }
             },
-        );
+        ));
     }
+
+    handles
 }
 
-fn start_enricher_tasks(state: Arc<AppState>) {
+fn start_enricher_tasks(
+    state: Arc<AppState>,
+    shutdown: watch::Receiver<bool>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let mut handles = Vec::new();
+
     for (enricher_id, enricher) in &state.enrichers {
         let interval_secs = match enricher.sync_interval_seconds {
             Some(secs) if secs > 0 => secs,
@@ -351,24 +400,35 @@ fn start_enricher_tasks(state: Arc<AppState>) {
         let task_state = Arc::clone(&state);
         let task_enricher_id = enricher_id.clone();
         let task_enricher = enricher.clone();
+        let task_shutdown = shutdown.clone();
 
-        spawn_supervised(
+        handles.push(spawn_supervised(
             format!("enrich:{}", enricher_id),
             Duration::from_secs(interval_secs),
             move || {
                 let state = Arc::clone(&task_state);
                 let enricher_id = task_enricher_id.clone();
                 let enricher = task_enricher.clone();
+                let mut shutdown = task_shutdown.clone();
 
                 async move {
-                    tokio::time::sleep(startup_jitter(&enricher_id, interval_secs)).await;
+                    if *shutdown.borrow() {
+                        return;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(startup_jitter(&enricher_id, interval_secs)) => {}
+                        _ = shutdown.changed() => return,
+                    }
 
                     let mut ticker = ticker(interval_secs);
                     let mut consecutive_failures: u32 = 0;
                     let mut skip: u32 = 0;
 
                     loop {
-                        ticker.tick().await;
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = shutdown.changed() => return,
+                        }
                         if skip > 0 {
                             skip -= 1;
                             debug!(enricher = %enricher_id, ticks_left = skip, "Backing off, tick skipped");
@@ -424,8 +484,10 @@ fn start_enricher_tasks(state: Arc<AppState>) {
                     }
                 }
             },
-        );
+        ));
     }
+
+    handles
 }
 
 #[cfg(test)]
@@ -557,6 +619,33 @@ mod tests {
     #[test]
     fn zero_interval_means_zero_jitter() {
         assert_eq!(startup_jitter("src-a", 0), Duration::ZERO);
+    }
+
+    // The drain contract: every scheduler task returns once the shutdown
+    // watch flips — including one still sleeping out its startup jitter or
+    // waiting on a tick, which is where a task spends almost all of its life.
+    #[tokio::test(start_paused = true)]
+    async fn scheduler_tasks_drain_on_the_shutdown_signal() {
+        let source: crate::domain::source::Source = serde_yaml_ng::from_str(
+            "name: test\nproject_id: p\nscript_path: does-not-exist.py\nschedule: null\nttl_seconds: 60\nsync_interval_seconds: 3600\n",
+        )
+        .expect("source fixture");
+        let mut sources = HashMap::new();
+        sources.insert("src-a".to_string(), source);
+        let (_, state) = crate::AppBuilder::new().sources(sources).build_with_state();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_sync_tasks(state, shutdown_rx);
+        assert_eq!(handles.len(), 1);
+
+        shutdown_tx.send(true).expect("receiver is alive");
+
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(600), handle)
+                .await
+                .expect("the task must stop on shutdown, not at its next tick")
+                .expect("the task must not panic");
+        }
     }
 
     // The tokio default for a panicking task is silence: the JoinHandle is

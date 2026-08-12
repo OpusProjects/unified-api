@@ -10,17 +10,37 @@ see [deployment](deployment.md).
 ## Scheduling behavior
 
 Background sync tasks start for every source with
-`sync_interval_seconds > 0` (tokio `interval`, first tick immediately). Enrichers
+`sync_interval_seconds > 0` (tokio `interval`). Enrichers and project pulls
 with an interval likewise. They start once the boot project clones have had
 their bounded chance (concurrent, each capped by the project's
 `timeout_seconds`) — and all of that happens **behind the listener**, so
 `/healthz` answers while clones are still running and an unreachable git
-remote can no longer fail a startup probe. A failed run logs the error and waits for the next tick —
-there is no retry/backoff beyond the interval itself. Every script execution is
+remote can no longer fail a startup probe. Every script execution is
 bounded by its `timeout_seconds` (default 300), so a hung connector or enricher
 cannot wedge its scheduler task. Exceeding it **kills** the process rather than
 abandoning it, so a wedged script does not leave a live copy behind on every
 tick; the SSH connector likewise aborts the per-host gathers still in flight.
+
+Each task's schedule is shifted by a small **deterministic jitter** (a hash of
+its id, capped at 30 seconds and at the interval itself), so every source does
+not gather at the same instant at boot — and, since intervals keep their
+phase, does not collide again at every common multiple forever. Deterministic
+on purpose: the same config produces the same spread on every boot.
+
+A **failing task backs off** instead of hammering: after a failure the next
+attempt comes 1 interval later, then 2, 4, and at most 8, resetting on the
+first success. The ticker keeps its cadence and the backoff just lets ticks
+pass, so attempts stay aligned to the configured schedule. `sync_health`
+carries the failure streak the whole time — note that during backoff
+`last_attempt_age_seconds` legitimately grows to up to 8 intervals, which is
+why the alert examples below key on `consecutive_failures` for "it is
+failing" and reserve the attempt age for "nothing is even trying".
+
+Every periodic task runs under a **supervisor**: a panic in the task body is
+counted in `unified_api_scheduler_task_panics_total`, logged, and the task is
+restarted after one interval — instead of the tokio default, where the task
+dies silently and that source simply stops syncing until someone notices the
+data went stale.
 
 A run that outlasts its own interval **skips** the ticks it missed and resumes on
 the original schedule, rather than firing them back to back to catch up. A sync
@@ -75,6 +95,7 @@ probes — scrapers don't carry the API key):
 | `unified_api_project_sync_last_success_age_seconds` | `project` | Seconds since the checkout last updated |
 | `unified_api_snapshot_consecutive_failures` | — | Failed cache snapshot writes since one last succeeded (a full disk, revoked permissions, a vanished volume) |
 | `unified_api_snapshot_last_success_age_seconds` | — | Seconds since a snapshot was last written |
+| `unified_api_scheduler_task_panics_total` | `task` | Panics caught and restarted by the task supervisor (`sync:<id>`, `enrich:<id>`, `project:<id>`). Any non-zero value is a bug worth reporting |
 
 A view holds no cache entry of its own, so it has none of the `unified_api_source_*`
 series — its members do. The names are separate rather than reusing the source
@@ -125,9 +146,10 @@ clock-driven gauge can show its silence:
   expr: unified_api_source_sync_consecutive_failures >= 3
   for: 5m
 
-# Nothing is even trying: no sync attempt for over three 10-minute intervals
+# Nothing is even trying. Past 8 intervals (here: 10-minute ones) not even
+# a fully backed-off failing source stays this quiet — the task is gone.
 - alert: UnifiedApiSourceSyncSilent
-  expr: unified_api_source_sync_last_attempt_age_seconds > 1800
+  expr: unified_api_source_sync_last_attempt_age_seconds > 5400
   for: 5m
 
 # The backstop on the data itself: older than its TTL, or never synced at all

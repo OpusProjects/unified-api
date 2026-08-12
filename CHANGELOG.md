@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **The scheduler now survives and softens failure.** Three changes to every
+  periodic task (source syncs, enricher runs, project pulls):
+
+  - **Backoff:** a failing task no longer hammers its struggling target at
+    exactly `sync_interval_seconds` forever. After a failure the next attempt
+    comes 1 interval later, then 2, 4, and at most 8, resetting on the first
+    success. Attempts stay aligned to the configured cadence (the backoff lets
+    ticks pass rather than shifting the clock), and `sync_health` carries the
+    failure streak throughout.
+  - **Startup jitter:** each task's schedule is shifted by a deterministic
+    per-id offset (≤30 seconds, capped at the interval), so every source no
+    longer gathers at the same instant at boot — nor at every common multiple
+    of the intervals forever after, since tokio intervals keep their phase.
+  - **Panic supervision:** a panic in a task body used to kill the task
+    silently — that source simply stopped syncing until someone noticed stale
+    data. Task bodies now run under a supervisor that logs the panic, counts
+    it in a new `unified_api_scheduler_task_panics_total{task}` metric, and
+    restarts the body after one interval.
+
 ### Changed
 
 - **Boot no longer waits for git.** The listener now binds and serves before

@@ -132,6 +132,14 @@ Secrets resolved from env vars / JSON files via
   the SSH connector's per-host tasks) rather than abandoning it — otherwise a
   wedged script accumulated a live copy per interval. Scripts must therefore be
   interruptible: nothing cleans up a half-written file for them.
+- **The scheduler assumes things fail:** every periodic task (sync, enricher,
+  project pull) starts with a deterministic per-id jitter (≤30s, capped at the
+  interval) so nothing fires in lockstep; a failing task backs off by letting
+  ticks pass — attempts at 1, 2, 4, then at most 8 intervals, reset on
+  success — while `sync_health` carries the streak; and each task body runs
+  under a supervisor that counts a panic
+  (`unified_api_scheduler_task_panics_total`), logs it, and restarts the body
+  instead of letting the task die silently.
 - **Boot never blocks on git:** the listener binds and serves before the
   project clones — one unreachable remote used to mean no `/healthz` at all.
   Clones run concurrently in a background task, each bounded by the project's

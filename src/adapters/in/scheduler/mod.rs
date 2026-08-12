@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::{Duration, Interval, MissedTickBehavior, interval};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::AppState;
 use crate::application::enrich::run_enricher;
@@ -55,6 +55,88 @@ async fn wait_for_dependency(cache: &dyn CachePort, dependency: &str, budget: Du
     .is_ok()
 }
 
+// The widest spread a task's schedule is shifted by, and the ceiling on how
+// many intervals a failing task backs off to.
+const MAX_JITTER_SECONDS: u64 = 30;
+const MAX_BACKOFF_INTERVALS: u32 = 8;
+
+// A per-task offset added before the first tick, so every task does not fire
+// at the same instant — at boot that meant every source gathering at once
+// (and, since tokio intervals keep their phase, colliding again at every
+// common multiple forever).
+//
+// Deterministic (a hash of the id) rather than random: the same config spreads
+// the same way on every boot, which makes load patterns reproducible, and it
+// needs no RNG dependency. Capped at MAX_JITTER_SECONDS and at the interval
+// itself — spreading a 10-second source across 30 seconds would be a schedule
+// change, not a jitter.
+fn startup_jitter(id: &str, interval_seconds: u64) -> Duration {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let window_ms = interval_seconds.min(MAX_JITTER_SECONDS) * 1000;
+    if window_ms == 0 {
+        return Duration::ZERO;
+    }
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    Duration::from_millis(hasher.finish() % window_ms)
+}
+
+// How many ticks a task sits out after a failure: 0 after the first (retry on
+// the very next tick — most failures are transient), then exponentially more,
+// capped at MAX_BACKOFF_INTERVALS. A failing source used to hammer its
+// struggling target at exactly sync_interval_seconds forever; now the attempts
+// land 1, 2, 4, 8, 8... intervals apart while `sync_health` carries the streak.
+//
+// Ticks rather than clock math: the ticker already owns the schedule (with
+// Skip semantics), so backing off is just letting some ticks pass — attempts
+// stay aligned to the configured cadence instead of drifting.
+fn ticks_to_skip(consecutive_failures: u32) -> u32 {
+    if consecutive_failures == 0 {
+        return 0;
+    }
+    2u32.saturating_pow(consecutive_failures - 1)
+        .min(MAX_BACKOFF_INTERVALS)
+        - 1
+}
+
+// Spawn a periodic task through a supervisor: a panic in the body is counted,
+// logged, and the body is restarted after `restart_delay` — instead of the
+// tokio default, where the task dies silently and (for a sync task) that
+// source simply stops syncing until someone notices the data went stale.
+//
+// `factory` builds a fresh body per (re)start, which is why it is a closure
+// and not a future. A body that RETURNS is done on purpose (shutdown) and is
+// not restarted; only a panic is.
+fn spawn_supervised<F, Fut>(
+    task: String,
+    restart_delay: Duration,
+    factory: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        loop {
+            match tokio::spawn(factory()).await {
+                Ok(()) => return,
+                Err(e) if e.is_panic() => {
+                    metrics::counter!(
+                        "unified_api_scheduler_task_panics_total",
+                        "task" => task.clone(),
+                    )
+                    .increment(1);
+                    error!(task = %task, "Scheduler task panicked — restarting it");
+                    tokio::time::sleep(restart_delay).await;
+                }
+                // Cancelled (runtime shutting down): nothing to restart into
+                Err(_) => return,
+            }
+        }
+    })
+}
+
 pub fn start_sync_tasks(state: Arc<AppState>) {
     for (source_id, source) in &state.sources {
         let interval_secs = match source.sync_interval_seconds {
@@ -62,79 +144,106 @@ pub fn start_sync_tasks(state: Arc<AppState>) {
             _ => continue,
         };
 
-        let state = Arc::clone(&state);
-        let source_id = source_id.clone();
-        let source = source.clone();
+        info!(source = %source_id, interval_secs, "Source scheduled");
 
-        tokio::spawn(async move {
-            info!(source = %source_id, interval_secs, "Source scheduled");
+        let task_state = Arc::clone(&state);
+        let task_source_id = source_id.clone();
+        let task_source = source.clone();
 
-            // A source that resolves its host list from another source's cache
-            // cannot sync until that source has data. Every source's first tick
-            // fires at once, so at boot this one raced its dependency and lost:
-            // it failed with "not in the cache yet — sync it first" and then
-            // said nothing until its next interval, which on an hourly source
-            // is an hour of a datacenter missing for no reason but start order.
-            //
-            // Waited for here, before the ticker exists, so it applies to the
-            // first sync only. After boot an absent dependency is a real
-            // failure and belongs in sync_health immediately, not behind a wait.
-            if let Some(hosts_from) = &source.hosts_from_source {
-                let budget = Duration::from_secs(DEPENDENCY_WAIT_SECONDS);
-                if !wait_for_dependency(&*state.cache, &hosts_from.source, budget).await {
-                    warn!(
-                        source = %source_id,
-                        dependency = %hosts_from.source,
-                        waited_seconds = DEPENDENCY_WAIT_SECONDS,
-                        "Source providing the host list has not synced — syncing anyway to record why"
-                    );
-                }
-            }
+        spawn_supervised(
+            format!("sync:{}", source_id),
+            Duration::from_secs(interval_secs),
+            move || {
+                let state = Arc::clone(&task_state);
+                let source_id = task_source_id.clone();
+                let source = task_source.clone();
 
-            let mut ticker = ticker(interval_secs);
+                async move {
+                    tokio::time::sleep(startup_jitter(&source_id, interval_secs)).await;
 
-            loop {
-                ticker.tick().await;
-                info!(source = %source_id, "Syncing");
-
-                // Re-resolved every tick rather than once at task start: the
-                // checkout this script lives in may not have existed when the
-                // task spawned (boot no longer waits for clones), and a
-                // pipeline may move the script between runs.
-                let source = state
-                    .source_for_sync(&source_id)
-                    .unwrap_or_else(|| source.clone());
-
-                let connector = state.connector_for(&source.connector_type);
-                let enrichment = state.enrichment();
-                let outcome = sync_source(
-                    &*state.cache,
-                    &**connector,
-                    &*state.secrets,
-                    &state.sync_health,
-                    &state.syncs,
-                    &source_id,
-                    &source,
-                    SyncScope::Full,
-                    Some(&enrichment),
-                )
-                .await;
-
-                match outcome.error {
-                    None => {
-                        info!(
-                            source = %source_id,
-                            hosts = outcome.total_hosts,
-                            groups = outcome.total_groups,
-                            "Synced"
-                        );
+                    // A source that resolves its host list from another source's cache
+                    // cannot sync until that source has data. Every source's first tick
+                    // fires at once, so at boot this one raced its dependency and lost:
+                    // it failed with "not in the cache yet — sync it first" and then
+                    // said nothing until its next interval, which on an hourly source
+                    // is an hour of a datacenter missing for no reason but start order.
+                    //
+                    // Waited for here, before the ticker exists, so it applies to the
+                    // first sync only. After boot an absent dependency is a real
+                    // failure and belongs in sync_health immediately, not behind a wait.
+                    if let Some(hosts_from) = &source.hosts_from_source {
+                        let budget = Duration::from_secs(DEPENDENCY_WAIT_SECONDS);
+                        if !wait_for_dependency(&*state.cache, &hosts_from.source, budget).await {
+                            warn!(
+                                source = %source_id,
+                                dependency = %hosts_from.source,
+                                waited_seconds = DEPENDENCY_WAIT_SECONDS,
+                                "Source providing the host list has not synced — syncing anyway to record why"
+                            );
+                        }
                     }
-                    Some(e) => {
-                        error!(source = %source_id, error = %e, "Sync failed");
+
+                    let mut ticker = ticker(interval_secs);
+                    let mut consecutive_failures: u32 = 0;
+                    let mut skip: u32 = 0;
+
+                    loop {
+                        ticker.tick().await;
+                        if skip > 0 {
+                            skip -= 1;
+                            debug!(source = %source_id, ticks_left = skip, "Backing off, tick skipped");
+                            continue;
+                        }
+                        info!(source = %source_id, "Syncing");
+
+                        // Re-resolved every tick rather than once at task start: the
+                        // checkout this script lives in may not have existed when the
+                        // task spawned (boot no longer waits for clones), and a
+                        // pipeline may move the script between runs.
+                        let source = state
+                            .source_for_sync(&source_id)
+                            .unwrap_or_else(|| source.clone());
+
+                        let connector = state.connector_for(&source.connector_type);
+                        let enrichment = state.enrichment();
+                        let outcome = sync_source(
+                            &*state.cache,
+                            &**connector,
+                            &*state.secrets,
+                            &state.sync_health,
+                            &state.syncs,
+                            &source_id,
+                            &source,
+                            SyncScope::Full,
+                            Some(&enrichment),
+                        )
+                        .await;
+
+                        match outcome.error {
+                            None => {
+                                consecutive_failures = 0;
+                                info!(
+                                    source = %source_id,
+                                    hosts = outcome.total_hosts,
+                                    groups = outcome.total_groups,
+                                    "Synced"
+                                );
+                            }
+                            Some(e) => {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
+                                skip = ticks_to_skip(consecutive_failures);
+                                error!(
+                                    source = %source_id,
+                                    error = %e,
+                                    next_attempt_in_intervals = skip + 1,
+                                    "Sync failed"
+                                );
+                            }
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
     }
 
     start_enricher_tasks(state);
@@ -158,35 +267,70 @@ pub fn start_project_sync_tasks(
             _ => continue,
         };
 
-        let git = Arc::clone(&git);
-        let secrets = Arc::clone(&secrets);
-        let health = Arc::clone(&health);
-        let projects_dir = projects_dir.clone();
+        info!(project = %project_id, interval_secs, "Project scheduled");
 
-        tokio::spawn(async move {
-            let mut ticker = ticker(interval_secs);
-            // The boot sequence already cloned; skip the immediate first tick
-            ticker.tick().await;
+        let task_git = Arc::clone(&git);
+        let task_secrets = Arc::clone(&secrets);
+        let task_health = Arc::clone(&health);
+        let task_projects_dir = projects_dir.clone();
 
-            info!(project = %project_id, interval_secs, "Project scheduled");
+        spawn_supervised(
+            format!("project:{}", project_id),
+            Duration::from_secs(interval_secs),
+            move || {
+                let git = Arc::clone(&task_git);
+                let secrets = Arc::clone(&task_secrets);
+                let health = Arc::clone(&task_health);
+                let projects_dir = task_projects_dir.clone();
+                let project_id = project_id.clone();
+                let project = project.clone();
 
-            loop {
-                ticker.tick().await;
-                match sync_project(
-                    &*git,
-                    &*secrets,
-                    &health,
-                    &project_id,
-                    &project,
-                    &projects_dir,
-                )
-                .await
-                {
-                    Ok(()) => info!(project = %project_id, "Project updated"),
-                    Err(e) => error!(project = %project_id, error = %e, "Project update failed"),
+                async move {
+                    tokio::time::sleep(startup_jitter(&project_id, interval_secs)).await;
+
+                    let mut ticker = ticker(interval_secs);
+                    // The boot sequence already cloned; skip the immediate first tick
+                    ticker.tick().await;
+
+                    let mut consecutive_failures: u32 = 0;
+                    let mut skip: u32 = 0;
+
+                    loop {
+                        ticker.tick().await;
+                        if skip > 0 {
+                            skip -= 1;
+                            debug!(project = %project_id, ticks_left = skip, "Backing off, tick skipped");
+                            continue;
+                        }
+                        match sync_project(
+                            &*git,
+                            &*secrets,
+                            &health,
+                            &project_id,
+                            &project,
+                            &projects_dir,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                consecutive_failures = 0;
+                                info!(project = %project_id, "Project updated");
+                            }
+                            Err(e) => {
+                                consecutive_failures = consecutive_failures.saturating_add(1);
+                                skip = ticks_to_skip(consecutive_failures);
+                                error!(
+                                    project = %project_id,
+                                    error = %e,
+                                    next_attempt_in_intervals = skip + 1,
+                                    "Project update failed"
+                                );
+                            }
+                        }
+                    }
                 }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -197,57 +341,90 @@ fn start_enricher_tasks(state: Arc<AppState>) {
             _ => continue,
         };
 
-        let state = Arc::clone(&state);
-        let enricher_id = enricher_id.clone();
-        let enricher = enricher.clone();
+        info!(
+            enricher = %enricher_id,
+            target = %enricher.target_id,
+            interval_secs,
+            "Enricher scheduled"
+        );
 
-        tokio::spawn(async move {
-            let mut ticker = ticker(interval_secs);
+        let task_state = Arc::clone(&state);
+        let task_enricher_id = enricher_id.clone();
+        let task_enricher = enricher.clone();
 
-            info!(
-                enricher = %enricher_id,
-                target = %enricher.target_id,
-                interval_secs,
-                "Enricher scheduled"
-            );
+        spawn_supervised(
+            format!("enrich:{}", enricher_id),
+            Duration::from_secs(interval_secs),
+            move || {
+                let state = Arc::clone(&task_state);
+                let enricher_id = task_enricher_id.clone();
+                let enricher = task_enricher.clone();
 
-            loop {
-                ticker.tick().await;
-                info!(enricher = %enricher_id, "Running");
+                async move {
+                    tokio::time::sleep(startup_jitter(&enricher_id, interval_secs)).await;
 
-                match run_enricher(
-                    &*state.cache,
-                    &*state.enricher,
-                    &state.enrich_health,
-                    &state.projects_dir,
-                    &enricher_id,
-                    &enricher,
-                )
-                .await
-                {
-                    None => {
-                        warn!(
-                            enricher = %enricher_id,
-                            target = %enricher.target_id,
-                            "Target not in cache, skipping"
-                        );
+                    let mut ticker = ticker(interval_secs);
+                    let mut consecutive_failures: u32 = 0;
+                    let mut skip: u32 = 0;
+
+                    loop {
+                        ticker.tick().await;
+                        if skip > 0 {
+                            skip -= 1;
+                            debug!(enricher = %enricher_id, ticks_left = skip, "Backing off, tick skipped");
+                            continue;
+                        }
+                        info!(enricher = %enricher_id, "Running");
+
+                        // A missing target counts as a failure for backoff too:
+                        // it is recorded as one in the health registry, and
+                        // retrying a target nobody synced every interval is the
+                        // same hammering as retrying a broken script.
+                        let error = match run_enricher(
+                            &*state.cache,
+                            &*state.enricher,
+                            &state.enrich_health,
+                            &state.projects_dir,
+                            &enricher_id,
+                            &enricher,
+                        )
+                        .await
+                        {
+                            None => {
+                                warn!(
+                                    enricher = %enricher_id,
+                                    target = %enricher.target_id,
+                                    "Target not in cache, skipping"
+                                );
+                                true
+                            }
+                            Some(outcome) => match outcome.error {
+                                None => {
+                                    info!(
+                                        enricher = %enricher_id,
+                                        hosts_updated = outcome.hosts_updated,
+                                        hosts_removed = outcome.hosts_removed,
+                                        "Enriched"
+                                    );
+                                    false
+                                }
+                                Some(e) => {
+                                    error!(enricher = %enricher_id, error = %e, "Enrichment failed");
+                                    true
+                                }
+                            },
+                        };
+
+                        if error {
+                            consecutive_failures = consecutive_failures.saturating_add(1);
+                            skip = ticks_to_skip(consecutive_failures);
+                        } else {
+                            consecutive_failures = 0;
+                        }
                     }
-                    Some(outcome) => match outcome.error {
-                        None => {
-                            info!(
-                                enricher = %enricher_id,
-                                hosts_updated = outcome.hosts_updated,
-                                hosts_removed = outcome.hosts_removed,
-                                "Enriched"
-                            );
-                        }
-                        Some(e) => {
-                            error!(enricher = %enricher_id, error = %e, "Enrichment failed");
-                        }
-                    },
                 }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -347,5 +524,73 @@ mod tests {
         let start = tokio::time::Instant::now();
         ticker.tick().await;
         assert_eq!(start.elapsed(), Duration::from_secs(6));
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        // Attempts land 1, 2, 4, 8 intervals apart, then stay at 8: the first
+        // retry is immediate-ish (most failures are transient), the cap keeps
+        // a dead source checking in often enough to notice a recovery.
+        assert_eq!(ticks_to_skip(0), 0);
+        assert_eq!(ticks_to_skip(1), 0);
+        assert_eq!(ticks_to_skip(2), 1);
+        assert_eq!(ticks_to_skip(3), 3);
+        assert_eq!(ticks_to_skip(4), 7);
+        assert_eq!(ticks_to_skip(5), 7);
+        assert_eq!(ticks_to_skip(u32::MAX), 7);
+    }
+
+    #[test]
+    fn jitter_is_bounded_and_deterministic() {
+        // Within the window: never at or past min(interval, 30s)
+        for id in ["src-a", "src-b", "src-c", "prj-d", "en-e"] {
+            assert!(startup_jitter(id, 300) < Duration::from_secs(30), "{}", id);
+            assert!(startup_jitter(id, 10) < Duration::from_secs(10), "{}", id);
+        }
+        // Deterministic: the same config spreads the same way on every boot
+        assert_eq!(startup_jitter("src-a", 300), startup_jitter("src-a", 300));
+        // And it actually spreads: these two ids land on different offsets
+        // (deterministic hash, so this is a fixed fact, not a flaky one)
+        assert_ne!(startup_jitter("src-a", 300), startup_jitter("src-b", 300));
+    }
+
+    #[test]
+    fn zero_interval_means_zero_jitter() {
+        assert_eq!(startup_jitter("src-a", 0), Duration::ZERO);
+    }
+
+    // The tokio default for a panicking task is silence: the JoinHandle is
+    // dropped and that source simply stops syncing forever. The supervisor
+    // restarts the body instead (and counts the panic).
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_task_body_is_restarted() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        let factory_runs = Arc::clone(&runs);
+        let handle = spawn_supervised(
+            "test:panicky".to_string(),
+            Duration::from_secs(5),
+            move || {
+                let runs = Arc::clone(&factory_runs);
+                async move {
+                    let run = runs.fetch_add(1, Ordering::SeqCst);
+                    if run < 2 {
+                        panic!("boom {}", run);
+                    }
+                    // Third run completes normally — the supervisor must NOT
+                    // restart a body that returns
+                }
+            },
+        );
+
+        handle.await.expect("the supervisor itself must not panic");
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
+
+        // Give the runtime a beat: if the supervisor wrongly restarted the
+        // completed body, another run would have been counted
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(runs.load(Ordering::SeqCst), 3);
     }
 }

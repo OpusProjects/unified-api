@@ -231,8 +231,8 @@ Secrets resolved from env vars / JSON files via
 ## Releasing a new version
 
 `main` is protected: it takes no direct pushes and no force pushes, and every
-change needs a PR whose `test`, `audit` and `build-image` checks pass. That
-includes the release commit itself — there is no admin bypass.
+change needs a PR whose `test`, `audit`, `deny` and `build-image` checks pass.
+That includes the release commit itself — there is no admin bypass.
 
 ### 1. Choose the number
 

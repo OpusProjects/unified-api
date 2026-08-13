@@ -1,0 +1,42 @@
+# cargo-deny configuration (`cargo deny check`, run in CI next to cargo-audit).
+# audit covers RUSTSEC advisories; deny adds license vetting and source
+# hygiene on top, so a dependency bump cannot quietly pull in a copyleft
+# license or a git/registry source nobody approved.
+
+[graph]
+all-features = true
+
+[advisories]
+# Mirrors .cargo/audit.toml — cargo-audit stays the primary advisory gate,
+# and the two must not disagree about what is knowingly accepted.
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack timing sidechannel in the `rsa` crate.
+    # Transitive via russh; not reachable in our usage (SSH client public-key
+    # auth, no RSA decryption of attacker-influenced ciphertext). See
+    # .cargo/audit.toml for the full rationale.
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+# Permissive licenses only. Extend deliberately; a PR that fails here is a
+# dependency bringing a license nobody has vetted.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+
+[bans]
+# Duplicate versions are a build-time cost, not a correctness issue: surface
+# them without failing the build.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -9,6 +9,12 @@ on:
     # The defaults plus label events: applying `changelog-rewrite` has to
     # re-run the check it exempts, and removing it has to re-assert it.
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Advisories move while the lockfile stands still: a RUSTSEC entry published
+  # against an unchanged Cargo.lock would otherwise go unnoticed until the
+  # next PR happens to run the audit job. The nightly run re-checks the tip of
+  # main; only audit and deny run on it (the other jobs gate on event_name).
+  schedule:
+    - cron: '30 5 * * *'
 
 env:
   REGISTRY: ghcr.io
@@ -16,6 +22,10 @@ env:
 
 jobs:
   test:
+    # The nightly schedule exists for the advisory checks; build/test state
+    # cannot change without a commit, so re-running them would be noise.
+    # build-image and release need this job, so skipping it skips them too.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,6 +77,19 @@ jobs:
         with:
           tool: cargo-audit
       - run: cargo audit
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # License vetting and source hygiene on top of the advisory scan:
+      # a dependency bump cannot quietly pull in a copyleft license or an
+      # unapproved git/registry source. Policy lives in deny.toml, whose
+      # advisory ignore list mirrors .cargo/audit.toml.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
 
   build-image:
     needs: test

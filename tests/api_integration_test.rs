@@ -1598,3 +1598,58 @@ async fn metrics_exposes_http_request_series_by_matched_route() {
         "durations should render as histogram buckets"
     );
 }
+
+// =========================================================================
+// Test: request ids
+// =========================================================================
+#[tokio::test]
+async fn responses_carry_a_request_id() {
+    let app = app_with_demo_data();
+
+    let id = |response: &axum::http::Response<axum::body::Body>| {
+        response
+            .headers()
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let second = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let (first, second) = (id(&first).unwrap(), id(&second).unwrap());
+    assert!(!first.is_empty());
+    assert_ne!(first, second, "each request gets its own id");
+
+    // A client-provided id is KEPT and echoed, so a consumer can stitch our
+    // log lines into its own trace
+    let stitched = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("x-request-id", "consumer-trace-42")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(id(&stitched).as_deref(), Some("consumer-trace-42"));
+}

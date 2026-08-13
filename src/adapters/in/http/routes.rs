@@ -8,7 +8,10 @@ use axum::{
 };
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::request_id::{
+    MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::{Level, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::{Config, SwaggerUi};
@@ -117,14 +120,62 @@ pub fn create_router(
     // this trades a little CPU for most of that.
     let router = router.layer(CompressionLayer::new());
 
-    // Outermost layer: one span + response log per request (method, path,
-    // status, latency) at INFO, so there are access logs, not just business
-    // logs. Tune verbosity with RUST_LOG (e.g. tower_http=debug for bodies).
-    router.layer(
+    // The response echoes the request id (inside the trace layer: it copies
+    // the id the Set layer below has already assigned).
+    let router = router.layer(PropagateRequestIdLayer::x_request_id());
+
+    // One span + response log per request (method, path, status, latency) at
+    // INFO, so there are access logs, not just business logs. The span also
+    // carries the request id and — filled in by the auth middleware once it
+    // knows — the authenticated key's name, so a log line answers WHO did
+    // what and an error report quoting an id finds its exact line. Tune
+    // verbosity with RUST_LOG (e.g. tower_http=debug for bodies).
+    let router = router.layer(
         TraceLayer::new_for_http()
-            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                let request_id = request
+                    .headers()
+                    .get("x-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("-");
+                tracing::info_span!(
+                    "request",
+                    method = %request.method(),
+                    uri = %request.uri(),
+                    version = ?request.version(),
+                    request_id = %request_id,
+                    key_name = tracing::field::Empty,
+                )
+            })
             .on_response(DefaultOnResponse::new().level(Level::INFO)),
-    )
+    );
+
+    // Outermost: assign the request id before anything can log it. A
+    // client-provided x-request-id is kept (the layer only fills the header
+    // when absent), so a consumer can stitch our lines into its own trace.
+    router.layer(SetRequestIdLayer::x_request_id(CounterRequestId::default()))
+}
+
+// Request ids from a process-wide counter, not a UUID: the id only needs to
+// be unique within one process's log stream (grep it, read the request's
+// whole story), a counter does that with no new dependency, and ordered ids
+// sort by arrival — useful in themselves. Restarts reuse ids; logs carry
+// timestamps, so collisions across boots do not confuse a search bounded to
+// an incident window.
+#[derive(Clone, Default)]
+struct CounterRequestId {
+    counter: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl MakeRequestId for CounterRequestId {
+    fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
+        let id = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        HeaderValue::from_str(&format!("req-{}", id))
+            .ok()
+            .map(RequestId::new)
+    }
 }
 
 // Swagger UI colours every response with highlight.js, which turns the body

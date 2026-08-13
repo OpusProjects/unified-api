@@ -70,6 +70,14 @@ status and latency (a `tower-http` trace layer); set `tower_http=debug` for more
 detail. Sync and enrich outcomes are logged with source ids, host counts and
 durations.
 
+Every request also carries a `request_id`: taken from the client's
+`x-request-id` header when one is sent (so a consumer can stitch these lines
+into its own trace), assigned from a per-process counter otherwise, and echoed
+on the response either way — an error report quoting the id finds its exact
+log lines. Authenticated requests additionally log the API key's `key_name`,
+so an access-log line answers *who* did what; the field stays empty on public
+routes and on an API running open, where absence means nobody authenticated.
+
 **Prometheus metrics** are exposed at `GET /metrics` (public, like the health
 probes — scrapers don't carry the API key):
 

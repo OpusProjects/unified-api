@@ -75,6 +75,8 @@ probes — scrapers don't carry the API key):
 
 | Metric | Labels | Meaning |
 |---|---|---|
+| `unified_api_http_requests_total` | `method`, `path`, `status` | Every HTTP request, labeled by the **matched route pattern** (`/api/v1/sources/{id}/dataset`), never the raw URL — one series per route, not per host. Unrouted requests share `path="unmatched"` |
+| `unified_api_http_request_duration_seconds` | `method`, `path` | Request latency histogram — handler time, measured inside the gzip layer |
 | `unified_api_sync_total` | `source`, `result` | Sync runs, success vs error |
 | `unified_api_sync_duration_seconds` | `source` | Sync duration histogram |
 | `unified_api_enrich_total` | `source`, `result` | Enricher runs |
@@ -117,6 +119,16 @@ healthy in every other number.
 
 Timed-out and failed runs count as `result="error"`, so alerting on the error
 rate catches hung connectors too.
+
+Every `_duration_seconds` histogram exports real buckets (`_bucket` series
+with `le` edges from 5 ms up to the 300-second script timeout) rather than
+client-side summary quantiles. That is what makes latency aggregatable across
+instances — an average of per-pod p99s is not a fleet p99, but bucket sums are:
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, path) (rate(unified_api_http_request_duration_seconds_bucket[5m])))
+```
 
 The `_consecutive_failures` / `_last_success_age_seconds` pairs are read from
 the health registries at scrape time, like the freshness gauges. A series

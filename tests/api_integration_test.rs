@@ -579,6 +579,8 @@ async fn metrics_exposes_sync_counters() {
         body
     );
     assert!(body.contains("unified_api_sync_duration_seconds"));
+    // Bucketed, not a summary: aggregatable across instances
+    assert!(body.contains("unified_api_sync_duration_seconds_bucket"));
     assert!(body.contains("src-metrics"));
 }
 
@@ -1563,4 +1565,36 @@ async fn a_script_appearing_in_a_checkout_after_boot_is_used_by_the_next_sync() 
     let (status, body) = get(app, "/api/v1/sources/src-checkout/dataset").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("checkout.example"), "body was: {}", body);
+}
+
+// =========================================================================
+// Test: HTTP request metrics
+// =========================================================================
+#[tokio::test]
+async fn metrics_exposes_http_request_series_by_matched_route() {
+    let app = app_with_demo_data();
+
+    // A request whose raw path contains a source id: the label must carry the
+    // route PATTERN, never the raw URL — one series per route, not per host
+    let (status, _) = get(app.clone(), "/api/v1/sources/src-demo/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = get(app.clone(), "/metrics").await;
+    assert!(
+        body.contains(r#"path="/api/v1/sources/{id}/dataset""#),
+        "counter should be labeled by the matched route pattern: {}",
+        &body[..body.len().min(2000)]
+    );
+    assert!(
+        !body.contains(r#"path="/api/v1/sources/src-demo/dataset""#),
+        "a raw request path leaked into the metric labels"
+    );
+    assert!(body.contains("unified_api_http_requests_total"));
+
+    // Real histogram buckets (le=...), not client-side summary quantiles:
+    // the _bucket series is what makes latencies aggregatable across instances
+    assert!(
+        body.contains("unified_api_http_request_duration_seconds_bucket"),
+        "durations should render as histogram buckets"
+    );
 }

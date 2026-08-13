@@ -198,6 +198,7 @@ impl AppBuilder {
                 self.refresh_timeout_seconds,
             )),
             syncs: Arc::new(application::sync::SyncCoordinator::new()),
+            view_hosts_memo: application::views::ViewHostsMemo::default(),
             readyz_require_all_sources: self.readyz_require_all_sources,
         });
         let router = adapters::r#in::http::routes::create_router(

@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP request metrics.** `/metrics` now carries
+  `unified_api_http_requests_total{method, path, status}` and a
+  `unified_api_http_request_duration_seconds{method, path}` latency histogram
+  — API-side SLOs were unmeasurable while syncs, enrichers and endpoints each
+  had counters and the HTTP surface serving the consumers had none. The
+  `path` label is always the **matched route pattern**
+  (`/api/v1/sources/{id}/dataset`), never the raw URL, so cardinality stays
+  one series per route rather than one per host; requests matching no route
+  share `path="unmatched"`.
+
+### Changed
+
+- **Duration histograms export real buckets instead of summaries.** Every
+  `_duration_seconds` metric now renders as `_bucket`/`_sum`/`_count` series
+  (edges from 5 ms up to the 300-second script timeout) rather than
+  client-side `quantile` summaries. Bucket sums aggregate across instances —
+  `histogram_quantile` over the fleet — which quantile summaries
+  mathematically cannot.
+
+  **Breaking (dashboards reading `quantile=` series):** the summary series
+  for `unified_api_sync_duration_seconds`, `_enrich_`, and `_endpoint_`
+  disappear; switch panels to `histogram_quantile` over the new `_bucket`
+  series.
+
 ## [0.14.0] - 2026-08-13
 
 ### Fixed

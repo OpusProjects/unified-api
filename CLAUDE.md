@@ -158,8 +158,12 @@ Secrets resolved from env vars / JSON files via
 - **Metrics:** `GET /metrics` (Prometheus; public by default, since a scrape
   config carries no API key — set `server.metrics_require_auth: true` to move
   it behind the key on a shared network, as the exposition labels every source
-  id and host count) — sync,
-  enrich and endpoint counters + duration histograms, plus per-source gauges
+  id and host count) — per-route HTTP counters + latency histograms
+  (`unified_api_http_*`, labeled by MATCHED route pattern, never the raw URL —
+  cardinality), sync,
+  enrich and endpoint counters + duration histograms (all histograms export
+  real buckets, not summaries, so they aggregate across instances), plus
+  per-source gauges
   (`unified_api_source_age_seconds`, `_fresh`, `_cached`, `_hosts`, `_groups`,
   `_ttl_seconds`) and health gauges from the registries: per-source
   `unified_api_source_sync_consecutive_failures` / `_last_attempt_age_seconds`

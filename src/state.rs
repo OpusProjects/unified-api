@@ -57,6 +57,9 @@ pub struct AppState {
     // scheduled one cannot let the older gather win. In-process state like the
     // two above.
     pub syncs: Arc<crate::application::sync::SyncCoordinator>,
+    // Memoizes each view's host-union count for /metrics, invalidated by the
+    // cache generation (see application::views::ViewHostsMemo for why).
+    pub view_hosts_memo: crate::application::views::ViewHostsMemo,
     // /readyz turns green only when every configured source has synced, rather
     // than when at least one has (see config::ServerConfig)
     pub readyz_require_all_sources: bool,

@@ -449,6 +449,51 @@ pub struct MergedDataset<'a> {
     pub remove_hosts: &'static [String],
 }
 
+// How many hosts a view serves is the one snapshot-derived figure that costs
+// O(hosts) — it unions every member's claimed set — and /metrics asks for it
+// on every scrape (every 15 seconds in a typical Prometheus config), almost
+// always against a cache nothing has written to in between.
+//
+// Memoized on the cache generation: the same invalidation the snapshot task
+// and the filtered-read ETags already trust. Any write bumps the generation,
+// so a stale count cannot be served; an idle instance answers scrapes without
+// rebuilding the union. The generation is global, so an unrelated source's
+// sync also invalidates — pessimistic (a needless recount) but never wrong,
+// the exact trade the filtered ETag documents.
+//
+// Lives on AppState rather than in a static: each app instance (every
+// integration test builds one) has its own cache with its own generation
+// counter, and a process-wide memo would let one instance's counter alias
+// another's.
+#[derive(Default)]
+pub struct ViewHostsMemo {
+    inner: std::sync::Mutex<HashMap<String, (u64, usize)>>,
+}
+
+impl ViewHostsMemo {
+    // The count for `view_id` at `generation`, computing it only when the
+    // generation moved since the last scrape.
+    pub fn hosts_count(
+        &self,
+        view_id: &str,
+        generation: u64,
+        compute: impl FnOnce() -> usize,
+    ) -> usize {
+        let mut memo = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match memo.get(view_id) {
+            Some((seen, count)) if *seen == generation => *count,
+            _ => {
+                let count = compute();
+                memo.insert(view_id.to_string(), (generation, count));
+                count
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

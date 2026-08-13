@@ -115,6 +115,11 @@ pub async fn require_api_key(mut request: Request, next: Next) -> Result<Respons
 
     match matched {
         Some(key) => {
+            // The trace layer declared this span field Empty; filling it here
+            // puts the authenticated key on the request's access-log line.
+            // (An open API and a public route leave it empty — absence means
+            // nobody authenticated, not somebody anonymous.)
+            tracing::Span::current().record("key_name", key.name.as_str());
             request.extensions_mut().insert(AuthContext {
                 key_name: Some(key.name.clone()),
                 permissions: key.permissions.clone(),

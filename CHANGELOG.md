@@ -18,6 +18,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   one series per route rather than one per host; requests matching no route
   share `path="unmatched"`.
 
+- **Requests are identifiable, in logs and in responses.** Every response now
+  carries an `x-request-id` header: a client-provided id is kept (stitch the
+  service's log lines into your own trace), otherwise a per-process counter
+  assigns one. The access-log span carries the same `request_id`, and
+  authenticated requests log the `key_name` of the API key that made the call
+  — so an access-log line answers who did what, and an error report quoting
+  an id finds its exact lines.
+
 ### Changed
 
 - **Duration histograms export real buckets instead of summaries.** Every

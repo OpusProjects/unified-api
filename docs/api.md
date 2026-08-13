@@ -101,11 +101,23 @@ connector or credential error rather than mapping it to an HTTP status:
   "total_hosts": 42,
   "total_groups": 5,
   "sync_duration_ms": 130,
-  "error": null
+  "error": null,
+  "coalesced": false
 }
 ```
 
 `404` means the source id itself isn't configured.
+
+Concurrent **full** syncs of one source coalesce: they always ran one after
+another (so an older gather can never overwrite a newer one), but each used to
+pay for its own complete gather — N impatient requests were N sequential
+datacenter inventories. Now a full sync that finds a full sync completed while
+it queued answers from that result instead, with `coalesced: true` and
+`sync_duration_ms: 0`: a sync that *started after the request began* is
+everything the request could have asked for. Scoped syncs (`?host=`,
+`?group=`) and `refresh_origin` requests never coalesce — they ask for
+something a plain bulk gather does not deliver — and a *failed* sync satisfies
+nobody: the next request in the queue gathers for real.
 
 ### Views
 

@@ -43,11 +43,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
+# The hot-path benches (cache read/serialize, view union): the README's value
+# proposition is performance-shaped, so the claims have numbers behind them.
+# `cargo bench` runs them; clippy compiles them on every CI run.
+[[bench]]
+name = "hot_paths"
+harness = false
+
 # [dev-dependencies] = compiled only for tests, never shipped in the production binary
 [dev-dependencies]
 # Only the tests fan out over a set of futures now — the SSH connector uses a
 # JoinSet, so the production build no longer needs this
 futures = "0.3"
+# Statistical benchmarking for benches/hot_paths.rs
+criterion = "0.5"
 # test-util adds virtual time (tokio::time::pause): the scheduler's tick
 # behaviour is a property of a 40-second schedule, and this exercises it in
 # microseconds instead of making the suite wait

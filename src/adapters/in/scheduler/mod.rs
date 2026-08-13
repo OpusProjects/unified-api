@@ -253,6 +253,9 @@ pub fn start_sync_tasks(
                                     source = %source_id,
                                     hosts = outcome.total_hosts,
                                     groups = outcome.total_groups,
+                                    // true = this tick piggybacked on a manual
+                                    // sync that finished while it queued
+                                    coalesced = outcome.coalesced,
                                     "Synced"
                                 );
                             }

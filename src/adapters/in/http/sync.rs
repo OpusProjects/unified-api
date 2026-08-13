@@ -39,6 +39,11 @@ pub struct SyncResult {
     pub total_groups: usize,
     pub sync_duration_ms: u128,
     pub error: Option<String>,
+    /// True when no gather ran for this request: a full sync that started
+    /// after it began completed while it queued, and these counts report what
+    /// that sync left in the cache. N concurrent full syncs cost the origin
+    /// one gather, not N.
+    pub coalesced: bool,
 }
 
 #[utoipa::path(
@@ -126,5 +131,6 @@ pub async fn sync_source(
         total_groups: outcome.total_groups,
         sync_duration_ms: outcome.duration_ms,
         error: outcome.error,
+        coalesced: outcome.coalesced,
     }))
 }

@@ -30,7 +30,7 @@ and every one of them sees the same inventory.
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **Refresh**: a read can bring the hosts it names up to date, bounded by the source's TTL
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
-- **Single static binary**: axum + tokio, hexagonal architecture, ~3k lines
+- **Single static binary**: axum + tokio, hexagonal architecture, ~11k lines
 
 ---
 

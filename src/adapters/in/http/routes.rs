@@ -105,6 +105,11 @@ pub fn create_router(
         None => router,
     };
 
+    // Request metrics sit inside the compression layer, so the histogram
+    // measures handler latency — what the service did — rather than handler
+    // plus gzip of the response body.
+    let router = router.layer(middleware::from_fn(http::metrics::track_requests));
+
     // Gzip responses when the client sends Accept-Encoding: gzip (clients
     // that don't are served identity bytes, unchanged). Inventory JSON
     // repeats the same var names for every host, so it compresses ~10x —

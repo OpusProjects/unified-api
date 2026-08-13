@@ -12,12 +12,63 @@ use crate::AppState;
 // instead of failing on the second install.
 static PROMETHEUS: OnceLock<PrometheusHandle> = OnceLock::new();
 
+// Bucket edges for every histogram in the process. Without them the exporter
+// renders histograms as SUMMARIES (client-side quantiles), which cannot be
+// aggregated across instances — avg(p99) of two pods is not a p99 of the
+// fleet. Buckets can: sum the `_bucket` series and take histogram_quantile
+// over the fleet. The spread covers both populations sharing the registry:
+// HTTP requests (milliseconds) and script executions (seconds up to the
+// 300-second default timeout).
+const DURATION_BUCKETS: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0,
+];
+
 fn handle() -> &'static PrometheusHandle {
     PROMETHEUS.get_or_init(|| {
         PrometheusBuilder::new()
+            .set_buckets(DURATION_BUCKETS)
+            .expect("bucket list is non-empty")
             .install_recorder()
             .expect("failed to install Prometheus metrics recorder")
     })
+}
+
+// Every HTTP request as a counter and a latency histogram, labeled by the
+// MATCHED route pattern ("/api/v1/sources/{id}/dataset"), never the raw path:
+// a per-host URL would mint a fresh label value per host and grow the
+// registry without bound. Requests that matched no route share one
+// "unmatched" label for the same reason. Status only on the counter — the
+// route already dominates latency, and route × method × status on a
+// 15-bucket histogram would multiply series for little insight.
+pub async fn track_requests(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = request.method().as_str().to_string();
+    let path = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|matched| matched.as_str().to_string())
+        .unwrap_or_else(|| "unmatched".to_string());
+
+    let start = std::time::Instant::now();
+    let response = next.run(request).await;
+
+    metrics::counter!(
+        "unified_api_http_requests_total",
+        "method" => method.clone(),
+        "path" => path.clone(),
+        "status" => response.status().as_u16().to_string(),
+    )
+    .increment(1);
+    metrics::histogram!(
+        "unified_api_http_request_duration_seconds",
+        "method" => method,
+        "path" => path,
+    )
+    .record(start.elapsed().as_secs_f64());
+
+    response
 }
 
 // GET /metrics — Prometheus text exposition format. Public like the health
@@ -125,8 +176,13 @@ fn record_view_gauges(state: &AppState) {
             .set(snapshot.age_seconds() as f64);
         metrics::gauge!("unified_api_view_ttl_seconds", "view" => view_id.clone())
             .set(snapshot.ttl_seconds() as f64);
-        metrics::gauge!("unified_api_view_hosts", "view" => view_id.clone())
-            .set(snapshot.hosts().len() as f64);
+        // The host-union count is the one O(hosts) number here; memoized on
+        // the cache generation so an idle instance answers scrapes without
+        // rebuilding the union every 15 seconds (see ViewHostsMemo).
+        let hosts = state
+            .view_hosts_memo
+            .hosts_count(view_id, state.cache.generation(), || snapshot.hosts().len());
+        metrics::gauge!("unified_api_view_hosts", "view" => view_id.clone()).set(hosts as f64);
 
         // How much of the view is actually assembled. `members_cached` short of
         // `members_total` is a view serving part of its inventory; a member

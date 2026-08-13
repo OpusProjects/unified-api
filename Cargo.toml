@@ -2,6 +2,10 @@
 name = "unified-api"
 version = "0.14.0"
 edition = "2024"
+# MSRV, kept in lockstep with the Dockerfile's pinned toolchain: a language
+# feature newer than the image's compiler must fail loudly at `cargo build`,
+# not at the next image build.
+rust-version = "1.96"
 description = "Infrastructure inventory aggregation and caching middleware"
 license = "Apache-2.0"
 repository = "https://github.com/OpusProjects/unified-api"

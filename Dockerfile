@@ -5,10 +5,13 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /v
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+# --locked: build exactly the versions CI tested. Without it, cargo may
+# quietly re-resolve inside the image and ship dependency versions the test
+# suite never saw.
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --locked && rm -rf src
 
 COPY src/ src/
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release --locked
 
 # Stage 2: runtime
 FROM debian:trixie-slim

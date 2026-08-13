@@ -85,7 +85,7 @@ probes — scrapers don't carry the API key):
 |---|---|---|
 | `unified_api_http_requests_total` | `method`, `path`, `status` | Every HTTP request, labeled by the **matched route pattern** (`/api/v1/sources/{id}/dataset`), never the raw URL — one series per route, not per host. Unrouted requests share `path="unmatched"` |
 | `unified_api_http_request_duration_seconds` | `method`, `path` | Request latency histogram — handler time, measured inside the gzip layer |
-| `unified_api_sync_total` | `source`, `result` | Sync runs, success vs error |
+| `unified_api_sync_total` | `source`, `result` | Sync runs: `success`, `error`, or `coalesced` (answered by a concurrent full sync's result — no gather ran) |
 | `unified_api_sync_duration_seconds` | `source` | Sync duration histogram |
 | `unified_api_enrich_total` | `source`, `result` | Enricher runs |
 | `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |

@@ -53,9 +53,9 @@ pub struct AppState {
     // Coalescing and limits for reads that are allowed to refresh before
     // answering. In-process state like sync_health: no outside world behind it.
     pub refresh: Arc<RefreshCoordinator>,
-    // Serialises syncs of one source, so a manual sync landing mid-way through a
-    // scheduled one cannot let the older gather win. In-process state like the
-    // two above.
+    // Serialises syncs of one source (a manual sync landing mid-way through a
+    // scheduled one cannot let the older gather win) and coalesces queued full
+    // syncs onto one gather. In-process state like the two above.
     pub syncs: Arc<crate::application::sync::SyncCoordinator>,
     // Memoizes each view's host-union count for /metrics, invalidated by the
     // cache generation (see application::views::ViewHostsMemo for why).

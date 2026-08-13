@@ -28,6 +28,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Concurrent full syncs of one source coalesce onto a single gather.** The
+  0.11.0 per-source lock serialized them but did not deduplicate: N
+  simultaneous `POST /sync` requests were N sequential complete datacenter
+  gathers. A full sync that finds another full sync completed while it queued
+  now answers from that result — a sync that *started after the request
+  began* is everything the request could have asked for, the same reasoning
+  the read path applies when it re-checks staleness under its lock. The
+  response says so: `coalesced: true`, `sync_duration_ms: 0`, and the counts
+  report what the winning sync left in the cache
+  (`unified_api_sync_total` gains `result="coalesced"`). Scoped syncs and
+  `refresh_origin` requests never coalesce — they ask for something a plain
+  bulk gather does not deliver — and a failed sync satisfies nobody: the next
+  request in the queue gathers for real.
+
 - **Duration histograms export real buckets instead of summaries.** Every
   `_duration_seconds` metric now renders as `_bucket`/`_sum`/`_count` series
   (edges from 5 ms up to the 300-second script timeout) rather than

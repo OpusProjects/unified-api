@@ -8,7 +8,14 @@ COPY Cargo.toml Cargo.lock ./
 # --locked: build exactly the versions CI tested. Without it, cargo may
 # quietly re-resolve inside the image and ship dependency versions the test
 # suite never saw.
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --locked && rm -rf src
+#
+# The benches stub exists only so the manifest parses: Cargo.toml declares the
+# [[bench]] target and refuses to parse without its file, but `cargo build`
+# never compiles it — the real benches are dev-only and stay out of the image.
+RUN mkdir src benches \
+    && echo 'fn main() {}' > src/main.rs \
+    && echo 'fn main() {}' > benches/hot_paths.rs \
+    && cargo build --release --locked && rm -rf src
 
 COPY src/ src/
 RUN touch src/main.rs && cargo build --release --locked

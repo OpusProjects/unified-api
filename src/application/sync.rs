@@ -121,9 +121,24 @@ impl From<SyncScope> for SyncRequest {
 //
 // Entries are never removed — one per configured source, a key and an Arc — the
 // same trade the refresh coordinator makes for the same reason.
+//
+// Serialising alone is not enough: N concurrent full syncs become N SEQUENTIAL
+// full gathers — a form spamming its refresh button costs the datacenter N
+// complete inventories. `full_syncs` counts the successful plain full syncs of
+// each source; a caller that queued for the lock and finds the counter moved
+// past what it saw before queueing knows the whole source was gathered while
+// it waited — a sync that STARTED after its request began, which is everything
+// it could have asked for. It answers from that instead of gathering again
+// (the same reasoning as the read path re-checking staleness under its lock).
+#[derive(Default)]
+struct SourceSync {
+    lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    full_syncs: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
 #[derive(Default)]
 pub struct SyncCoordinator {
-    in_flight: dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
+    in_flight: dashmap::DashMap<String, SourceSync>,
 }
 
 impl SyncCoordinator {
@@ -131,11 +146,15 @@ impl SyncCoordinator {
         Self::default()
     }
 
-    fn lock_for(&self, source_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-        self.in_flight
-            .entry(source_id.to_string())
-            .or_default()
-            .clone()
+    fn entry_for(
+        &self,
+        source_id: &str,
+    ) -> (
+        std::sync::Arc<tokio::sync::Mutex<()>>,
+        std::sync::Arc<std::sync::atomic::AtomicU64>,
+    ) {
+        let entry = self.in_flight.entry(source_id.to_string()).or_default();
+        (entry.lock.clone(), entry.full_syncs.clone())
     }
 }
 
@@ -147,6 +166,10 @@ pub struct SyncOutcome {
     pub total_groups: usize,
     pub duration_ms: u128,
     pub error: Option<String>,
+    // True when no gather ran here: a full sync that started after this
+    // request began completed while it queued, and this outcome reports what
+    // that sync left in the cache
+    pub coalesced: bool,
 }
 
 impl SyncOutcome {
@@ -161,6 +184,7 @@ impl SyncOutcome {
             total_groups: 0,
             duration_ms,
             error: Some(error),
+            coalesced: false,
         }
     }
 }
@@ -209,9 +233,43 @@ pub async fn sync_source(
     // test that only cares about the gather)
     enrichment: Option<&Enrichment<'_>>,
 ) -> SyncOutcome {
-    let _guard = syncs.lock_for(source_id).lock_owned().await;
+    let request = request.into();
+    // Only a PLAIN full sync can stand in for another: a scoped sync gathers a
+    // slice, and refresh_origin demands the origin re-gather — a completed
+    // ordinary sync satisfies neither.
+    let coalescable = matches!(request.scope, SyncScope::Full) && !request.refresh_origin;
 
-    let outcome = run_sync(cache, connector, secrets, source_id, source, request.into()).await;
+    let (lock, full_syncs) = syncs.entry_for(source_id);
+    let full_syncs_before = full_syncs.load(std::sync::atomic::Ordering::SeqCst);
+    let _guard = lock.lock_owned().await;
+
+    if coalescable && full_syncs.load(std::sync::atomic::Ordering::SeqCst) != full_syncs_before {
+        // The whole source was gathered by a sync that started after this
+        // request began: answer from it instead of paying for an identical
+        // gather. Nothing is recorded in sync health (no attempt ran here —
+        // the winner recorded its own) and enrichment is not re-applied (the
+        // winner did that too). Only the counter says it happened.
+        let (total_hosts, total_groups) = cache
+            .get(source_id)
+            .map(|entry| (entry.dataset.hostvars.len(), entry.dataset.groups.len()))
+            .unwrap_or((0, 0));
+        metrics::counter!(
+            "unified_api_sync_total",
+            "source" => source_id.to_string(),
+            "result" => "coalesced",
+        )
+        .increment(1);
+        return SyncOutcome {
+            scope: SyncScope::Full.label(),
+            total_hosts,
+            total_groups,
+            duration_ms: 0,
+            error: None,
+            coalesced: true,
+        };
+    }
+
+    let outcome = run_sync(cache, connector, secrets, source_id, source, request).await;
 
     // Recorded here rather than at the call sites so the scheduler and the HTTP
     // handler cannot drift: every sync in the process goes through this
@@ -266,6 +324,14 @@ pub async fn sync_source(
         "source" => source_id.to_string(),
     )
     .record(outcome.duration_ms as f64 / 1000.0);
+
+    // Bumped only under the lock and only for the plain full case, so a
+    // waiter comparing before/after cannot be satisfied by a scoped slice or
+    // a failed attempt — a failed winner means the next in line gathers for
+    // real, which is the retry a caller would want.
+    if coalescable && outcome.success() {
+        full_syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 
     outcome
 }
@@ -405,6 +471,7 @@ async fn run_sync(
                 total_groups,
                 duration_ms,
                 error: None,
+                coalesced: false,
             }
         }
         Err(e) => SyncOutcome::failed(scope_label, duration_ms, e.message),
@@ -1208,6 +1275,195 @@ mod concurrency_tests {
         assert_eq!(
             entry.dataset.hostvars["a.example"]["gathered_by"], "scoped",
             "the slow full sync overwrote a gather that started after it"
+        );
+    }
+
+    // A connector that counts its executions and takes long enough for other
+    // requests to queue behind the first.
+    struct CountingConnector {
+        delay: Duration,
+        executions: std::sync::atomic::AtomicUsize,
+        fail_first: bool,
+    }
+
+    impl ConnectorPort for CountingConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _output_format: OutputFormat,
+            _config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            let run = self
+                .executions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let delay = self.delay;
+            let fail = self.fail_first && run == 0;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                if fail {
+                    return Err(crate::ports::connector::ConnectorError {
+                        message: "first gather blew up".to_string(),
+                        stderr: String::new(),
+                        exit_code: Some(1),
+                    });
+                }
+                let vars: HostVars = [("role".to_string(), serde_json::json!("web"))]
+                    .into_iter()
+                    .collect();
+                Ok(Dataset {
+                    hostvars: [("a.example".to_string(), vars)].into_iter().collect(),
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                }
+                .into())
+            })
+        }
+    }
+
+    struct SyncHarness {
+        cache: Arc<MemoryCache>,
+        connector: Arc<CountingConnector>,
+        secrets: Arc<MockSecrets>,
+        health: Arc<SyncHealthRegistry>,
+        syncs: Arc<SyncCoordinator>,
+        source: Source,
+    }
+
+    impl SyncHarness {
+        fn new(connector: CountingConnector) -> Self {
+            Self {
+                cache: Arc::new(MemoryCache::new()),
+                connector: Arc::new(connector),
+                secrets: Arc::new(MockSecrets::new()),
+                health: Arc::new(SyncHealthRegistry::new()),
+                syncs: Arc::new(SyncCoordinator::new()),
+                source: source(),
+            }
+        }
+
+        fn spawn(&self, scope: SyncScope) -> tokio::task::JoinHandle<SyncOutcome> {
+            let (cache, connector, secrets, health, syncs, src) = (
+                Arc::clone(&self.cache),
+                Arc::clone(&self.connector),
+                Arc::clone(&self.secrets),
+                Arc::clone(&self.health),
+                Arc::clone(&self.syncs),
+                self.source.clone(),
+            );
+            tokio::spawn(async move {
+                sync_source(
+                    &*cache,
+                    &*connector,
+                    &*secrets,
+                    &health,
+                    &syncs,
+                    "src",
+                    &src,
+                    scope,
+                    None,
+                )
+                .await
+            })
+        }
+    }
+
+    // The 0.11.0 mutex serialized concurrent syncs but did not deduplicate
+    // them: N requests were N sequential full datacenter gathers. A full sync
+    // that started after a request began counts as that request's.
+    #[tokio::test]
+    async fn concurrent_full_syncs_cost_one_gather() {
+        let harness = SyncHarness::new(CountingConnector {
+            delay: Duration::from_millis(300),
+            executions: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: false,
+        });
+
+        let first = harness.spawn(SyncScope::Full);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let second = harness.spawn(SyncScope::Full);
+        let third = harness.spawn(SyncScope::Full);
+
+        let outcomes = [
+            first.await.expect("task"),
+            second.await.expect("task"),
+            third.await.expect("task"),
+        ];
+
+        assert!(outcomes.iter().all(|o| o.success()));
+        assert!(
+            outcomes.iter().all(|o| o.total_hosts == 1),
+            "coalesced outcomes report what the winner left in the cache"
+        );
+        assert_eq!(
+            outcomes.iter().filter(|o| o.coalesced).count(),
+            2,
+            "the winner gathered, the two queued requests coalesced onto it"
+        );
+        assert_eq!(
+            harness
+                .connector
+                .executions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "three requests must cost the origin one gather"
+        );
+    }
+
+    // Only full-on-full coalesces: a scoped sync names the hosts it wants
+    // freshly gathered, and answering it from a bulk sync would hand back
+    // whatever ages that gather produced instead of the targeted re-gather
+    // the caller explicitly paid for.
+    #[tokio::test]
+    async fn a_scoped_sync_queued_behind_a_full_one_still_gathers() {
+        let harness = SyncHarness::new(CountingConnector {
+            delay: Duration::from_millis(200),
+            executions: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: false,
+        });
+
+        let full = harness.spawn(SyncScope::Full);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let scoped = harness.spawn(SyncScope::Hosts(vec!["a.example".to_string()]));
+
+        assert!(full.await.expect("task").success());
+        let scoped = scoped.await.expect("task");
+        assert!(scoped.success());
+        assert!(!scoped.coalesced);
+        assert_eq!(
+            harness
+                .connector
+                .executions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    // A failed winner satisfies nobody: the next in line gathers for real,
+    // which is exactly the retry the caller would have wanted.
+    #[tokio::test]
+    async fn a_failed_sync_does_not_satisfy_the_queue() {
+        let harness = SyncHarness::new(CountingConnector {
+            delay: Duration::from_millis(200),
+            executions: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: true,
+        });
+
+        let first = harness.spawn(SyncScope::Full);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let second = harness.spawn(SyncScope::Full);
+
+        assert!(!first.await.expect("task").success());
+        let second = second.await.expect("task");
+        assert!(second.success(), "the retry gathered for real");
+        assert!(!second.coalesced);
+        assert_eq!(
+            harness
+                .connector
+                .executions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
         );
     }
 }

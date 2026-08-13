@@ -77,7 +77,8 @@ the same spirit is welcome. Beyond those, comment only when the *why* is non-obv
 2. After the squash merge: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. CI runs the gates, publishes `ghcr.io/opusprojects/unified-api:X.Y.Z`, and
    creates a GitHub Release with that version's CHANGELOG section as the notes.
-   `latest` keeps tracking `main`; consumers should pin the version tag.
+   Only tags publish images: `latest` always means the newest release, never
+   the tip of `main` — consumers should still pin the version tag.
 
 ## Running the test suite
 

@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-16
+
 ### Added
 
 - **The triggering request follows the work into the scripts.** Every sync
@@ -1312,7 +1314,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/OpusProjects/unified-api/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/OpusProjects/unified-api/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/OpusProjects/unified-api/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/OpusProjects/unified-api/compare/v0.13.0...v0.14.0

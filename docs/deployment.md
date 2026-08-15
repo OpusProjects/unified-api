@@ -4,7 +4,7 @@
 
 CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main` (tagged
 `latest` and with the commit SHA) and on every `vX.Y.Z` git tag (tagged `X.Y.Z`).
-Production deployments should pin a version tag; `latest` tracks `main`. The image is a two-stage build (Rust builder →
+Production deployments should pin a version tag; `latest` always means the newest release (only tags publish images), never the tip of `main`. The image is a two-stage build (Rust builder →
 `debian:trixie-slim`), runs as a non-root `unified` user, declares a
 `HEALTHCHECK` (via python3) hitting `/healthz`, and bakes in the repo's
 `config/` and the sample scripts under `tests/` as defaults. For connector

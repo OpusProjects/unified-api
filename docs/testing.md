@@ -80,6 +80,48 @@ the test harness — the same mechanism as the conventional `tests/common/`. The
 default `config/` and the Docker image point at these same scripts, so they
 double as the shipped zero-config demo.
 
+## Why there are no `unit/`, `integration/`, `sanity/` folders
+
+The layout follows Rust's conventions, which differ from the folder-per-tier
+scheme common in Python or Java — the two tiers live where the toolchain puts
+them, not where a directory name says:
+
+- **Unit tests live inside each source file** (`#[cfg(test)] mod tests`)
+  because they need access to private items and compile as part of the crate.
+  Moving them to a folder would force everything they touch `pub` — the
+  opposite of "private by default".
+- **Top-level `tests/*.rs` files are the integration tier by definition**:
+  cargo compiles each as a separate binary linking the crate as an external
+  library. Cargo only auto-discovers *top-level* files there; subdirectories
+  are reserved for shared fixtures — which is exactly what
+  `tests/adapters/out/` is (the sample scripts).
+- The closest thing to a **sanity tier** is the smoke-test script in
+  [deployment](deployment.md#smoke-test) against a running instance. For a
+  fast local pass, `cargo test --lib` runs the in-src unit tests in a couple
+  of seconds; the full suite stays the gate.
+
+## Load-testing an instance
+
+There is deliberately no load harness in the repo: numbers from a shared CI
+runner or an arbitrary laptop describe that machine, not any deployment, and
+the concurrency behaviors that matter (sync coalescing, the refresh cap, reads
+during writes) are asserted deterministically in the suite. When a real
+capacity or regression question comes up, measure the actual instance ad hoc:
+
+```bash
+# Sustained reads on the hot path (any HTTP load tool works; oha shown)
+oha -z 30s -c 100 -H "x-api-key: $KEY" $BASE/api/v1/sources/src-d42/dataset
+
+# Concurrent on-demand refreshes — server.refresh_max_concurrent is the cap
+oha -z 30s -c 50 -H "x-api-key: $KEY" \
+  "$BASE/api/v1/sources/src-ssh/dataset?host=web01.example&refresh=true"
+```
+
+Watch `unified_api_http_request_duration_seconds` on `/metrics` (real
+histogram buckets, so percentiles aggregate) and the process RSS while it
+runs. Compare an instance against itself before/after a change — never
+against numbers from a different machine.
+
 ## Running a subset
 
 `cargo test` passes any filter straight through to the test binaries, matching on

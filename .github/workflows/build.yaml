@@ -16,6 +16,16 @@ on:
   schedule:
     - cron: '30 5 * * *'
 
+# One live run per PR: the labeled/unlabeled triggers above mean a freshly
+# opened PR fires once for "opened" and once per label applied — Dependabot
+# applies its labels one API call at a time, which made every bump PR run the
+# whole workflow five times for one commit. Newer runs supersede older ones
+# for the same PR; pushes, tags and the nightly schedule never cancel (a
+# release build must not be killable by an unrelated event), they queue.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}

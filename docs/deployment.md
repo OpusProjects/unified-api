@@ -10,9 +10,11 @@ Production deployments should pin a version tag; `latest` always means the newes
 `config/` and the sample scripts under `tests/` as defaults. For connector
 scripts it ships `python3` (plus a `python` symlink) with the commonly
 imported libraries preinstalled from apt — `requests`, `PyYAML`, `jinja2` —
-and `git` for project checkouts. Scripts needing anything beyond that still
-require baking a derived image (a per-project `requirements.txt` venv is on
-the roadmap).
+and `git` for project checkouts. Scripts needing anything beyond that
+declare it in their project's `requirements.txt` and set `python_venv: true`
+on the project — the app builds and maintains a virtualenv per project (see
+[configuration](configuration.md#projectsyaml)); a derived image is only
+needed for non-Python tooling.
 
 ```bash
 docker run -p 8182:8182 \

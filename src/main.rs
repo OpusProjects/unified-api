@@ -174,6 +174,8 @@ async fn main() {
             if !projects.is_empty() {
                 let git: std::sync::Arc<dyn unified_api::ports::git::GitPort> =
                     std::sync::Arc::new(CliGit::new());
+                let venv: std::sync::Arc<dyn unified_api::ports::venv::VenvPort> =
+                    std::sync::Arc::new(unified_api::adapters::out::python::PyVenv::new());
 
                 // Concurrently rather than one after the other: boot waits for
                 // the slowest clone, not the sum — and every clone is bounded
@@ -196,12 +198,14 @@ async fn main() {
 
                     let git = std::sync::Arc::clone(&git);
                     let secrets = std::sync::Arc::clone(&secrets);
+                    let venv = std::sync::Arc::clone(&venv);
                     let project_health = std::sync::Arc::clone(&project_health);
                     let projects_dir = projects_dir.clone();
                     clones.spawn(async move {
                         match unified_api::application::projects::sync_project(
                             &*git,
                             &*secrets,
+                            &*venv,
                             &project_health,
                             &project_id,
                             &project,
@@ -237,6 +241,7 @@ async fn main() {
                     unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
                         git,
                         secrets,
+                        venv,
                         project_health,
                         projects,
                         projects_dir,

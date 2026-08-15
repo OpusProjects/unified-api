@@ -32,7 +32,7 @@ FROM debian:trixie-slim
 # `#!/usr/bin/env python` shebang.
 RUN apt-get update && apt-get install -y \
     ca-certificates git \
-    python3 python-is-python3 \
+    python3 python-is-python3 python3-venv python3-pip \
     python3-requests python3-yaml python3-jinja2 python3-pyvmomi \
     && rm -rf /var/lib/apt/lists/*
 

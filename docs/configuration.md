@@ -273,6 +273,7 @@ prj-connectors-infra:
   credential_id: "cred-github-token"  # optional, for private repos
   sync_interval_seconds: 1800     # 0/absent = no periodic re-pull
   timeout_seconds: 300            # abort a clone/pull that runs longer (default 300)
+  python_venv: false              # build a venv from requirements.txt; see below
   sync_on_boot: true              # default true; see below
 ```
 
@@ -303,6 +304,18 @@ SSH sources are never resolved — their `script_path` is a remote command.
 Sources always declare `project_id`; enrichers and endpoints may add an
 optional `project_id` to resolve their scripts the same way. Scripts must
 carry the executable bit in git (`git update-index --chmod=+x`).
+
+With `python_venv: true`, a `requirements.txt` in the checkout gets a real
+virtualenv: built after the clone, refreshed after any pull that changed
+`requirements.txt` (unchanged pulls cost two file reads, not a pip run), and
+kept OUTSIDE the checkout (`<projects.dir>/.venvs/<project>`) so the hard
+reset cannot wipe it. When this project's scripts run, the venv's `bin/` is
+prepended to their PATH — a `#!/usr/bin/env python3` shebang resolves to the
+venv's interpreter, pip-installed imports work, and non-Python scripts in the
+same project are untouched. A failing install (a typo'd package, an
+unreachable index) **fails the project sync**, visible in its `sync_health`
+and bounded by `timeout_seconds` — not a per-source import error at the next
+sync with the cause nowhere.
 
 Private repos: a `token` credential authenticates over https (the token is
 passed to git through the environment, never on the command line); an

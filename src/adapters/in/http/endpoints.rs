@@ -184,13 +184,23 @@ async fn execute_endpoint(
         None => endpoint.script_path.clone(),
     };
 
+    // The project's virtualenv rides the same reserved-config channel as for
+    // connectors and enrichers; the process adapter prepends it to PATH
+    let mut config = endpoint.config.clone();
+    if let Some(project_id) = &endpoint.project_id
+        && let Some(bin) =
+            crate::application::scripts::venv_bin_dir(&state.projects_dir, project_id)
+    {
+        config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+    }
+
     // A hung transformer must not hang the HTTP request forever
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(endpoint.timeout_seconds),
         state.output.execute(
             &script_path,
             &endpoint.script_args,
-            &endpoint.config,
+            &config,
             &params,
             &datasets,
         ),

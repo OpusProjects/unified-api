@@ -286,6 +286,7 @@ pub fn start_sync_tasks(
 pub fn start_project_sync_tasks(
     git: Arc<dyn GitPort>,
     secrets: Arc<dyn SecretsPort>,
+    venv: Arc<dyn crate::ports::venv::VenvPort>,
     // The same registry instance AppState exposes: main hands it in because
     // these tasks start before the AppState exists
     health: Arc<SyncHealthRegistry>,
@@ -305,6 +306,7 @@ pub fn start_project_sync_tasks(
 
         let task_git = Arc::clone(&git);
         let task_secrets = Arc::clone(&secrets);
+        let task_venv = Arc::clone(&venv);
         let task_health = Arc::clone(&health);
         let task_projects_dir = projects_dir.clone();
         let task_shutdown = shutdown.clone();
@@ -315,6 +317,7 @@ pub fn start_project_sync_tasks(
             move || {
                 let git = Arc::clone(&task_git);
                 let secrets = Arc::clone(&task_secrets);
+                let venv = Arc::clone(&task_venv);
                 let health = Arc::clone(&task_health);
                 let projects_dir = task_projects_dir.clone();
                 let project_id = project_id.clone();
@@ -350,6 +353,7 @@ pub fn start_project_sync_tasks(
                         match sync_project(
                             &*git,
                             &*secrets,
+                            &*venv,
                             &health,
                             &project_id,
                             &project,
@@ -726,11 +730,23 @@ mod tests {
         let mut projects = HashMap::new();
         projects.insert("prj-a".to_string(), project);
 
+        struct StubVenv;
+        impl crate::ports::venv::VenvPort for StubVenv {
+            fn ensure(
+                &self,
+                _projects_dir: &std::path::Path,
+                _project_id: &str,
+            ) -> crate::ports::venv::VenvFuture<'_> {
+                Box::pin(async { Ok(crate::ports::venv::VenvOutcome::NoRequirements) })
+            }
+        }
+
         let health = Arc::new(SyncHealthRegistry::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handles = start_project_sync_tasks(
             Arc::new(StubGit),
             Arc::new(crate::adapters::out::secrets::mock::MockSecrets::new()),
+            Arc::new(StubVenv),
             Arc::clone(&health),
             projects,
             PathBuf::from("unused"),

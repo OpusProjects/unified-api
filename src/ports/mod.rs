@@ -4,3 +4,4 @@ pub mod enricher;
 pub mod git;
 pub mod output;
 pub mod secrets;
+pub mod venv;

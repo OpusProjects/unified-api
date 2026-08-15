@@ -48,6 +48,24 @@ pub fn resolve_script_path(
     script_path.to_string()
 }
 
+// The venv bin directory for a project, when one has been built — the
+// execution-side half of the VenvPort contract. Callers insert it into the
+// executing config under ports::venv::VENV_BIN_CONFIG_KEY; the process
+// adapters prepend it to the child's PATH, so a `#!/usr/bin/env python3`
+// shebang resolves to the venv's interpreter and pip-installed imports work.
+//
+// Gated on EXISTENCE rather than on the project's python_venv flag: creation
+// is what the flag governs (application::projects), and execution simply uses
+// what is on disk — the same stance script-path resolution takes about
+// checkouts. One stat() next to spawning a process.
+pub fn venv_bin_dir(projects_dir: &Path, project_id: &str) -> Option<String> {
+    let bin = projects_dir
+        .join(crate::ports::venv::VENVS_DIR)
+        .join(project_id)
+        .join("bin");
+    bin.is_dir().then(|| bin.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -123,6 +123,7 @@ pub async fn sync_project_now(
     let result = sync_project(
         &*state.git,
         &*state.secrets,
+        &*state.venv,
         &state.project_health,
         &id,
         project,

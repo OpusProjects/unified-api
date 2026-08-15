@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Per-project Python virtualenvs.** A project with `python_venv: true` and
+  a `requirements.txt` in its checkout gets a real virtualenv: built after
+  the clone, refreshed after any pull that changed `requirements.txt`
+  (unchanged pulls cost two file reads, not a pip run), stored OUTSIDE the
+  checkout (`<projects.dir>/.venvs/<project>`) so the hard reset cannot wipe
+  it. When that project's scripts run — connectors, enrichers, output
+  endpoints — the venv's `bin/` is prepended to their PATH, so a
+  `#!/usr/bin/env python3` shebang resolves to the venv's interpreter and
+  pip-installed imports work, while non-Python scripts stay untouched.
+
+  A failing install (a typo'd package, an unreachable index) fails the
+  project sync — visible in its `sync_health` and bounded by the project's
+  `timeout_seconds` — instead of surfacing later as one confusing import
+  error per source. Until now a connector needing a single PyPI package
+  meant baking a derived image; that remains necessary only for non-Python
+  tooling. The image ships `python3-venv`/`python3-pip` to support this.
+
 ## [0.16.0] - 2026-08-15
 
 ### Added

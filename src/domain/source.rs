@@ -67,7 +67,13 @@ pub struct Source {
     #[serde(default)]
     pub credential_ids: Vec<String>,
 
-    // Option<String> = may or may not have a cron schedule (reserved for future)
+    // Cron schedule as the alternative to sync_interval_seconds — "sync at
+    // 02:30" instead of "sync every N seconds". Standard 5-field cron with an
+    // optional leading seconds field, evaluated in UTC; validated at startup
+    // and mutually exclusive with a non-zero sync_interval_seconds. Cron
+    // sources get no startup jitter (the times were chosen deliberately) but
+    // back off on failure exactly like interval sources, by letting
+    // occurrences pass.
     pub schedule: Option<String>,
 
     // Automatic sync interval in seconds (simple alternative to cron)

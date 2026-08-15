@@ -77,6 +77,7 @@ src-section9:
   sync_mode: "replace"                 # "replace" (default) or "merge"
   credential_ids: ["cred-section9-api"] # must exist in credentials.yaml
   sync_interval_seconds: 60            # background sync; 0/absent = manual only
+  # schedule: "30 2 * * *"             # OR a cron cadence (UTC) — pick one
   ttl_seconds: 3600                    # dataset-level TTL
   timeout_seconds: 300                 # abort a sync that runs longer (default 300)
   ttl_overrides:                       # optional per-group / per-host TTLs
@@ -99,6 +100,7 @@ src-section9:
 | `ttl_*` | See [caching](caching.md) for the freshness model |
 | `allow_on_demand_refresh` | Whether `GET /dataset?host=X&refresh=true` may gather the named hosts. Off by default: a read that can cause SSH into a datacenter is a capability. Turning it on makes `ttl_seconds` load bearing — it becomes the threshold at which a read pays for a gather — so review it first. See [on-demand refresh](on-demand-refresh.md) |
 | `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
+| `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path`, `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync) from here — see [connectors](connectors.md) |
 

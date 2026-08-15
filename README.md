@@ -1,6 +1,7 @@
 # Unified API
 
 [![unified-api CI](https://github.com/OpusProjects/unified-api/actions/workflows/build.yaml/badge.svg)](https://github.com/OpusProjects/unified-api/actions/workflows/build.yaml)
+[![coverage](https://github.com/OpusProjects/unified-api/actions/workflows/coverage.yaml/badge.svg)](https://github.com/OpusProjects/unified-api/actions/workflows/coverage.yaml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-edition%202024-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![Container](https://img.shields.io/badge/ghcr.io-OpusProjects%2Funified--api-2496ED?logo=docker&logoColor=white)](https://github.com/OpusProjects/unified-api/pkgs/container/unified-api)

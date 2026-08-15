@@ -31,12 +31,17 @@ jobs:
           tool: cargo-llvm-cov
 
       # The floor is a ratchet against silent erosion, not a target: the suite
-      # measures ~89% lines at the time of writing, the gate fails under 85 —
+      # measures ~94.5% lines at the time of writing, the gate fails under 92 —
       # a real regression trips it, normal variance does not. Raise it when
       # the number durably rises; never lower it to make a PR pass.
-      - name: Coverage (fail under 85% lines)
+      #
+      # main.rs is excluded: it is the composition root — wiring plus the boot
+      # orchestration — exercisable only by running the binary, and counting
+      # its 270-odd lines as permanently red would make the honest number
+      # unreadable. Everything main wires IS covered, through AppBuilder.
+      - name: Coverage (fail under 92% lines)
         run: |
-          cargo llvm-cov --fail-under-lines 85 --summary-only | tee coverage.txt
+          cargo llvm-cov --ignore-filename-regex 'main\.rs$' --fail-under-lines 92 --summary-only | tee coverage.txt
           {
             echo '### Coverage'
             echo '```'

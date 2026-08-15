@@ -149,3 +149,76 @@ async fn vaulted_host_vars_fail_the_sync_naming_the_file() {
     assert!(err.message.contains("ansible-vault"));
     assert!(err.message.contains("zk01.example.com"));
 }
+
+// =========================================================================
+// Tests: the connector's failure shapes (missing file, unparseable file)
+// =========================================================================
+#[tokio::test]
+async fn a_missing_inventory_file_is_a_named_failure() {
+    let connector = StaticInventoryConnector::new();
+    let error = connector
+        .execute(
+            "/does/not/exist/inventory.yaml",
+            &[],
+            OutputFormat::Native,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .await
+        .expect_err("missing file must fail");
+    assert!(
+        error.message.contains("/does/not/exist/inventory.yaml"),
+        "error was: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn an_unparseable_inventory_is_a_named_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inventory.yaml");
+    std::fs::write(&path, "this: [is: not\nvalid yaml inventory").unwrap();
+
+    let connector = StaticInventoryConnector::new();
+    let error = connector
+        .execute(
+            path.to_str().unwrap(),
+            &[],
+            OutputFormat::Native,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .await
+        .expect_err("garbage YAML must fail");
+    assert!(
+        error.message.contains("inventory.yaml"),
+        "error was: {}",
+        error.message
+    );
+}
+
+// group_vars/ that exists but cannot be parsed must fail rather than serve an
+// inventory silently missing its vars
+#[tokio::test]
+async fn unparseable_group_vars_fail_rather_than_vanish() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("inventory.yaml"),
+        "all:\n  hosts:\n    a.example:\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join("group_vars")).unwrap();
+    std::fs::write(dir.path().join("group_vars/all.yaml"), "key: [unclosed").unwrap();
+
+    let connector = StaticInventoryConnector::new();
+    let result = connector
+        .execute(
+            dir.path().join("inventory.yaml").to_str().unwrap(),
+            &[],
+            OutputFormat::Native,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        )
+        .await;
+    assert!(result.is_err(), "unparseable group_vars must not be silent");
+}

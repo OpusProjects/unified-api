@@ -31,3 +31,34 @@ pub async fn resolve_credentials(
 
     Ok(all_credentials)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::out::secrets::mock::MockSecrets;
+
+    #[tokio::test]
+    async fn no_credential_ids_resolve_to_an_empty_map() {
+        let secrets = MockSecrets::new();
+        let resolved = resolve_credentials(&secrets, &[])
+            .await
+            .expect("empty is fine");
+        assert!(resolved.is_empty());
+    }
+
+    // The property the 0.6-era rewrite bought: a failing credential HALTS the
+    // sync with the credential named, instead of continuing with partial
+    // credentials and failing later with a confusing connector error.
+    #[tokio::test]
+    async fn a_failing_credential_halts_and_names_itself() {
+        let secrets = MockSecrets::new();
+        let err = resolve_credentials(&secrets, &["cred-ghost".to_string()])
+            .await
+            .expect_err("mock knows no credentials");
+        assert!(
+            err.message.contains("cred-ghost"),
+            "error was: {}",
+            err.message
+        );
+    }
+}

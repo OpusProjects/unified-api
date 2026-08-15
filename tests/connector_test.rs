@@ -373,3 +373,53 @@ async fn execute_script_with_unparseable_output() {
         error.message
     );
 }
+
+// =========================================================================
+// Test: a project virtualenv wins the PATH race
+// =========================================================================
+// The venv contract end to end at the adapter: when the executing config
+// carries `python_venv_bin`, a `#!/usr/bin/env python3` shebang must resolve
+// to THAT directory's interpreter. The fake venv's "python3" is a shell
+// script that prints a marker dataset — if the system python ran instead,
+// the marker cannot appear.
+#[tokio::test]
+async fn a_venv_on_the_config_wins_the_interpreter_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let venv = tempfile::tempdir().unwrap();
+    let bin = venv.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let fake_python = bin.join("python3");
+    std::fs::write(
+        &fake_python,
+        "#!/bin/sh\necho '{\"hostvars\": {\"ran-in-venv.example\": {}}, \"groups\": {}}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut config = HashMap::new();
+    config.insert(
+        unified_api::ports::venv::VENV_BIN_CONFIG_KEY.to_string(),
+        bin.to_string_lossy().into_owned(),
+    );
+
+    let connector = ProcessConnector::new();
+    let result = connector
+        .execute(
+            // env-shebang script: without the venv this returns the real
+            // inventory, with it the marker
+            "tests/adapters/out/connectors/inventory.py",
+            &[],
+            OutputFormat::Native,
+            &config,
+            &empty_credentials(),
+        )
+        .await
+        .expect("the fake interpreter still prints a valid dataset");
+
+    assert!(
+        result.dataset.hostvars.contains_key("ran-in-venv.example"),
+        "the venv's interpreter must win PATH: got {:?}",
+        result.dataset.hostvars.keys().collect::<Vec<_>>()
+    );
+}

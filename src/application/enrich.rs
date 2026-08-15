@@ -224,6 +224,15 @@ async fn execute_enricher(
         None => script_path.clone(),
     };
 
+    // The project's virtualenv rides the same reserved-config channel as it
+    // does for connectors; the process adapter prepends it to PATH
+    let mut config = enricher.config.clone();
+    if let Some(project_id) = &enricher.project_id
+        && let Some(bin) = crate::application::scripts::venv_bin_dir(projects_dir, project_id)
+    {
+        config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+    }
+
     let start = Instant::now();
 
     let result = match timeout(
@@ -231,7 +240,7 @@ async fn execute_enricher(
         enricher_port.execute(
             &script_path,
             &enricher.script_args,
-            &enricher.config,
+            &config,
             // An Arc clone: the enricher reads the very dataset the cache holds
             Arc::clone(&current_entry.dataset),
         ),

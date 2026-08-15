@@ -68,7 +68,8 @@ src/
 │   ├── enricher.rs           # EnricherPort
 │   ├── git.rs                # GitPort (project checkouts)
 │   ├── output.rs             # OutputPort
-│   └── secrets.rs            # SecretsPort
+│   ├── secrets.rs            # SecretsPort
+│   └── venv.rs               # VenvPort (per-project Python virtualenvs)
 ├── adapters/                 # Everything that touches the outside world
 │   ├── in/                   # Driving adapters: the outside world drives the app
 │   │   ├── http/             # axum handlers, auth, routes, OpenAPI spec

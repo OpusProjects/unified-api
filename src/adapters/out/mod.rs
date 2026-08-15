@@ -8,4 +8,5 @@ pub mod output;
 // Not a port implementation: the scrubbed-environment Command builder shared
 // by every adapter that spawns a local script.
 pub(crate) mod process_env;
+pub mod python;
 pub mod secrets;

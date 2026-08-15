@@ -30,6 +30,16 @@ pub struct GitProject {
     #[serde(default = "crate::domain::default_timeout_seconds")]
     pub timeout_seconds: u64,
 
+    // Build and maintain a Python virtualenv from the checkout's
+    // requirements.txt (default false). The venv lives OUTSIDE the checkout
+    // (`<projects.dir>/.venvs/<project>`), is refreshed after every pull
+    // whose requirements.txt changed, and its bin/ is prepended to PATH when
+    // this project's scripts run — so a `#!/usr/bin/env python3` shebang
+    // resolves to the venv's interpreter and pip-installed imports work.
+    // A failing install fails the project sync, visibly in its sync_health.
+    #[serde(default)]
+    pub python_venv: bool,
+
     // Update the checkout at boot? With `false` an EXISTING checkout is used
     // as-is (no network at startup) and updates happen only on demand
     // (POST /api/v1/projects/{id}/sync, e.g. from a pipeline) or on the

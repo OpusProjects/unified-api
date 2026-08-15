@@ -183,6 +183,7 @@ impl AppBuilder {
             output: Arc::new(ProcessOutput::new()),
             secrets: self.secrets,
             git: Arc::new(CliGit::new()),
+            venv: Arc::new(adapters::out::python::PyVenv::new()),
             sources: self.sources,
             views: self.views,
             enrichers: self.enrichers,

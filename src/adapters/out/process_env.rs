@@ -56,6 +56,23 @@ pub(crate) fn scrubbed_command(program: &str) -> Command {
     cmd
 }
 
+/// Put a project's virtualenv in front of the child's PATH (and set
+/// VIRTUAL_ENV, which some tools consult). Called by the process adapters when
+/// the executing config carries `ports::venv::VENV_BIN_CONFIG_KEY` — the
+/// venv's bin dir winning the PATH race is exactly how `activate` works, so a
+/// `#!/usr/bin/env python3` shebang resolves to the venv's interpreter while
+/// non-Python scripts in the same project stay untouched.
+pub(crate) fn apply_venv(cmd: &mut Command, venv_bin: &str) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut prefixed = std::ffi::OsString::from(venv_bin);
+    prefixed.push(":");
+    prefixed.push(path);
+    cmd.env("PATH", prefixed);
+    if let Some(venv_root) = std::path::Path::new(venv_bin).parent() {
+        cmd.env("VIRTUAL_ENV", venv_root);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

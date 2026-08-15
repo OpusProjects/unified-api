@@ -27,6 +27,7 @@ pub struct AppState {
     pub output: Arc<dyn ports::output::OutputPort>,
     pub secrets: Arc<dyn ports::secrets::SecretsPort>,
     pub git: Arc<dyn ports::git::GitPort>,
+    pub venv: Arc<dyn ports::venv::VenvPort>,
     pub sources: HashMap<String, Source>,
     // Read-only composites over sources, served on the same routes and sharing
     // the same id space (config validation rejects a collision). They hold no
@@ -96,6 +97,15 @@ impl AppState {
                 &source.project_id,
                 &source.script_path,
             );
+            // Same per-execution stance for the project's virtualenv: if one
+            // exists on disk, the process adapter puts it on the child's PATH
+            if let Some(bin) =
+                crate::application::scripts::venv_bin_dir(&self.projects_dir, &source.project_id)
+            {
+                source
+                    .config
+                    .insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+            }
         }
         Some(source)
     }

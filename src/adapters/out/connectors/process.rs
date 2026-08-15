@@ -60,6 +60,9 @@ impl ConnectorPort for ProcessConnector {
             // the script sees the passthrough list plus what we inject below,
             // not the service's API-key secrets or other sources' credentials.
             let mut cmd = process_env::scrubbed_command(&script_path);
+            if let Some(venv_bin) = config.get(crate::ports::venv::VENV_BIN_CONFIG_KEY) {
+                process_env::apply_venv(&mut cmd, venv_bin);
+            }
             // Killed if this future is dropped — which is what a timeout
             // does. Without it `timeout_seconds` bounded only how long WE
             // waited: the script kept running, so a wedged one got a fresh

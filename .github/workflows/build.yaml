@@ -91,6 +91,24 @@ jobs:
         with:
           command: check
 
+  deploy:
+    # The manifests users actually apply (deploy/) must never drift into
+    # invalid — that is the whole reason they are files instead of YAML blocks
+    # in prose. Compose is schema-checked by the compose plugin; the k8s
+    # manifests by kubeconform (pinned, -strict rejects unknown fields — the
+    # same stance the app takes with its own config).
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: docker compose -f deploy/compose/compose.yaml config -q
+
+      - name: kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          ./kubeconform -strict -summary -skip Kustomization deploy/k8s/
+
   build-image:
     needs: test
     # Builds on every PR and every push, publishes only on v* tags.

@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Ready-to-apply deployment manifests under `deploy/`.** The docker compose
+  file and complete Kubernetes manifests (Deployment with probes, non-root
+  and resources, Service, PVC, kustomization) that `docs/deployment.md` used
+  to embed as prose — now real files, linted in CI on every PR
+  (`docker compose config` and kubeconform `-strict`), so what users apply
+  can no longer silently drift from what the docs describe.
+
 - **Native HashiCorp Vault resolution** — the adapter the docs have promised
   as roadmap since the `SecretsPort` existed. Give a credential a
   `vault_path` (KV v2, under the configured mount) and configure the new

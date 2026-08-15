@@ -1,0 +1,8 @@
+# `kubectl apply -k deploy/k8s/` applies the set; also the natural place to
+# patch the image tag or add a namespace in your own overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - pvc.yaml

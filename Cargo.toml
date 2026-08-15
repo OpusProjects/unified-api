@@ -56,7 +56,7 @@ harness = false
 # JoinSet, so the production build no longer needs this
 futures = "0.3"
 # Statistical benchmarking for benches/hot_paths.rs
-criterion = "0.5"
+criterion = "0.8"
 # test-util adds virtual time (tokio::time::pause): the scheduler's tick
 # behaviour is a property of a 40-second schedule, and this exercises it in
 # microseconds instead of making the suite wait

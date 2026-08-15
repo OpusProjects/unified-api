@@ -1,0 +1,13 @@
+# Project checkouts and the optional cache snapshot live here; without the
+# volume both are rebuilt on every pod replacement (which works — it just
+# costs a boot-time clone and a cold cache).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unified-api-state
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

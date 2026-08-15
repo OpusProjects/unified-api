@@ -1,0 +1,99 @@
+# The Kubernetes deployment docs/deployment.md used to describe as fragments,
+# as a complete manifest — linted in CI with kubeconform, so it cannot drift
+# into invalid the way YAML in prose can.
+#
+# What the names refer to:
+#   unified-api-config   ConfigMap holding the config/*.yaml files (CONFIG_DIR)
+#   unified-api-env      Secret with the env table (API keys, credential values)
+#   unified-api-secrets  Secret with file-delivered secrets (SSH key, JSON files)
+#   unified-api-state    PVC for project checkouts and the cache snapshot
+# How the Secrets get their values — plain, Sealed Secrets, or External
+# Secrets Operator — is the "Secrets: three variants" section of
+# docs/deployment.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-api
+  labels:
+    app: unified-api
+spec:
+  # The cache is per-process and not shared: replicas each sync on their own
+  # schedule and answer from their own cache. One replica is the reference;
+  # scale reads with care (docs/deployment.md, "Kubernetes notes").
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unified-api
+  template:
+    metadata:
+      labels:
+        app: unified-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: unified-api
+          image: ghcr.io/opusprojects/unified-api:0.15.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8182
+              name: http
+          env:
+            - name: CONFIG_DIR
+              value: /etc/unified-api
+          envFrom:
+            - secretRef:
+                name: unified-api-env
+          # The listener binds before the boot project clones (0.14+), so
+          # startup is quick even with unreachable git remotes; /readyz stays
+          # red until the first source has synced.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/unified-api
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/unified-api
+            - name: fleet-ssh
+              mountPath: /run/secrets/fleet-ssh
+              readOnly: true
+            - name: gitlab
+              mountPath: /run/secrets/gitlab.json
+              subPath: gitlab.json
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: unified-api-config
+        - name: state
+          persistentVolumeClaim:
+            claimName: unified-api-state
+        - name: fleet-ssh
+          secret:
+            secretName: unified-api-secrets
+            items:
+              - key: ssh-private-key
+                path: id_ed25519
+                mode: 256 # 0400 — the key is read-only for the app user
+        - name: gitlab
+          secret:
+            secretName: unified-api-secrets

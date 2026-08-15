@@ -1,0 +1,24 @@
+# The docker compose deployment from docs/deployment.md as a real, linted
+# file: CI runs `docker compose config -q` against it, so it cannot drift
+# into invalid the way a YAML block in prose can.
+#
+# Pin the image to the release you deploy — `latest` always means the newest
+# release (never the tip of main), but a pin is what makes rollbacks a
+# one-line change.
+services:
+  unified-api:
+    image: ghcr.io/opusprojects/unified-api:0.15.0
+    ports: ["8182:8182"]
+    # The env table from docs/deployment.md (API keys, credential values);
+    # chmod 600 and gitignored. `required: false` keeps the CI lint working
+    # in a checkout that has no real .env — at deploy time you want one.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./config:/app/config:ro
+      - state:/var/lib/unified-api
+      - ./secrets/id_ed25519:/run/secrets/fleet-ssh/id_ed25519:ro
+      - ./secrets/gitlab.json:/run/secrets/gitlab.json:ro
+volumes:
+  state:

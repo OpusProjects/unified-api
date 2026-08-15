@@ -268,49 +268,27 @@ secrets out of the command line.)
 
 ### docker compose
 
-```yaml
-services:
-  unified-api:
-    image: ghcr.io/opusprojects/unified-api:0.10.3
-    ports: ["8182:8182"]
-    env_file: .env                    # the env table above; chmod 600, gitignored
-    volumes:
-      - ./config:/app/config:ro
-      - state:/var/lib/unified-api
-      - ./secrets/id_ed25519:/run/secrets/fleet-ssh/id_ed25519:ro
-      - ./secrets/gitlab.json:/run/secrets/gitlab.json:ro
-volumes:
-  state:
-```
+The compose file is a real, CI-linted file rather than a block to copy from
+this page: [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml).
+Put your `config/` directory, `.env` (the env table above; chmod 600,
+gitignored) and `secrets/` next to it and `docker compose up -d`. Pin the
+image tag to the release you deploy.
 
 ### Kubernetes
 
 The config files become a ConfigMap (mounted at `CONFIG_DIR`), the env table
 becomes a Secret, the file secrets become Secret volume mounts, and the
-writable state gets a PVC:
+writable state gets a PVC. The complete manifests — Deployment with probes,
+non-root and resources, Service, PVC — live in
+[`deploy/k8s/`](../deploy/k8s/), linted with kubeconform in CI:
 
-```yaml
-# Deployment (fragments)
-env:
-  - name: CONFIG_DIR
-    value: "/etc/unified-api"
-envFrom:
-  - secretRef:
-      name: unified-api-env          # every env var from the table, in one go
-volumeMounts:
-  - {name: config, mountPath: /etc/unified-api, readOnly: true}
-  - {name: state, mountPath: /var/lib/unified-api}
-  - {name: fleet-ssh, mountPath: /run/secrets/fleet-ssh, readOnly: true}
-  - {name: gitlab, mountPath: /run/secrets/gitlab.json, subPath: gitlab.json, readOnly: true}
-volumes:
-  - {name: config, configMap: {name: unified-api-config}}
-  - {name: state, persistentVolumeClaim: {claimName: unified-api-state}}
-  - name: fleet-ssh
-    secret:
-      secretName: unified-api-secrets
-      items: [{key: ssh-private-key, path: id_ed25519, mode: 0400}]
-  - name: gitlab
-    secret: {secretName: unified-api-secrets}
+```bash
+kubectl create configmap unified-api-config --from-file=config/
+kubectl create secret generic unified-api-env --from-env-file=.env
+kubectl create secret generic unified-api-secrets \
+  --from-file=ssh-private-key=secrets/id_ed25519 \
+  --from-file=gitlab.json=secrets/gitlab.json
+kubectl apply -k deploy/k8s/
 ```
 
 How the `unified-api-env` / `unified-api-secrets` Secrets get their values is
@@ -388,8 +366,8 @@ apps/unified-api/manifests/
 ├── serviceaccount.yaml
 ├── configmap.yaml        # config/*.yaml files, mounted at CONFIG_DIR
 ├── <secret variant>      # see below
-├── deployment.yaml       # pinned image tag, probes, non-root
-├── service.yaml
+├── deployment.yaml       # start from deploy/k8s/deployment.yaml in this repo
+├── service.yaml          # start from deploy/k8s/service.yaml
 ├── servicemonitor.yaml   # Prometheus scrape of /metrics
 └── ingress.yaml
 ```

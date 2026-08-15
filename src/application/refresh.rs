@@ -189,7 +189,11 @@ pub async fn refresh_hosts(
         SyncRequest::refreshing_origin(
             SyncScope::Hosts(still_stale.clone()),
             DEFAULT_REFRESH_DEPTH,
-        ),
+        )
+        // A static label rather than the request id: the id would have to
+        // thread through every refresh caller, and "a consumer read caused
+        // this gather" is the fact a script log needs
+        .with_trigger("refresh"),
         enrichment,
     );
 

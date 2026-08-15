@@ -108,6 +108,11 @@ connector or credential error rather than mapping it to an HTTP status:
 
 `404` means the source id itself isn't configured.
 
+The request's `x-request-id` travels into the connector as `SOURCE_CONFIG`'s
+`trigger` key (scheduled syncs say `scheduled`, on-demand refreshes say
+`refresh`), so a connector's own logs can be stitched into the same trace as
+the access log — end to end from consumer to script.
+
 Concurrent **full** syncs of one source coalesce: they always ran one after
 another (so an older gather can never overwrite a newer one), but each used to
 pay for its own complete gather — N impatient requests were N sequential

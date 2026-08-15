@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::AppState;
 use crate::application::enrich::run_enricher;
 use crate::application::projects::sync_project;
-use crate::application::sync::{SyncScope, sync_source};
+use crate::application::sync::{SyncRequest, SyncScope, sync_source};
 use crate::domain::project::GitProject;
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::ports::cache::CachePort;
@@ -202,7 +202,7 @@ async fn scheduled_sync(
         &state.syncs,
         source_id,
         &source,
-        SyncScope::Full,
+        SyncRequest::new(SyncScope::Full).with_trigger("scheduled"),
         Some(&enrichment),
     )
     .await;

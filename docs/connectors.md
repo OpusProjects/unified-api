@@ -49,7 +49,7 @@ Without `script_args` the script is invoked bare, exactly as before.
 
 | Variable | Content |
 |---|---|
-| `SOURCE_CONFIG` | The source's `config` map as a JSON object. On scoped syncs it additionally carries `scope` (`host`/`group`) and `target` |
+| `SOURCE_CONFIG` | The source's `config` map as a JSON object. On scoped syncs it additionally carries `scope` (`host`/`group`) and `target`; every sync carries `trigger` — the HTTP request id for a manual sync, `scheduled` or `refresh` otherwise — so a script's own logs can join the request's trace. Projects with a virtualenv also see `python_venv_bin` |
 | `CREDENTIAL_<KEY>` | One per resolved credential key, uppercased — e.g. `CREDENTIAL_USERNAME`, `CREDENTIAL_PASSWORD`, `CREDENTIAL_SSH_KEY_PATH` |
 
 These are the only variables the service sets, and the rest of the script's

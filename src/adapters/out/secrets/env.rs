@@ -135,6 +135,7 @@ mod tests {
         credentials.insert(
             "cred-test".to_string(),
             Credential {
+                vault_path: None,
                 name: "Test".to_string(),
                 credential_type: CredentialType::UsernamePassword,
                 env_prefix: Some("TEST_CRED".to_string()),
@@ -171,6 +172,7 @@ mod tests {
         credentials.insert(
             "cred-db".to_string(),
             Credential {
+                vault_path: None,
                 name: "DB".to_string(),
                 credential_type: CredentialType::UsernamePassword,
                 env_prefix: None,
@@ -249,6 +251,7 @@ mod tests {
         [(
             "cred-db".to_string(),
             Credential {
+                vault_path: None,
                 name: "DB".to_string(),
                 credential_type: CredentialType::UsernamePassword,
                 env_prefix: None,
@@ -272,6 +275,7 @@ mod tests {
         credentials.insert(
             "cred-ssh".to_string(),
             Credential {
+                vault_path: None,
                 name: "SSH".to_string(),
                 credential_type: CredentialType::SshKey,
                 env_prefix: Some("SSH_TEST".to_string()),
@@ -299,6 +303,7 @@ mod tests {
         credentials.insert(
             "cred-mix".to_string(),
             Credential {
+                vault_path: None,
                 name: "Mixed".to_string(),
                 credential_type: CredentialType::SshKey,
                 env_prefix: Some("MIX_TEST".to_string()),
@@ -334,6 +339,7 @@ mod tests {
         credentials.insert(
             "cred-cert".to_string(),
             Credential {
+                vault_path: None,
                 name: "Cert Only".to_string(),
                 credential_type: CredentialType::SshKey,
                 env_prefix: None,
@@ -361,6 +367,7 @@ mod tests {
         credentials.insert(
             "cred-empty".to_string(),
             Credential {
+                vault_path: None,
                 name: "Empty".to_string(),
                 credential_type: CredentialType::Token,
                 env_prefix: None,

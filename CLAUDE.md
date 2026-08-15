@@ -121,8 +121,10 @@ Configuration from YAML files, parsed STRICTLY: every config struct carries
 `deny_unknown_fields`, so a typo'd key fails startup naming the key instead of
 silently applying the default (policy comment in `config.rs`). Free-form data
 belongs in the `config:` maps, which stay arbitrary.
-Secrets resolved from env vars / JSON files via
-`SecretsPort` (a Vault adapter is roadmap, not built).
+Secrets resolved via `SecretsPort`: env vars / JSON files by default, native
+Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
+`secrets.vault:`, all behind a short resolution cache
+(`secrets.cache_ttl_seconds` — also the rotation latency).
 
 ## Runtime behavior worth knowing
 

@@ -22,6 +22,15 @@ pub struct Credential {
     #[serde(rename = "type")]
     pub credential_type: CredentialType,
 
+    // KV v2 path (under `secrets.vault.mount`) to read this credential from
+    // Vault. When set, `secret_keys` maps our names to fields of that secret
+    // (empty = every field verbatim) and env_prefix/secret_file are not
+    // consulted. Requires the `secrets.vault:` block in config.yaml —
+    // validated at startup, so a vault_path without a Vault fails the deploy
+    // rather than the first sync.
+    #[serde(default)]
+    pub vault_path: Option<String>,
+
     // Env vars prefix — ex: "SECTION9" → reads SECTION9_USERNAME, SECTION9_PASSWORD
     pub env_prefix: Option<String>,
 

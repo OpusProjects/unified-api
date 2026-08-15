@@ -132,12 +132,21 @@ pub struct SecretsConfig {
     // seconds. 0 disables the cache (every sync resolves fresh).
     #[serde(default = "default_credential_cache_ttl")]
     pub cache_ttl_seconds: u64,
+
+    // Native Vault resolution (KV v2). Credentials that carry `vault_path`
+    // read from this Vault; those without keep resolving from env/files, so
+    // adoption is per credential. Absent = no Vault, and any vault_path in
+    // credentials.yaml fails validation at startup. The struct lives with the
+    // adapter it configures (adapters/out/secrets/vault.rs).
+    #[serde(default)]
+    pub vault: Option<crate::adapters::out::secrets::vault::VaultConfig>,
 }
 
 impl Default for SecretsConfig {
     fn default() -> Self {
         Self {
             cache_ttl_seconds: default_credential_cache_ttl(),
+            vault: None,
         }
     }
 }
@@ -423,6 +432,21 @@ impl AppConfig {
                             id, endpoint_id
                         ));
                     }
+                }
+            }
+        }
+
+        // A vault_path needs a Vault to read it from — caught at startup,
+        // where the fix is obvious, not at the first sync that needs the
+        // credential.
+        if self.secrets_config.vault.is_none() {
+            for (id, credential) in &self.credentials {
+                if credential.vault_path.is_some() {
+                    errors.push(format!(
+                        "Credential '{}' sets vault_path but config.yaml has no \
+                         secrets.vault block to resolve it against",
+                        id
+                    ));
                 }
             }
         }
@@ -1013,6 +1037,35 @@ mod tests {
             .expect("an unknown section must not load")
             .to_string();
         assert!(err.contains("caches"), "error was: {}", err);
+    }
+
+    #[test]
+    fn a_vault_path_without_a_vault_block_fails_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("credentials.yaml"),
+            "cred-v:\n  name: \"V\"\n  type: \"token\"\n  vault_path: \"team/api\"\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a vault_path with nothing to resolve it must not load")
+            .to_string();
+        assert!(err.contains("secrets.vault"), "error was: {}", err);
+
+        // Declaring the Vault is all it takes
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\nsecrets:\n  vault:\n    address: \"http://vault.example:8200\"\n",
+        )
+        .unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("a configured Vault validates");
     }
 
     #[test]

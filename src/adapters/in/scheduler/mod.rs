@@ -61,6 +61,41 @@ async fn wait_for_dependency(cache: &dyn CachePort, dependency: &str, budget: Du
 const MAX_JITTER_SECONDS: u64 = 30;
 const MAX_BACKOFF_INTERVALS: u32 = 8;
 
+// Parse a source's `schedule` cron expression. Standard 5-field cron with an
+// OPTIONAL leading seconds field (6 fields), evaluated in UTC — containers
+// run UTC and a schedule that shifts with the host's timezone database is a
+// surprise nobody asked for. Config validation calls this at startup, so a
+// bad expression fails the deploy naming the source, never the first tick.
+pub(crate) fn parse_cron(expression: &str) -> Result<croner::Cron, String> {
+    croner::parser::CronParser::builder()
+        .seconds(croner::parser::Seconds::Optional)
+        .build()
+        .parse(expression)
+        .map_err(|e| e.to_string())
+}
+
+// How long until the schedule's next occurrence after `now`. None when the
+// pattern has no future occurrence at all (croner gives up past year 5000 —
+// practically a misconfiguration).
+fn next_cron_delay(cron: &croner::Cron, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    let next = cron.find_next_occurrence(&now, false).ok()?;
+    (next - now).to_std().ok()
+}
+
+// How a source's sync task paces itself: a fixed interval (jittered, ticks
+// with Skip semantics) or a cron schedule (exact times, deliberately
+// unjittered — "on the hour" was chosen by a person, and shifting it would be
+// a schedule change). Backoff works identically in both: a failing source
+// lets occurrences pass, 1, 2, 4, up to 8 apart.
+// The Cron variant is boxed for size (a parsed pattern is ~300 bytes, an
+// interval is 8): one Cadence exists per scheduled source, so this is about
+// clippy's variant-size lint, not memory that matters.
+#[derive(Clone)]
+enum Cadence {
+    Interval(u64),
+    Cron(Box<croner::Cron>),
+}
+
 // A per-task offset added before the first tick, so every task does not fire
 // at the same instant — at boot that meant every source gathering at once
 // (and, since tokio intervals keep their phase, colliding again at every
@@ -138,6 +173,66 @@ where
     })
 }
 
+// One scheduled sync attempt with the backoff bookkeeping, shared by the
+// interval and cron loops so the two cannot drift.
+async fn scheduled_sync(
+    state: &AppState,
+    source_id: &str,
+    fallback: &crate::domain::source::Source,
+    consecutive_failures: &mut u32,
+    skip: &mut u32,
+) {
+    info!(source = %source_id, "Syncing");
+
+    // Re-resolved every attempt rather than once at task start: the checkout
+    // this script lives in may not have existed when the task spawned (boot
+    // does not wait for clones), and a pipeline may move the script between
+    // runs.
+    let source = state
+        .source_for_sync(source_id)
+        .unwrap_or_else(|| fallback.clone());
+
+    let connector = state.connector_for(&source.connector_type);
+    let enrichment = state.enrichment();
+    let outcome = sync_source(
+        &*state.cache,
+        &**connector,
+        &*state.secrets,
+        &state.sync_health,
+        &state.syncs,
+        source_id,
+        &source,
+        SyncScope::Full,
+        Some(&enrichment),
+    )
+    .await;
+
+    match outcome.error {
+        None => {
+            *consecutive_failures = 0;
+            info!(
+                source = %source_id,
+                hosts = outcome.total_hosts,
+                groups = outcome.total_groups,
+                // true = this attempt piggybacked on a manual sync that
+                // finished while it queued
+                coalesced = outcome.coalesced,
+                "Synced"
+            );
+        }
+        Some(e) => {
+            *consecutive_failures = consecutive_failures.saturating_add(1);
+            *skip = ticks_to_skip(*consecutive_failures);
+            error!(
+                source = %source_id,
+                error = %e,
+                next_attempt_in_occurrences = *skip + 1,
+                "Sync failed"
+            );
+        }
+    }
+}
+
 // Every start_* function takes the shutdown receiver and returns the spawned
 // handles: on SIGTERM main flips the watch, each body returns at its next
 // wait point (a running sync is finished, never cut mid-write), and main joins
@@ -150,34 +245,64 @@ pub fn start_sync_tasks(
     let mut handles = Vec::new();
 
     for (source_id, source) in &state.sources {
-        let interval_secs = match source.sync_interval_seconds {
-            Some(secs) if secs > 0 => secs,
+        // Config validation rejects schedule + interval together and a
+        // schedule that does not parse; the match still has to answer for a
+        // Source built without validation (tests), so it fails loudly rather
+        // than silently not scheduling.
+        let cadence = match (source.schedule.as_deref(), source.sync_interval_seconds) {
+            (Some(expression), _) => match parse_cron(expression) {
+                Ok(cron) => {
+                    info!(source = %source_id, schedule = %expression, "Source scheduled (cron, UTC)");
+                    Cadence::Cron(Box::new(cron))
+                }
+                Err(e) => {
+                    error!(source = %source_id, error = %e, "Invalid cron schedule — source will NOT sync");
+                    continue;
+                }
+            },
+            (None, Some(secs)) if secs > 0 => {
+                info!(source = %source_id, interval_secs = secs, "Source scheduled");
+                Cadence::Interval(secs)
+            }
             _ => continue,
         };
 
-        info!(source = %source_id, interval_secs, "Source scheduled");
+        // After a panic, an interval task restarts one interval later; a cron
+        // task has no interval, so it gets a fixed minute — its own loop then
+        // waits for the next scheduled occurrence anyway.
+        let restart_delay = match &cadence {
+            Cadence::Interval(secs) => Duration::from_secs(*secs),
+            Cadence::Cron(_) => Duration::from_secs(60),
+        };
 
         let task_state = Arc::clone(&state);
         let task_source_id = source_id.clone();
         let task_source = source.clone();
+        let task_cadence = cadence;
         let task_shutdown = shutdown.clone();
 
         handles.push(spawn_supervised(
             format!("sync:{}", source_id),
-            Duration::from_secs(interval_secs),
+            restart_delay,
             move || {
                 let state = Arc::clone(&task_state);
                 let source_id = task_source_id.clone();
                 let source = task_source.clone();
+                let cadence = task_cadence.clone();
                 let mut shutdown = task_shutdown.clone();
 
                 async move {
                     if *shutdown.borrow() {
                         return;
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep(startup_jitter(&source_id, interval_secs)) => {}
-                        _ = shutdown.changed() => return,
+                    // Jitter spreads tasks that share an INTERVAL. A cron
+                    // schedule is exact times a person chose; shifting those
+                    // would be a schedule change, so cron tasks skip it.
+                    if let Cadence::Interval(interval_secs) = cadence {
+                        tokio::select! {
+                            _ = tokio::time::sleep(startup_jitter(&source_id, interval_secs)) => {}
+                            _ = shutdown.changed() => return,
+                        }
                     }
 
                     // A source that resolves its host list from another source's cache
@@ -207,69 +332,61 @@ pub fn start_sync_tasks(
                         }
                     }
 
-                    let mut ticker = ticker(interval_secs);
                     let mut consecutive_failures: u32 = 0;
                     let mut skip: u32 = 0;
 
-                    loop {
-                        tokio::select! {
-                            _ = ticker.tick() => {}
-                            _ = shutdown.changed() => return,
-                        }
-                        if skip > 0 {
-                            skip -= 1;
-                            debug!(source = %source_id, ticks_left = skip, "Backing off, tick skipped");
-                            continue;
-                        }
-                        info!(source = %source_id, "Syncing");
-
-                        // Re-resolved every tick rather than once at task start: the
-                        // checkout this script lives in may not have existed when the
-                        // task spawned (boot no longer waits for clones), and a
-                        // pipeline may move the script between runs.
-                        let source = state
-                            .source_for_sync(&source_id)
-                            .unwrap_or_else(|| source.clone());
-
-                        let connector = state.connector_for(&source.connector_type);
-                        let enrichment = state.enrichment();
-                        let outcome = sync_source(
-                            &*state.cache,
-                            &**connector,
-                            &*state.secrets,
-                            &state.sync_health,
-                            &state.syncs,
-                            &source_id,
-                            &source,
-                            SyncScope::Full,
-                            Some(&enrichment),
-                        )
-                        .await;
-
-                        match outcome.error {
-                            None => {
-                                consecutive_failures = 0;
-                                info!(
-                                    source = %source_id,
-                                    hosts = outcome.total_hosts,
-                                    groups = outcome.total_groups,
-                                    // true = this tick piggybacked on a manual
-                                    // sync that finished while it queued
-                                    coalesced = outcome.coalesced,
-                                    "Synced"
-                                );
+                    match cadence {
+                        Cadence::Interval(interval_secs) => {
+                            let mut ticker = ticker(interval_secs);
+                            loop {
+                                tokio::select! {
+                                    _ = ticker.tick() => {}
+                                    _ = shutdown.changed() => return,
+                                }
+                                if skip > 0 {
+                                    skip -= 1;
+                                    debug!(source = %source_id, ticks_left = skip, "Backing off, tick skipped");
+                                    continue;
+                                }
+                                scheduled_sync(
+                                    &state,
+                                    &source_id,
+                                    &source,
+                                    &mut consecutive_failures,
+                                    &mut skip,
+                                )
+                                .await;
                             }
-                            Some(e) => {
-                                consecutive_failures = consecutive_failures.saturating_add(1);
-                                skip = ticks_to_skip(consecutive_failures);
+                        }
+                        Cadence::Cron(cron) => loop {
+                            // Recomputed per iteration from the wall clock, so
+                            // a long sync cannot drift the schedule: the next
+                            // occurrence is whatever the expression says it is
+                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
                                 error!(
                                     source = %source_id,
-                                    error = %e,
-                                    next_attempt_in_intervals = skip + 1,
-                                    "Sync failed"
+                                    "Cron schedule has no future occurrence — source will NOT sync again"
                                 );
+                                return;
+                            };
+                            tokio::select! {
+                                _ = tokio::time::sleep(delay) => {}
+                                _ = shutdown.changed() => return,
                             }
-                        }
+                            if skip > 0 {
+                                skip -= 1;
+                                debug!(source = %source_id, occurrences_left = skip, "Backing off, occurrence skipped");
+                                continue;
+                            }
+                            scheduled_sync(
+                                &state,
+                                &source_id,
+                                &source,
+                                &mut consecutive_failures,
+                                &mut skip,
+                            )
+                            .await;
+                        },
                     }
                 }
             },
@@ -593,6 +710,72 @@ mod tests {
         let start = tokio::time::Instant::now();
         ticker.tick().await;
         assert_eq!(start.elapsed(), Duration::from_secs(6));
+    }
+
+    #[test]
+    fn cron_expressions_parse_in_five_and_six_field_forms() {
+        parse_cron("0 */2 * * *").expect("standard 5-field");
+        parse_cron("*/5 * * * * *").expect("optional leading seconds field");
+        parse_cron("whenever feels right").expect_err("junk must not parse");
+    }
+
+    #[test]
+    fn the_next_cron_delay_is_within_the_expressions_period() {
+        let cron = parse_cron("0 * * * *").expect("hourly");
+        let delay = next_cron_delay(&cron, chrono::Utc::now()).expect("always a next hour");
+        assert!(delay > Duration::ZERO);
+        assert!(delay <= Duration::from_secs(3600));
+    }
+
+    // A cron source through the whole machinery: the occurrence fires, the
+    // sync lands, health records. Every-second cron so real time stays short.
+    #[tokio::test]
+    async fn a_cron_scheduled_source_syncs_into_the_cache() {
+        let source: crate::domain::source::Source = serde_yaml_ng::from_str(concat!(
+            "name: cron\n",
+            "project_id: p\n",
+            "script_path: \"tests/adapters/out/connectors/inventory.py\"\n",
+            "ttl_seconds: 3600\n",
+            "schedule: \"* * * * * *\"\n",
+        ))
+        .expect("source fixture");
+        let mut sources = HashMap::new();
+        sources.insert("src-cron".to_string(), source);
+        let (_, state) = crate::AppBuilder::new().sources(sources).build_with_state();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_sync_tasks(Arc::clone(&state), shutdown_rx);
+        assert_eq!(
+            handles.len(),
+            1,
+            "a schedule alone must schedule the source"
+        );
+
+        let mut synced = false;
+        for _ in 0..150 {
+            if state.cache.get("src-cron").is_some() {
+                synced = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(synced, "the cron occurrence never landed a sync");
+        assert_eq!(
+            state
+                .sync_health
+                .get("src-cron")
+                .unwrap()
+                .consecutive_failures,
+            0
+        );
+
+        shutdown_tx.send(true).expect("receiver alive");
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(10), handle)
+                .await
+                .expect("drains")
+                .expect("no panic");
+        }
     }
 
     #[test]

@@ -352,6 +352,28 @@ impl AppConfig {
             }
         }
 
+        // A cron schedule must parse, and a source cannot serve two masters:
+        // schedule and sync_interval_seconds each define the cadence. The
+        // field spent its first year as "reserved for future" and silently
+        // ignored — precisely the config-that-does-nothing trap the strict
+        // parsing exists to kill, so now that it works, junk in it fails loud.
+        for (id, source) in &self.sources {
+            if let Some(expression) = &source.schedule {
+                if let Err(e) = crate::adapters::r#in::scheduler::parse_cron(expression) {
+                    errors.push(format!(
+                        "Source '{}' has an invalid cron schedule '{}': {}",
+                        id, expression, e
+                    ));
+                }
+                if source.sync_interval_seconds.is_some_and(|secs| secs > 0) {
+                    errors.push(format!(
+                        "Source '{}' sets both schedule and sync_interval_seconds — pick one",
+                        id
+                    ));
+                }
+            }
+        }
+
         // ssh_known_hosts must name an existing file, checked at startup —
         // a typo'd path would otherwise fail every host of every sync at
         // runtime instead of failing the deploy.
@@ -1037,6 +1059,51 @@ mod tests {
             .expect("an unknown section must not load")
             .to_string();
         assert!(err.contains("caches"), "error was: {}", err);
+    }
+
+    // The schedule field spent its first year ignored; now that it works,
+    // junk in it must fail the deploy, and it cannot coexist with an interval.
+    #[test]
+    fn validate_cron_schedule_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            concat!(
+                // junk in the schedule
+                "src-bad:\n  name: \"B\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+                "  schedule: \"whenever feels right\"\n",
+                // schedule AND interval
+                "src-both:\n  name: \"C\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+                "  schedule: \"0 2 * * *\"\n  sync_interval_seconds: 60\n",
+            ),
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("expected validation errors")
+            .to_string();
+        assert!(err.contains("src-bad"), "missing rule: {}", err);
+        assert!(err.contains("invalid cron"), "missing rule: {}", err);
+        assert!(err.contains("pick one"), "missing rule: {}", err);
+
+        // A well-formed cron-only source loads
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-cron:\n  name: \"OK\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  schedule: \"30 2 * * *\"\n",
+        )
+        .unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("a valid cron schedule loads");
     }
 
     #[test]

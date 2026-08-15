@@ -8,6 +8,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cron schedules for sources.** The `schedule` field has existed since the
+  beginning — "reserved for future", silently ignored, shipped in the sample
+  config doing nothing. It now works: standard 5-field cron (optional leading
+  seconds field), evaluated in **UTC**, as the alternative to
+  `sync_interval_seconds` — "sync at 02:30" instead of "sync every N
+  seconds". Cron sources fire at their exact times (no startup jitter — the
+  times are deliberate) and back off on failure by letting occurrences pass,
+  1, 2, 4, up to 8 apart, exactly like interval sources; supervision and
+  shutdown drain apply unchanged.
+
+  **Breaking (configs carrying a `schedule` value):** the field is now
+  validated — an expression that does not parse fails startup naming the
+  source, and `schedule` together with a non-zero `sync_interval_seconds` is
+  refused ("pick one"). Both were silently ignored before; a config that
+  relied on that silence needs the junk removed or the interval dropped.
+
 - **Per-project Python virtualenvs.** A project with `python_venv: true` and
   a `requirements.txt` in its checkout gets a real virtualenv: built after
   the clone, refreshed after any pull that changed `requirements.txt`

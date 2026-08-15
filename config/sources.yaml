@@ -3,7 +3,7 @@ src-section9:
   project_id: "prj-connectors-infra"
   script_path: "tests/adapters/out/connectors/inventory.py"
   credential_ids: ["cred-section9-api"]
-  schedule: "0 */1 * * *"
+  # schedule: "0 */1 * * *"    # cron (UTC) instead of the interval — pick one
   sync_interval_seconds: 60
   ttl_seconds: 3600
   ttl_overrides:
@@ -26,8 +26,8 @@ src-section9-large:
   project_id: "prj-connectors-infra"
   script_path: "tests/adapters/out/connectors/inventory.py"
   credential_ids: []
+  # Cron cadence (UTC): every 2 hours on the hour, instead of an interval
   schedule: "0 */2 * * *"
-  sync_interval_seconds: 120
   ttl_seconds: 7200
   config:
     scenario: "large"

@@ -144,7 +144,8 @@ Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
   cannot race the final save on the same temp file.
 - **The scheduler assumes things fail:** every periodic task (sync, enricher,
   project pull) starts with a deterministic per-id jitter (≤30s, capped at the
-  interval) so nothing fires in lockstep; a failing task backs off by letting
+  interval) so nothing fires in lockstep (sources on a cron `schedule` skip
+  the jitter — their times are deliberate — but back off identically); a failing task backs off by letting
   ticks pass — attempts at 1, 2, 4, then at most 8 intervals, reset on
   success — while `sync_health` carries the streak; and each task body runs
   under a supervisor that counts a panic

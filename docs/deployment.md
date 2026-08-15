@@ -361,11 +361,13 @@ The CI badge in the README tracks this workflow.
 - **Probes:** liveness → `GET /healthz`; readiness → `GET /readyz` (503 until at
   least one configured source has synced, so pods join the Service only with data)
 - **Config:** mount a ConfigMap at a path and point `CONFIG_DIR` at it
-- **Secrets:** the app never talks to a secrets backend directly today. Inject
-  values as env vars matching each credential's `env_prefix`/`secret_keys` (e.g.
-  from a Secret via `envFrom`, populated by External Secrets Operator), or mount
-  files and reference them via `secret_file` / `file_keys`. Native HashiCorp Vault
-  resolution is on the roadmap — it will slot in as another `SecretsPort` adapter
+- **Secrets:** three ways in. Inject values as env vars matching each
+  credential's `env_prefix`/`secret_keys` (e.g. from a Secret via `envFrom`,
+  populated by External Secrets Operator); mount files and reference them via
+  `secret_file` / `file_keys`; or resolve natively from HashiCorp Vault — give
+  a credential a `vault_path` and configure `secrets.vault:` (token or
+  Kubernetes auth), see [configuration](configuration.md#credentialsyaml).
+  Adoption is per credential, so the three coexist during a migration
 - **API key:** set `UNIFIED_API_KEY` from a Secret; without it the API is open
 - **Replicas:** the cache is per-process and not shared. Multiple replicas each
   sync independently — fine for read-scaling with scheduled syncs, but manual

@@ -168,12 +168,45 @@ cred-ssh-infra:
     username: "USERNAME"
   file_keys:                   # our key -> file path; passed as <key>_path
     ssh_key: "/run/secrets/infra-ssh/id_rsa"
+
+cred-d42-vault:
+  name: "Device42 (from Vault)"
+  type: "username_password"
+  vault_path: "infra/device42"  # KV v2 path under secrets.vault.mount
+  secret_keys:                  # our key -> field in the Vault secret
+    username: "user"            # (omit secret_keys to take every field)
+    password: "pass"
 ```
 
-Resolution order per credential: `env_prefix` (environment variables) or
-`secret_file` (a JSON file), plus `file_keys` entries which are passed through as
-`<key>_path` values. A credential that fails to resolve **fails the sync** with a
-clear error — it is never silently skipped.
+Resolution order per credential: `vault_path` (native Vault, see below), or
+`env_prefix` (environment variables) / `secret_file` (a JSON file), plus
+`file_keys` entries which are passed through as `<key>_path` values. A
+credential that fails to resolve **fails the sync** with a clear error — it is
+never silently skipped.
+
+Native Vault resolution is opt-in via the `secrets.vault:` block in
+`config.yaml` (a `vault_path` without it fails validation at startup):
+
+```yaml
+secrets:
+  cache_ttl_seconds: 60          # see the config.yaml section above
+  vault:
+    address: "https://vault.example.com:8200"
+    mount: "secret"              # KV v2 mount (default "secret")
+    token_env: "VAULT_TOKEN"     # token auth: env var holding the token
+    # kubernetes_role: "unified-api"   # OR Kubernetes auth: exchange the
+    # jwt_path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    #                                  # service-account JWT for a client token
+    timeout_seconds: 10          # bound on every Vault request
+```
+
+The adapter speaks **KV v2 only** and reads `<address>/v1/<mount>/data/<vault_path>`.
+Credentials *without* a `vault_path` keep resolving from env/files, so adoption
+is per credential — move them one at a time. With Kubernetes auth the client
+token is cached and renewed at 80% of its lease; with token auth the env var is
+re-read on every resolution, so rotating the token needs no restart. Pair Vault
+with `secrets.cache_ttl_seconds` (it is what keeps the sync schedule from
+becoming a request storm against Vault).
 
 ## enrichers.yaml
 

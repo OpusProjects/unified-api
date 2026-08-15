@@ -8,6 +8,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Native HashiCorp Vault resolution** — the adapter the docs have promised
+  as roadmap since the `SecretsPort` existed. Give a credential a
+  `vault_path` (KV v2, under the configured mount) and configure the new
+  `secrets.vault:` block (`address`, `mount`, and either `token_env` or
+  `kubernetes_role` + `jwt_path`); `secret_keys` then maps our names to
+  fields of the Vault secret, or takes every field verbatim when omitted.
+
+  Adoption is per credential: anything without a `vault_path` keeps resolving
+  from env vars and files exactly as before, so the three mechanisms coexist
+  during a migration. A `vault_path` with no `secrets.vault:` block fails
+  validation at startup. With Kubernetes auth the client token is cached and
+  renewed at 80% of its lease; with token auth the env var is re-read per
+  resolution, so token rotation needs no restart. Every Vault request is
+  bounded by `secrets.vault.timeout_seconds` (default 10), failures fail the
+  sync naming the credential and land in `sync_health` like any other
+  resolution error, and the credential cache above keeps the sync schedule
+  from becoming a request storm against Vault.
+
 - **Credential resolution is cached for a short TTL.** Credentials were
   re-resolved — an env read, a JSON secret file re-parsed — on every sync of
   every source, which was free right up until the backend is a network call

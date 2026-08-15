@@ -53,16 +53,29 @@ async fn main() {
         "Configuration loaded"
     );
 
-    // The env adapter, behind a short resolution cache unless disabled.
-    // Pointless-but-free against env vars; load-bearing the moment the
-    // backend is a network call away (see adapters/out/secrets/cache.rs).
+    // The secrets chain, innermost out: env/file resolution, optionally
+    // fronted by Vault (credentials with a vault_path read there, the rest
+    // fall through), optionally behind the short resolution cache — which
+    // stops being a nicety and becomes load-bearing the moment Vault turns
+    // every resolution into a network call.
     let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> = {
         let env = EnvSecrets::new(cfg.credentials.clone());
+        let base: Box<dyn unified_api::ports::secrets::SecretsPort> =
+            match &cfg.secrets_config.vault {
+                Some(vault) => Box::new(
+                    unified_api::adapters::out::secrets::vault::VaultSecrets::new(
+                        vault.clone(),
+                        cfg.credentials.clone(),
+                        Box::new(env),
+                    ),
+                ),
+                None => Box::new(env),
+            };
         match cfg.secrets_config.cache_ttl_seconds {
-            0 => std::sync::Arc::new(env),
+            0 => std::sync::Arc::from(base),
             ttl => std::sync::Arc::new(
                 unified_api::adapters::out::secrets::cache::CachedSecrets::new(
-                    Box::new(env),
+                    base,
                     std::time::Duration::from_secs(ttl),
                 ),
             ),

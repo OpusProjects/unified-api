@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
@@ -66,6 +67,7 @@ pub async fn sync_source(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     Query(params): Query<SyncParams>,
+    headers: HeaderMap,
 ) -> Result<Json<SyncResult>, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
@@ -100,11 +102,20 @@ pub async fn sync_source(
     // The refresh intent is separate from the scope: the scope says which hosts,
     // this says whether a federated source's origin should go and re-gather them
     // rather than hand over what it already has.
-    let request = if params.refresh_origin.unwrap_or(false) {
+    let mut request = if params.refresh_origin.unwrap_or(false) {
         SyncRequest::refreshing_origin(scope, params.refresh_depth.unwrap_or(DEFAULT_REFRESH_DEPTH))
     } else {
         SyncRequest::new(scope)
     };
+    // The id the request-id layer assigned (or the caller sent): handed to
+    // the connector as SOURCE_CONFIG's `trigger`, so the script's own logs
+    // join the same trace as the access log
+    if let Some(request_id) = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+    {
+        request = request.with_trigger(request_id);
+    }
 
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)

@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -81,10 +81,11 @@ pub async fn run_endpoint(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     body: Option<Json<serde_json::Value>>,
 ) -> Result<Response, ApiError> {
     let params = body.map(|Json(v)| v).unwrap_or(serde_json::json!({}));
-    execute_endpoint(&state, &auth, id, params).await
+    execute_endpoint(&state, &auth, id, params, &headers).await
 }
 
 #[utoipa::path(
@@ -106,6 +107,7 @@ pub async fn run_endpoint_get(
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     // Rendering an inventory is a read, so it should be reachable with GET:
     // browsers, proxy caches and tools that only fetch URLs could not call
@@ -121,7 +123,7 @@ pub async fn run_endpoint_get(
             .map(|(key, value)| (key, serde_json::Value::String(value)))
             .collect(),
     );
-    execute_endpoint(&state, &auth, id, params).await
+    execute_endpoint(&state, &auth, id, params, &headers).await
 }
 
 // The shared body of both methods: authorize, collect the datasets, run the
@@ -131,6 +133,7 @@ async fn execute_endpoint(
     auth: &AuthContext,
     id: String,
     params: serde_json::Value,
+    headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
     // Granting an endpoint implicitly grants reading its output, even when
     // the key cannot read the underlying sources directly — the endpoint IS
@@ -192,6 +195,14 @@ async fn execute_endpoint(
             crate::application::scripts::venv_bin_dir(&state.projects_dir, project_id)
     {
         config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+    }
+    // Who asked, for the transformer's own logs — the request id the id layer
+    // assigned (or the caller sent), inside ENDPOINT_CONFIG as `trigger`
+    if let Some(request_id) = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+    {
+        config.insert("trigger".to_string(), request_id.to_string());
     }
 
     // A hung transformer must not hang the HTTP request forever

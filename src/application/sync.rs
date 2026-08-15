@@ -76,6 +76,12 @@ pub struct SyncRequest {
     // Remaining hops. Each federated connector propagates depth - 1 and stops
     // propagating at zero.
     pub refresh_depth: u8,
+    // WHO asked: the HTTP request id for a manual sync, "scheduled" for a
+    // timer-driven one, "refresh" for an on-demand read. Travels to the
+    // connector script inside SOURCE_CONFIG as the reserved `trigger` key, so
+    // a script's own logs can join the same trace as the access log. None =
+    // unstated (tests, internal callers) — the key is simply absent.
+    pub trigger: Option<String>,
 }
 
 impl SyncRequest {
@@ -85,6 +91,7 @@ impl SyncRequest {
             scope,
             refresh_origin: false,
             refresh_depth: 0,
+            trigger: None,
         }
     }
 
@@ -93,7 +100,13 @@ impl SyncRequest {
             scope,
             refresh_origin: true,
             refresh_depth,
+            trigger: None,
         }
+    }
+
+    pub fn with_trigger(mut self, trigger: impl Into<String>) -> Self {
+        self.trigger = Some(trigger.into());
+        self
     }
 }
 
@@ -348,6 +361,7 @@ async fn run_sync(
         scope,
         refresh_origin,
         refresh_depth,
+        trigger,
     } = request;
     let scope_label = scope.label();
 
@@ -415,6 +429,12 @@ async fn run_sync(
             config.insert("target".to_string(), group.clone());
         }
         SyncScope::Full => {}
+    }
+
+    // Who asked, for the script's own logs — same reserved-key channel as
+    // scope/target, visible inside SOURCE_CONFIG
+    if let Some(trigger) = trigger {
+        config.insert("trigger".to_string(), trigger);
     }
 
     // Only federated connectors act on this: they are the ones with an origin

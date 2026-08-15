@@ -1799,3 +1799,35 @@ async fn metrics_exposes_task_health_gauges() {
         "missing snapshot gauge"
     );
 }
+
+// =========================================================================
+// Test: the triggering request id reaches the connector script
+// =========================================================================
+#[tokio::test]
+async fn a_syncs_trigger_reaches_the_script_inside_source_config() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert(
+        "src-probe".to_string(),
+        script_source("tests/adapters/out/connectors/env_probe.py"),
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-probe/sync")
+        .header("x-request-id", "consumer-trace-77")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // env_probe.py stores its whole environment as the probe host's vars;
+    // SOURCE_CONFIG in there must carry the trigger with the request's id
+    let (status, body) = get(app, "/api/v1/sources/src-probe/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("consumer-trace-77"),
+        "the trigger never reached SOURCE_CONFIG"
+    );
+    assert!(body.contains("trigger"));
+}

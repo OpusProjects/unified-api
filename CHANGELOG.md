@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **The triggering request follows the work into the scripts.** Every sync
+  hands the connector a `trigger` key inside `SOURCE_CONFIG`: the HTTP
+  request id for a manual `POST /sync` (the same id the access log and the
+  `x-request-id` response header carry), `scheduled` for timer-driven syncs,
+  `refresh` for on-demand reads. Output endpoints get the same key in
+  `ENDPOINT_CONFIG`. A connector's own log lines can now join the exact trace
+  that caused them — the missing last hop of the request-id work from 0.15.
+
 - **Cron schedules for sources.** The `schedule` field has existed since the
   beginning — "reserved for future", silently ignored, shipped in the sample
   config doing nothing. It now works: standard 5-field cron (optional leading

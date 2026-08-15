@@ -5,10 +5,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    groups:
-      # One PR per week bundling all action bumps, instead of one PR per action
-      github-actions:
-        patterns: ["*"]
+    # One PR per action bump: each lands (or fails CI) on its own, so a broken
+    # bump never blocks the rest of the week's updates.
     # Match the commit style in CONTRIBUTING.md: "build(deps): bump ..."
     commit-message:
       prefix: "build"
@@ -20,10 +18,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    groups:
-      # One grouped PR per week instead of one per crate
-      cargo:
-        patterns: ["*"]
+    # One PR per crate bump, same reasoning as above
     commit-message:
       prefix: "build"
       include: "scope"

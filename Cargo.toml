@@ -2,7 +2,7 @@
 name = "unified-api"
 version = "0.16.0"
 edition = "2024"
-# MSRV, kept in lockstep with the Dockerfile's pinned toolchain: a language
+# MSRV, kept in lockstep with docker/Dockerfile's pinned toolchain: a language
 # feature newer than the image's compiler must fail loudly at `cargo build`,
 # not at the next image build.
 rust-version = "1.96"

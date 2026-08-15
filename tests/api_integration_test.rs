@@ -1653,3 +1653,149 @@ async fn responses_carry_a_request_id() {
         .unwrap();
     assert_eq!(id(&stitched).as_deref(), Some("consumer-trace-42"));
 }
+
+// =========================================================================
+// Tests: enricher routes
+// =========================================================================
+fn app_with_declarative_enricher() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
+    let enricher: unified_api::domain::enricher::Enricher = serde_yaml_ng::from_str(
+        "name: Copy infinibox\ntarget_id: src-demo\nsource_id: src-storage\nfields: [\"infinibox\"]\n",
+    )
+    .expect("enricher fixture");
+    let mut enrichers = std::collections::HashMap::new();
+    enrichers.insert("en-storage".to_string(), enricher);
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .enrichers(enrichers)
+        .build_with_state();
+    (app, state)
+}
+
+#[tokio::test]
+async fn enrichers_are_listed_with_target_readiness_and_health() {
+    let (app, state) = app_with_declarative_enricher();
+
+    // Before anything is cached: listed, target not ready, no health yet
+    let (status, body) = get(app.clone(), "/api/v1/enrichers").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list[0]["enricher_id"], "en-storage");
+    assert_eq!(list[0]["target_ready"], false);
+    assert!(list[0].get("sync_health").is_none());
+
+    // Running it now is a 404 that says the TARGET is missing, not the enricher
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/enrichers/en-storage/run")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"].as_str().unwrap().contains("src-demo"),
+        "the 404 must name the uncached target: {}",
+        json
+    );
+
+    // Cache target and source, run again: success, and the listing now
+    // carries health and readiness
+    let dataset = |vars: serde_json::Value| -> unified_api::domain::dataset::Dataset {
+        serde_json::from_value(
+            serde_json::json!({"hostvars": {"motoko.section9.net": vars}, "groups": {}}),
+        )
+        .unwrap()
+    };
+    state.cache.set(
+        "src-demo",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset(serde_json::json!({})), 3600),
+    );
+    state.cache.set(
+        "src-storage",
+        unified_api::domain::cache_entry::CacheEntry::new(
+            dataset(serde_json::json!({"infinibox": "vol-a"})),
+            3600,
+        ),
+    );
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/enrichers/en-storage/run")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(result["success"], true, "run failed: {}", result);
+    assert_eq!(result["hosts_updated"], 1);
+
+    let (_, body) = get(app.clone(), "/api/v1/enrichers").await;
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list[0]["target_ready"], true);
+    assert_eq!(list[0]["sync_health"]["consecutive_failures"], 0);
+}
+
+#[tokio::test]
+async fn running_an_unknown_enricher_is_a_404_naming_it() {
+    let (app, _) = app_with_declarative_enricher();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/enrichers/en-ghost/run")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"].as_str().unwrap().contains("en-ghost"));
+}
+
+// =========================================================================
+// Test: task-health gauges on /metrics
+// =========================================================================
+#[tokio::test]
+async fn metrics_exposes_task_health_gauges() {
+    let enricher: unified_api::domain::enricher::Enricher =
+        serde_yaml_ng::from_str("name: E\ntarget_id: src-demo\nscript_path: e.py\n").unwrap();
+    let mut enrichers = std::collections::HashMap::new();
+    enrichers.insert("en-gauges".to_string(), enricher);
+    let project: unified_api::domain::project::GitProject =
+        serde_yaml_ng::from_str("name: P\ngit_url: \"https://example.com/r.git\"\n").unwrap();
+    let mut projects = std::collections::HashMap::new();
+    projects.insert("prj-gauges".to_string(), project);
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .enrichers(enrichers)
+        .projects(projects, std::path::PathBuf::from("unused"))
+        .build_with_state();
+
+    state
+        .enrich_health
+        .record_failure("en-gauges", "script exploded");
+    state.project_health.record_success("prj-gauges");
+    state.snapshot_health.record_failure(
+        unified_api::adapters::out::cache::persistence::SNAPSHOT_HEALTH_KEY,
+        "disk full",
+    );
+
+    let (status, body) = get(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"unified_api_enricher_consecutive_failures{enricher="en-gauges"} 1"#),
+        "missing enricher gauge"
+    );
+    assert!(
+        body.contains(r#"unified_api_project_sync_consecutive_failures{project="prj-gauges"} 0"#),
+        "missing project gauge"
+    );
+    assert!(
+        body.contains("unified_api_project_sync_last_success_age_seconds"),
+        "missing project success age"
+    );
+    assert!(
+        body.contains("unified_api_snapshot_consecutive_failures 1"),
+        "missing snapshot gauge"
+    );
+}

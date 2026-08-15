@@ -302,6 +302,7 @@ mod tests {
         received: Mutex<Option<Arc<Dataset>>>,
         fail: bool,
         returns: Option<Dataset>,
+        delay: Option<Duration>,
     }
 
     impl EnricherPort for SpyEnricher {
@@ -315,7 +316,11 @@ mod tests {
             *self.received.lock().expect("spy lock") = Some(Arc::clone(&current_dataset));
             let fail = self.fail;
             let returns = self.returns.clone();
+            let delay = self.delay;
             Box::pin(async move {
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
                 if fail {
                     return Err(EnricherError {
                         message: "spy failure".to_string(),
@@ -506,6 +511,159 @@ mod tests {
                 .as_deref()
                 .is_some_and(|e| e.contains("not in the cache"))
         );
+    }
+
+    fn declarative_enricher() -> Enricher {
+        serde_yaml_ng::from_str(
+            "name: d\ntarget_id: src-a\nsource_id: src-b\nfields: [\"infinibox\"]\n",
+        )
+        .expect("enricher fixture")
+    }
+
+    #[tokio::test]
+    async fn a_declarative_merge_copies_only_the_named_fields() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        cache.set(
+            "src-b",
+            CacheEntry::new(
+                Dataset {
+                    hostvars: [(
+                        "motoko.section9.net".to_string(),
+                        [
+                            ("infinibox".to_string(), serde_json::json!("vol-a")),
+                            ("unrelated".to_string(), serde_json::json!("nope")),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                },
+                3600,
+            ),
+        );
+
+        let outcome = run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &declarative_enricher(),
+        )
+        .await
+        .expect("target is cached");
+
+        assert!(outcome.success());
+        assert_eq!(outcome.hosts_updated, 1);
+        let entry = cache.get("src-a").expect("entry");
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["infinibox"],
+            "vol-a"
+        );
+        assert!(
+            !entry.dataset.hostvars["motoko.section9.net"].contains_key("unrelated"),
+            "only the declared fields may be copied"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declarative_merge_with_an_uncached_source_reports_it() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        // src-b is not in the cache
+
+        let outcome = run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &declarative_enricher(),
+        )
+        .await
+        .expect("target IS cached, so an outcome is produced");
+
+        assert!(!outcome.success());
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("src-b")),
+            "error was: {:?}",
+            outcome.error
+        );
+    }
+
+    #[tokio::test]
+    async fn an_enricher_with_neither_mode_reports_the_missing_script() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+
+        // Config validation refuses this at startup, but the domain type can
+        // exist: the use case must answer with words, not a panic
+        let enricher: Enricher =
+            serde_yaml_ng::from_str("name: bare\ntarget_id: src-a\n").expect("fixture");
+        let outcome = run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-bare",
+            &enricher,
+        )
+        .await
+        .expect("target is cached");
+
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("script_path")),
+            "error was: {:?}",
+            outcome.error
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_enricher_times_out_and_records_the_failure() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+
+        let spy = SpyEnricher {
+            delay: Some(Duration::from_secs(3600)),
+            ..Default::default()
+        };
+        // project_id exercises the checkout resolution branch on the way in
+        let enricher: Enricher = serde_yaml_ng::from_str(
+            "name: hung\ntarget_id: src-a\nscript_path: /bin/true\nproject_id: prj-x\ntimeout_seconds: 5\n",
+        )
+        .expect("fixture");
+
+        let health = SyncHealthRegistry::new();
+        let outcome = run_enricher(
+            &cache,
+            &spy,
+            &health,
+            std::path::Path::new("unused"),
+            "en-hung",
+            &enricher,
+        )
+        .await
+        .expect("target is cached");
+
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("timed out after 5s")),
+            "error was: {:?}",
+            outcome.error
+        );
+        assert_eq!(health.get("en-hung").unwrap().consecutive_failures, 1);
     }
 
     #[tokio::test]

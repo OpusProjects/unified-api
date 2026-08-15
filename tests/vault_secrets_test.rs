@@ -257,3 +257,117 @@ async fn kubernetes_auth_logs_in_with_the_service_account_jwt() {
     let again = vault.resolve("cred-vault").await.expect("cached login");
     assert_eq!(again["username"], "motoko");
 }
+
+// A fake that answers with the WRONG shapes: KV v1 (no data.data nesting) on
+// reads, and a login response without a client_token.
+async fn misshapen_vault() -> String {
+    let app = Router::new()
+        .route(
+            "/v1/secret/data/{*path}",
+            get(|| async {
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({"data": {"user": "motoko"}})),
+                )
+            }),
+        )
+        .route(
+            "/v1/auth/kubernetes/login",
+            post(|| async { (StatusCode::OK, Json(serde_json::json!({"auth": {}}))) }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{}", addr)
+}
+
+// The adapter speaks KV v2 only: a v1-shaped answer must fail saying so, not
+// half-read the secret.
+#[tokio::test]
+async fn a_kv_v1_shaped_response_is_refused_by_name() {
+    let address = misshapen_vault().await;
+    unsafe { std::env::set_var("VAULT_TEST_TOKEN_V1", "anything") };
+
+    let vault = vault_secrets(
+        &format!(
+            "address: \"{}\"\ntoken_env: \"VAULT_TEST_TOKEN_V1\"\n",
+            address
+        ),
+        HashMap::new(),
+    );
+
+    let err = vault.resolve("cred-vault").await.expect_err("v1 shape");
+    assert!(err.message.contains("KV v"), "error was: {}", err.message);
+}
+
+#[tokio::test]
+async fn a_login_without_a_client_token_is_a_named_failure() {
+    let address = misshapen_vault().await;
+    let jwt = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(jwt.path(), "sa-jwt").unwrap();
+
+    let vault = vault_secrets(
+        &format!(
+            "address: \"{}\"\nkubernetes_role: \"unified-api\"\njwt_path: \"{}\"\n",
+            address,
+            jwt.path().display()
+        ),
+        HashMap::new(),
+    );
+
+    let err = vault
+        .resolve("cred-vault")
+        .await
+        .expect_err("no token in login");
+    assert!(
+        err.message.contains("client_token"),
+        "error was: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn a_missing_service_account_jwt_is_a_named_failure() {
+    let address = misshapen_vault().await;
+
+    let vault = vault_secrets(
+        &format!(
+            "address: \"{}\"\nkubernetes_role: \"unified-api\"\njwt_path: \"/does/not/exist\"\n",
+            address
+        ),
+        HashMap::new(),
+    );
+
+    let err = vault.resolve("cred-vault").await.expect_err("jwt missing");
+    assert!(
+        err.message.contains("/does/not/exist"),
+        "error was: {}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn an_unset_token_env_var_is_a_named_failure() {
+    let address = misshapen_vault().await;
+
+    let vault = vault_secrets(
+        &format!(
+            "address: \"{}\"\ntoken_env: \"VAULT_TEST_TOKEN_NEVER_SET\"\n",
+            address
+        ),
+        HashMap::new(),
+    );
+
+    let err = vault
+        .resolve("cred-vault")
+        .await
+        .expect_err("env var unset");
+    assert!(
+        err.message.contains("VAULT_TEST_TOKEN_NEVER_SET"),
+        "error was: {}",
+        err.message
+    );
+}

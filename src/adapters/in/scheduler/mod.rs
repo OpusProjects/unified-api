@@ -651,6 +651,113 @@ mod tests {
         }
     }
 
+    // The enricher task end to end: the interval fires, the (declarative, so
+    // no process spawn) enricher runs, health is recorded, and the task
+    // drains. Real time — a 1-second interval plus sub-second jitter.
+    #[tokio::test]
+    async fn a_scheduled_enricher_runs_and_records_health() {
+        let enricher: crate::domain::enricher::Enricher = serde_yaml_ng::from_str(
+            "name: e\ntarget_id: src-t\nsource_id: src-s\nfields: [\"f\"]\nsync_interval_seconds: 1\n",
+        )
+        .expect("enricher fixture");
+        let mut enrichers = HashMap::new();
+        enrichers.insert("en-a".to_string(), enricher);
+        let (_, state) = crate::AppBuilder::new()
+            .enrichers(enrichers)
+            .build_with_state();
+        state
+            .cache
+            .set("src-t", CacheEntry::new(empty_dataset(), 3600));
+        state
+            .cache
+            .set("src-s", CacheEntry::new(empty_dataset(), 3600));
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_sync_tasks(Arc::clone(&state), shutdown_rx);
+        assert_eq!(handles.len(), 1, "no sources, one enricher");
+
+        let mut recorded = false;
+        for _ in 0..100 {
+            if state.enrich_health.get("en-a").is_some() {
+                recorded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(recorded, "the scheduled enricher never recorded health");
+        assert_eq!(
+            state
+                .enrich_health
+                .get("en-a")
+                .unwrap()
+                .consecutive_failures,
+            0
+        );
+
+        shutdown_tx.send(true).expect("receiver alive");
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(10), handle)
+                .await
+                .expect("drains")
+                .expect("no panic");
+        }
+    }
+
+    // The project task end to end with a stub git: the boot tick is skipped,
+    // the first pull lands at the interval, health is recorded, drain works.
+    #[tokio::test]
+    async fn a_scheduled_project_pull_runs_and_records_health() {
+        struct StubGit;
+        impl crate::ports::git::GitPort for StubGit {
+            fn ensure(
+                &self,
+                _dir: &std::path::Path,
+                _project: &GitProject,
+                _credentials: &HashMap<String, String>,
+            ) -> crate::ports::git::GitFuture<'_> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        let project: GitProject = serde_yaml_ng::from_str(
+            "name: p\ngit_url: \"https://example.com/r.git\"\nsync_interval_seconds: 1\n",
+        )
+        .expect("project fixture");
+        let mut projects = HashMap::new();
+        projects.insert("prj-a".to_string(), project);
+
+        let health = Arc::new(SyncHealthRegistry::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_project_sync_tasks(
+            Arc::new(StubGit),
+            Arc::new(crate::adapters::out::secrets::mock::MockSecrets::new()),
+            Arc::clone(&health),
+            projects,
+            PathBuf::from("unused"),
+            shutdown_rx,
+        );
+        assert_eq!(handles.len(), 1);
+
+        let mut recorded = false;
+        for _ in 0..100 {
+            if health.get("prj-a").is_some() {
+                recorded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(recorded, "the scheduled pull never recorded health");
+        assert_eq!(health.get("prj-a").unwrap().consecutive_failures, 0);
+
+        shutdown_tx.send(true).expect("receiver alive");
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(10), handle)
+                .await
+                .expect("drains")
+                .expect("no panic");
+        }
+    }
+
     // The tokio default for a panicking task is silence: the JoinHandle is
     // dropped and that source simply stops syncing forever. The supervisor
     // restarts the body instead (and counts the panic).

@@ -348,3 +348,28 @@ async fn ansible_output_parsed_as_native_yields_empty_dataset() {
     assert!(dataset.hostvars.is_empty());
     assert!(dataset.groups.is_empty());
 }
+
+// =========================================================================
+// Test: a script that exits 0 but prints garbage
+// =========================================================================
+#[tokio::test]
+async fn execute_script_with_unparseable_output() {
+    let connector = ProcessConnector::new();
+
+    let result = connector
+        .execute(
+            "tests/adapters/out/connectors/bad_json.py",
+            &[],
+            OutputFormat::Native,
+            &empty_credentials(),
+            &empty_credentials(),
+        )
+        .await;
+
+    let error = result.expect_err("garbage on stdout must be a parse error");
+    assert!(
+        error.message.to_lowercase().contains("json") || error.message.contains("parse"),
+        "error was: {}",
+        error.message
+    );
+}

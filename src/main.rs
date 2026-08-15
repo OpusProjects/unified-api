@@ -53,8 +53,21 @@ async fn main() {
         "Configuration loaded"
     );
 
-    let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> =
-        std::sync::Arc::new(EnvSecrets::new(cfg.credentials.clone()));
+    // The env adapter, behind a short resolution cache unless disabled.
+    // Pointless-but-free against env vars; load-bearing the moment the
+    // backend is a network call away (see adapters/out/secrets/cache.rs).
+    let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> = {
+        let env = EnvSecrets::new(cfg.credentials.clone());
+        match cfg.secrets_config.cache_ttl_seconds {
+            0 => std::sync::Arc::new(env),
+            ttl => std::sync::Arc::new(
+                unified_api::adapters::out::secrets::cache::CachedSecrets::new(
+                    Box::new(env),
+                    std::time::Duration::from_secs(ttl),
+                ),
+            ),
+        }
+    };
 
     // Created before the AppState exists because the boot clones below already
     // record into it; handed to the builder so the HTTP layer reads the same

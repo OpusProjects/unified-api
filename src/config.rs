@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub cache: CacheConfig,
     pub projects_config: ProjectsConfig,
+    pub secrets_config: SecretsConfig,
     pub credentials: HashMap<String, Credential>,
     pub sources: HashMap<String, Source>,
     pub views: HashMap<String, View>,
@@ -120,6 +121,31 @@ fn default_persistence_interval() -> u64 {
     60
 }
 
+// Secrets behavior — config.yaml, `secrets:` section (optional)
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsConfig {
+    // How long a resolved credential may be reused before the backend is asked
+    // again. Resolution runs on every sync of every source — free against env
+    // vars, a request storm against a networked backend. The TTL is also the
+    // rotation latency: a rotated secret is picked up within this many
+    // seconds. 0 disables the cache (every sync resolves fresh).
+    #[serde(default = "default_credential_cache_ttl")]
+    pub cache_ttl_seconds: u64,
+}
+
+impl Default for SecretsConfig {
+    fn default() -> Self {
+        Self {
+            cache_ttl_seconds: default_credential_cache_ttl(),
+        }
+    }
+}
+
+fn default_credential_cache_ttl() -> u64 {
+    60
+}
+
 // Where git projects are cloned — config.yaml, `projects:` section (optional)
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -150,6 +176,8 @@ struct ServerFile {
     cache: CacheConfig,
     #[serde(default)]
     projects: ProjectsConfig,
+    #[serde(default)]
+    secrets: SecretsConfig,
 }
 
 // Loads all configuration from a directory.
@@ -443,6 +471,7 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
         server: server_file.server,
         cache: server_file.cache,
         projects_config: server_file.projects,
+        secrets_config: server_file.secrets,
         credentials,
         sources,
         views,

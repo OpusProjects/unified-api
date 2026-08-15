@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Credential resolution is cached for a short TTL.** Credentials were
+  re-resolved — an env read, a JSON secret file re-parsed — on every sync of
+  every source, which was free right up until the backend is a network call
+  away. Successful resolutions are now reused for
+  `secrets.cache_ttl_seconds` (new `config.yaml` section; default 60,
+  0 disables the cache). Errors are never cached — a transient backend blip
+  is retried on the next resolution instead of being remembered for the TTL.
+
+  The TTL is also the rotation latency, stated plainly: a secret rotated in
+  the environment or on disk is picked up within `cache_ttl_seconds` rather
+  than on the very next sync. Set it to 0 to keep the old behavior.
+
 ## [0.15.0] - 2026-08-14
 
 ### Added

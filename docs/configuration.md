@@ -51,6 +51,15 @@ cache:
 # Optional. Where git projects are cloned (one subdirectory per project id).
 projects:
   dir: "/var/lib/unified-api/projects"   # default "projects"
+
+# Optional. Credential resolution behavior.
+secrets:
+  # How long a resolved credential is reused before the backend is asked
+  # again (default 60; 0 = resolve fresh on every sync). Resolution runs on
+  # every sync of every source — free against env vars, a request storm
+  # against a networked backend. This is also the rotation latency: a rotated
+  # secret is picked up within this many seconds.
+  cache_ttl_seconds: 60
 ```
 
 ## sources.yaml

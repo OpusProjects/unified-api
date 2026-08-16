@@ -42,13 +42,14 @@ and every one of them sees the same inventory.
 | [CLI](docs/cli.md) | Environment variables, log tuning, health checks and common curl operations |
 | [Configuration](docs/configuration.md) | Every YAML file field by field, env vars and startup validation |
 | [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
-| [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |
-| [Projects](docs/projects.md) | Git checkouts: sync styles, script resolution, virtualenvs, health |
-| [Output endpoints](docs/endpoints.md) | Consumer-facing transformers: contract, GET vs POST, permissions |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
+| [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |
 | [Federation](docs/federation.md) | One instance per datacenter, one central federating them, no WAN SSH |
 | [Observability](docs/observability.md) | Scheduling, structured logs and the metrics worth alerting on |
+| [Output endpoints](docs/endpoints.md) | Consumer-facing transformers: contract, GET vs POST, permissions |
+| [Projects](docs/projects.md) | Git checkouts: sync styles, script resolution, virtualenvs, health |
 | [Refresh](docs/on-demand-refresh.md) | Bringing a named host up to date at its origin, and what bounds the cost |
+| [Secrets](docs/secrets.md) | Credential backends, the resolution cache and rotation, native Vault |
 | [Testing](docs/testing.md) | Running the suite, what the tests cover, and where new ones belong |
 | [Troubleshooting](docs/troubleshooting.md) | Symptom first: what to check when data is stale or a read refuses |
 | [TTL](docs/caching.md) | The three-level freshness model, sync modes and TTL overrides |

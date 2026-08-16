@@ -49,6 +49,7 @@ pub fn create_router(
             "/api/v1/sources/{id}/status",
             get(http::sources::source_status),
         )
+        .route("/api/v1/sources/{id}/scope", get(http::scope::source_scope))
         .route(
             "/api/v1/sources/{id}/hosts/{hostname}",
             put(http::hosts::put_host).delete(http::hosts::delete_host),

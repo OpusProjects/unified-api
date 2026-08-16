@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Sources advertise their ownership scope.** `GET /api/v1/sources/{id}/scope`
+  answers "what does this source claim to own" from **configuration, never
+  cache contents**: an explicit new `advertise_scope` block (`groups` +
+  `hosts`), else the `hosts_from_source` match pattern an SSH source already
+  gathers by, else `declared: false`. A claims-everything pattern is stated as
+  `catch_all: true` rather than bare empty lists, and an explicitly empty
+  `advertise_scope` fails validation at startup. Views answer too, with the
+  union of their members' declared ownership.
+
+  This is the first half of removing federation's duplicated truth — the edge
+  says "I am datacenter_dc2" in its own config and the central's view repeats
+  it, driftably. The consumer side (view ownership resolved from what a
+  member advertises) follows.
+
 ## [0.17.0] - 2026-08-16
 
 ### Added

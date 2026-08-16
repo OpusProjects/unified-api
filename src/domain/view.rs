@@ -151,6 +151,35 @@ impl Ownership {
 }
 
 impl View {
+    // What a view advertises when asked "what do you own?": the union of its
+    // members' declared ownership patterns. Config-derived like a source's
+    // claim, so it is truthful whether or not anything has synced — a higher
+    // central federating THIS instance consumes it the same way this instance
+    // would consume an edge's.
+    pub fn advertised_scope(&self) -> crate::domain::source::ScopeClaim {
+        let mut groups: Vec<String> = Vec::new();
+        let mut hosts: Vec<String> = Vec::new();
+        let mut catch_all = false;
+        for member in &self.members {
+            catch_all |= member.owns.is_catch_all();
+            for group in &member.owns.groups {
+                if !groups.contains(group) {
+                    groups.push(group.clone());
+                }
+            }
+            for host in &member.owns.hosts {
+                if !hosts.contains(host) {
+                    hosts.push(host.clone());
+                }
+            }
+        }
+        crate::domain::source::ScopeClaim {
+            groups,
+            hosts,
+            catch_all,
+        }
+    }
+
     pub fn member_ids(&self) -> Vec<&str> {
         self.members
             .iter()
@@ -293,5 +322,24 @@ members:
             view(TWO_DATACENTERS).member_ids(),
             vec!["src-dc1", "src-dc2"]
         );
+    }
+
+    #[test]
+    fn a_view_advertises_the_union_of_member_ownership() {
+        let view = view(TWO_DATACENTERS);
+        let claim = view.advertised_scope();
+        assert_eq!(claim.groups, vec!["datacenter_dc1", "datacenter_dc2"]);
+        assert!(claim.hosts.is_empty());
+        assert!(!claim.catch_all);
+    }
+
+    #[test]
+    fn a_catch_all_member_makes_the_views_claim_catch_all() {
+        let view: View = serde_yaml_ng::from_str(concat!(
+            "name: v\nmembers:\n",
+            "  - source: src-a\n    owns:\n      source: src-inv\n",
+        ))
+        .expect("view fixture");
+        assert!(view.advertised_scope().catch_all);
     }
 }

@@ -80,6 +80,7 @@ fn counting_source(
         timeout_seconds: 60,
         ttl_overrides: TtlOverrides::default(),
         allow_on_demand_refresh: allow,
+        advertise_scope: None,
         config,
     }
 }

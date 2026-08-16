@@ -4,6 +4,15 @@ Unified API is a single binary with no subcommands — all runtime behaviour is
 controlled through environment variables and YAML configuration files. This page
 documents how to start, stop and operate the service from the command line.
 
+- [Running the binary](#running-the-binary)
+- [Environment variables](#environment-variables)
+- [Log level tuning](#log-level-tuning)
+- [Health checks](#health-checks)
+- [Common operations via the API](#common-operations-via-the-api)
+- [Graceful shutdown](#graceful-shutdown)
+- [Exit codes](#exit-codes)
+- [OpenAPI / Swagger UI](#openapi--swagger-ui)
+
 ---
 
 ## Running the binary
@@ -152,6 +161,8 @@ kill -TERM $(pgrep unified-api)    # graceful stop
 ---
 
 ## Exit codes
+
+The process exits with one of two codes, so a supervisor can tell a clean shutdown from a failed start.
 
 | Code | Meaning |
 |---|---|

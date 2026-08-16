@@ -11,7 +11,24 @@ The two questions worth separating before anything else:
 A long sync interval and a connector that has been failing since Tuesday both
 look like a dataset slowly getting older. Only the second pair tells them apart.
 
+- [A source's data is older than its interval](#a-sources-data-is-older-than-its-interval)
+- [A source is missing from `GET /sources`](#a-source-is-missing-from-get-sources)
+- [`dataset_is_fresh` is false but the hosts look fine](#dataset_is_fresh-is-false-but-the-hosts-look-fine)
+- [A view 404s a host that plainly exists](#a-view-404s-a-host-that-plainly-exists)
+- [A view serves an empty dataset while every member looks healthy](#a-view-serves-an-empty-dataset-while-every-member-looks-healthy)
+- [`refresh=true` returned success but the data did not change](#refreshtrue-returned-success-but-the-data-did-not-change)
+- [A manual sync seems to have had no effect](#a-manual-sync-seems-to-have-had-no-effect)
+- [A script enricher's keys keep disappearing](#a-script-enrichers-keys-keep-disappearing)
+- [A sync times out](#a-sync-times-out)
+- [Hosts vanish from a group after a sync](#hosts-vanish-from-a-group-after-a-sync)
+- [Everything answers 401 or 403](#everything-answers-401-or-403)
+- [Useful one-liners](#useful-one-liners)
+
+---
+
 ## A source's data is older than its interval
+
+Start by asking the source itself how its last few syncs went.
 
 ```bash
 curl -s localhost:8182/api/v1/sources/src-d42/status -H "$KEY" | jq '.sync_health'
@@ -35,6 +52,8 @@ data*.
 If `last_success_age_seconds` is absent entirely, the source has **never**
 synced successfully.
 
+---
+
 ## A source is missing from `GET /sources`
 
 That listing is driven by the cache, so a source that has never synced is not in
@@ -49,6 +68,8 @@ curl -s localhost:8182/metrics | grep unified_api_source_cached
 cache entry. This is the one state `/sources` and `/status` cannot show you,
 which is why the gauge exists.
 
+---
+
 ## `dataset_is_fresh` is false but the hosts look fine
 
 Expected when the entry was created by a **scoped** sync. A host- or
@@ -58,6 +79,8 @@ timestamps are true; the dataset-level ones say "no full sync has landed here".
 
 The next full sync clears it, in either sync mode. See
 [caching & TTLs](caching.md).
+
+---
 
 ## A view 404s a host that plainly exists
 
@@ -80,6 +103,8 @@ Sync that inventory source and the routing comes back.
 Otherwise the host's group is genuinely not in any member's `owns.groups` — the
 error names the members so you can see which one should have claimed it.
 
+---
+
 ## A view serves an empty dataset while every member looks healthy
 
 Same cause, visible in one metric:
@@ -92,6 +117,8 @@ unified_api_view_hosts{view="vw-all"}            0
 
 Members have data (`cached`), none can expand its ownership (`routable`), so the
 view claims nothing. Alert on `members_routable < members_total`.
+
+---
 
 ## `refresh=true` returned success but the data did not change
 
@@ -113,6 +140,8 @@ x-unified-api-refreshed-hosts: web01.example.com
 - **`400`** — `refresh=true` without `?host=`. A whole-source refresh on a read
   would gather the entire inventory, so the hosts have to be named.
 
+---
+
 ## A manual sync seems to have had no effect
 
 Syncs of one source run one at a time. If a scheduled sync was already under way
@@ -125,6 +154,8 @@ back `x-unified-api-refreshed: false` with `refresh did not finish within Ns`:
 it waited for the sync, ran out of its own budget, and served the cached data
 rather than overtaking a gather already in flight.
 
+---
+
 ## A script enricher's keys keep disappearing
 
 A script enricher's `hostvars` entry **replaces** a host's variable map rather
@@ -135,7 +166,11 @@ carry the rest through.
 A *declarative* enricher (`source_id` + `fields`) has no such constraint: it
 writes only the fields it owns. See [connectors](connectors.md).
 
+---
+
 ## A sync times out
+
+The error names the limit it hit, which is the first clue to which limit to look at.
 
 ```json
 { "success": false, "error": "sync timed out after 300s" }
@@ -151,6 +186,8 @@ whether `ssh_connect_timeout_seconds` × the number of hosts it cannot reach
 exceeds the source-level `timeout_seconds`; the per-host and whole-sync limits
 are different knobs.
 
+---
+
 ## Hosts vanish from a group after a sync
 
 If the connector reported them **unreachable**, they do not vanish — they keep
@@ -163,7 +200,11 @@ If hosts really are missing from a group in a **static inventory**, check
 whether the group is declared in more than one place — those declarations are
 merged, so a host in either one belongs to the group.
 
+---
+
 ## Everything answers 401 or 403
+
+The two are different failures, and they are told apart by whether there is a response body.
 
 - **401** — no key, or an unrecognised one. This comes from the middleware
   before any handler runs, so it is the one error with no JSON body.
@@ -177,7 +218,11 @@ no grant on the sources behind it.
 If nothing requires a key at all, no keys are configured — the startup log says
 so loudly, and every caller is treated as admin.
 
+---
+
 ## Useful one-liners
+
+Commands worth keeping to hand when something looks wrong.
 
 ```bash
 # every source with its freshness and health, at a glance

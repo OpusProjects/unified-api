@@ -8,6 +8,11 @@ This page is the topology. The `connector_type: remote` script contract it rests
 on lives in [connectors](connectors.md), and [views](views.md) are how a consumer
 stops needing to know which instance a host sits behind.
 
+- [Edge configuration (each DC)](#edge-configuration-each-dc)
+- [Central configuration](#central-configuration)
+- [Verifying a federation](#verifying-a-federation)
+- [Operational notes](#operational-notes)
+
 For hosts spread over multiple datacenters, don't SSH across the WAN from
 one central instance (firewall openings into every DC, one key with global
 reach, WAN latency on every handshake). Deploy **one instance per DC** doing
@@ -59,7 +64,9 @@ The wire protocol is the API itself: `GET /dataset` returns exactly the
 Dataset shape a connector must produce, and `/status` provides the data's
 real age so freshness reporting stays truthful across hops.
 
-### Edge configuration (each DC)
+---
+
+## Edge configuration (each DC)
 
 A completely normal instance — its sources are whatever that DC needs (see
 the worked example above). The only federation-specific piece is a
@@ -77,7 +84,11 @@ key-central:
 The deployment injects `UNIFIED_API_KEY_CENTRAL` on the edge (same secret
 mechanisms as everything else). Generate one distinct key per edge.
 
-### Central configuration
+---
+
+## Central configuration
+
+What the central instance needs in order to treat each edge as a remote source it can read.
 
 ```yaml
 # central: credentials.yaml — one token credential per DC
@@ -125,7 +136,11 @@ Secrets the central's deployment must inject: `EDGE_DC1_TOKEN` (the value of
 the edge's `UNIFIED_API_KEY_CENTRAL`) — one env var per DC — plus the
 central's own API keys for its consumers.
 
-### Verifying a federation
+---
+
+## Verifying a federation
+
+A federation is working when the central sees what the edge sees; these calls check that end to end.
 
 ```bash
 # 1. the edge has data of its own
@@ -152,7 +167,11 @@ Failure modes, all loud:
 | `request … failed` (network) | WAN/DNS/TLS problem — the central keeps serving its last good copy |
 | WARN `could not read remote ages` | Data arrived fine; only the age lookup failed (treated as fresh) |
 
-### Operational notes
+---
+
+## Operational notes
+
+How the arrangement behaves once it is running, and what it costs to change its shape.
 
 - **A WAN cut does not lose data**: the central's cached copy keeps being
   served (stale beats nothing) and its `unified_api_sync_total{result="error"}`

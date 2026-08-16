@@ -1,5 +1,18 @@
 # Deployment
 
+How the service is packaged and run: the container image, a complete worked configuration,
+and what changes when the target is Kubernetes, ArgoCD or a CI pipeline.
+
+- [Container image](#container-image)
+- [A complete worked example](#a-complete-worked-example)
+- [Running the example](#running-the-example)
+- [CI/CD pipeline](#cicd-pipeline)
+- [Kubernetes notes](#kubernetes-notes)
+- [GitOps with ArgoCD](#gitops-with-argocd)
+- [Scheduling and observability](#scheduling-and-observability)
+
+---
+
 ## Container image
 
 CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main` (tagged
@@ -26,6 +39,8 @@ docker run -p 8182:8182 \
 
 That's the zero-config demo. For a realistic deployment, walk through the
 complete example below.
+
+---
 
 ## A complete worked example
 
@@ -250,7 +265,11 @@ above and whatever delivers secrets:
 | `/run/secrets/fleet-ssh/id_ed25519` | file (mode 0400) | `cred-fleet-ssh` → SSH connector |
 | `/run/secrets/gitlab.json` | file | `cred-gitlab` → git clones |
 
+---
+
 ## Running the example
+
+The same configuration started three ways — Docker, Compose and Kubernetes — and a smoke test to confirm it came up.
 
 ### docker run
 
@@ -319,6 +338,8 @@ logs a WARN telling you to set `output_format: "ansible"`.
 > Deploying across several datacenters? The topology — one instance per DC,
 > one central federating them — is [its own page](federation.md).
 
+---
+
 ## CI/CD pipeline
 
 `.github/workflows/build.yaml`, two jobs:
@@ -336,7 +357,11 @@ logs a WARN telling you to set `output_format: "ansible"`.
 
 The CI badge in the README tracks this workflow.
 
+---
+
 ## Kubernetes notes
+
+What changes when the deployment target is a cluster rather than a single host.
 
 - **Probes:** liveness → `GET /healthz`; readiness → `GET /readyz` (503 until at
   least one configured source has synced, so pods join the Service only with data)
@@ -355,6 +380,8 @@ The CI badge in the README tracks this workflow.
   them. Run a single replica if consumers rely on those.
 - **Metrics:** add a `ServiceMonitor` (or scrape annotations) pointing at
   `/metrics` on the HTTP port — the endpoint is public, no API key needed.
+
+---
 
 ## GitOps with ArgoCD
 
@@ -441,6 +468,8 @@ mounting the SSH private key at the path `file_keys` points to (mode `0400`).
 If you use ESO with ArgoCD auto-sync, add `ignoreDifferences` for the
 `conversionStrategy`/`decodingStrategy`/`metadataPolicy` defaults the operator
 writes back, or the app never reports Synced.
+
+---
 
 ## Scheduling and observability
 

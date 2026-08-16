@@ -4,6 +4,16 @@ Interactive documentation lives at **`/swagger-ui/`** (the root `/` redirects th
 with the raw OpenAPI spec at `/api-docs/openapi.json`. This page is the quick
 reference; the spec is generated from the code and is always authoritative.
 
+- [Authentication](#authentication)
+- [Errors](#errors)
+- [Health](#health)
+- [Sources](#sources)
+- [Enrichers](#enrichers)
+- [Output endpoints](#output-endpoints)
+- [Projects (admin-only)](#projects-admin-only)
+
+---
+
 ## Authentication
 
 API keys are defined in `api_keys.yaml` (see [configuration](configuration.md));
@@ -51,6 +61,8 @@ Rotation is external by design: swap the secret in the env var (Secret, Vault,
 unaffected). Browser-based consumers need their origins listed in
 `server.cors_allowed_origins` — see [configuration](configuration.md).
 
+---
+
 ## Errors
 
 **Every** failure from every route carries the same JSON body:
@@ -68,7 +80,11 @@ status code, read the message.
 The one exception is `401`: the API-key middleware rejects a request before any
 handler runs, so an unauthenticated call gets the status alone.
 
+---
+
 ## Health
+
+Three unauthenticated probes, meant for load balancers, orchestrators and Prometheus rather than for consumers.
 
 | Route | Meaning |
 |---|---|
@@ -76,7 +92,11 @@ handler runs, so an unauthenticated call gets the status alone.
 | `GET /readyz` | Readiness — `200` when no sources are configured or at least one has synced; `503` otherwise, with the pending list. `server.readyz_require_all_sources: true` waits for every source |
 | `GET /metrics` | Prometheus metrics (sync/enrich/endpoint counters and durations, per-source freshness gauges) — see [observability](observability.md) |
 
+---
+
 ## Sources
+
+Reading cached inventory: what is configured, how fresh it is, and the datasets and groups themselves.
 
 | Route | Meaning |
 |---|---|
@@ -274,7 +294,11 @@ default). Inventory JSON repeats the same variable names for every host, so
 it typically shrinks ~10×, which matters for WAN consumers like remote
 federation. Clients that don't advertise gzip get identity bytes, unchanged.
 
+---
+
 ## Enrichers
+
+One route, which runs a configured enricher against the cached dataset of its target.
 
 | Route | Meaning |
 |---|---|
@@ -284,7 +308,11 @@ federation. Clients that don't advertise gzip get identity bytes, unchanged.
 The result reports `hosts_updated` / `hosts_removed` and any script error.
 For declarative merges, `404` is also returned if the source has never synced.
 
+---
+
 ## Output endpoints
+
+Running a configured transformer and returning whatever it produces, unaltered.
 
 | Route | Meaning |
 |---|---|
@@ -310,6 +338,8 @@ caches, and tools that only take a URL. A query string carries no types, so
 every parameter arrives at the script as a **string**; the script sees the
 same `ENDPOINT_PARAMS` object either way. Use `POST` when a parameter has to
 be a real number, boolean, or nested structure.
+
+---
 
 ## Projects (admin-only)
 

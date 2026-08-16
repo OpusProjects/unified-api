@@ -4,7 +4,17 @@ Unified API is a **hexagonal monolith**: a single binary organized as ports & ad
 There are no external data dependencies — no Redis, no database — the cache lives
 in process memory (DashMap) and configuration comes from YAML files.
 
+- [The hexagon](#the-hexagon)
+- [Driving vs driven adapters](#driving-vs-driven-adapters)
+- [Request flows](#request-flows)
+- [Concurrency model](#concurrency-model)
+- [Async trait objects](#async-trait-objects)
+
+---
+
 ## The hexagon
+
+The shape in one picture: adapters on the outside, the application core in the middle, and the direction each arrow points.
 
 ```
             ┌───────────────────────── adapters (outside) ─────────────────────────┐
@@ -42,7 +52,11 @@ The composition root — the one place concrete adapters are chosen — is `AppB
 in `src/lib.rs` (plus `main.rs`, which reads env/config and hands them in).
 `AppState` (`src/state.rs`) holds the ports as `Arc<dyn Trait>` plus the static config maps.
 
+---
+
 ## Driving vs driven adapters
+
+Adapters come in two kinds, distinguished by which way the call travels across the boundary.
 
 - **Driving** (requests come *in*): `adapters/in/http/` (axum) and `adapters/in/scheduler/`
   (interval timers). Both are thin: they translate their trigger (an HTTP request, a
@@ -50,6 +64,8 @@ in `src/lib.rs` (plus `main.rs`, which reads env/config and hands them in).
   (JSON response, log line). Use-case logic exists **once**, in `application/`.
 - **Driven** (we reach *out*): under `adapters/out/` — the cache, the two connectors,
   the enricher and output executors, and secrets resolution.
+
+---
 
 ## Request flows
 
@@ -68,6 +84,8 @@ with `sync_interval_seconds > 0`; each tick calls the *same*
 `application::sync::sync_source` with `SyncScope::Full` and logs the outcome.
 Enrichers with an interval get the same treatment via `application::enrich::run_enricher`.
 
+---
+
 ## Concurrency model
 
 Handlers and scheduler tasks run concurrently on the tokio runtime and share the
@@ -84,6 +102,8 @@ and must never call back into the cache.
 
 Long-running work (executing a connector or enricher script) is never done under the
 lock: the enricher takes a read snapshot, runs the script, then merges atomically.
+
+---
 
 ## Async trait objects
 

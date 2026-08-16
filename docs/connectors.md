@@ -4,6 +4,17 @@ Everything pluggable in Unified API is an **executable** speaking JSON. Any lang
 works — the shipped examples under `tests/` are Python. This page defines the
 three contracts.
 
+- [The Dataset shape](#the-dataset-shape)
+- [Source connectors (`connector_type: script`)](#source-connectors-connector_type-script)
+- [Source connectors (`connector_type: ssh`)](#source-connectors-connector_type-ssh)
+- [Static inventory sources (`connector_type: static_inventory`)](#static-inventory-sources-connector_type-static_inventory)
+- [Remote sources — federation (`connector_type: remote`)](#remote-sources--federation-connector_type-remote)
+- [Enrichers](#enrichers)
+- [Output endpoints](#output-endpoints)
+- [Testing your script](#testing-your-script)
+
+---
+
 ## The Dataset shape
 
 All three script types deal in the same JSON document:
@@ -26,6 +37,8 @@ All three script types deal in the same JSON document:
 
 Every field is optional (`hostvars`/`groups` default to empty). `remove_hosts` is
 only meaningful in enricher output.
+
+---
 
 ## Source connectors (`connector_type: script`)
 
@@ -119,6 +132,8 @@ Conversion rules:
 `_meta`, the sync logs a WARN suggesting `output_format: "ansible"`. (Both
 Dataset fields are optional in JSON, so Ansible output "parses fine" as an
 empty inventory — that silent zero is the failure mode this flag exists for.)
+
+---
 
 ## Source connectors (`connector_type: ssh`)
 
@@ -218,6 +233,8 @@ others — it just occupies one of the `concurrency` slots until its timeout
 **Credentials:** expects `username` (or `ssh_username`) and an `ssh_key_path` /
 `key_path` from `file_keys` — see [configuration](configuration.md).
 
+---
+
 ## Static inventory sources (`connector_type: static_inventory`)
 
 For classic Ansible **static YAML inventories** — an `inventory.yaml` with the
@@ -267,6 +284,8 @@ credentials and `SOURCE_CONFIG` don't apply to this connector.
   (templating belongs to the consumer, e.g. Ansible itself)
 - `group_vars`/`host_vars` files that match nothing log a warning
 
+---
+
 ## Remote sources — federation (`connector_type: remote`)
 
 Another unified-api instance is the source. This is how multi-datacenter
@@ -315,6 +334,8 @@ Centrals can themselves be federated by another instance — regions → global
 with no extra machinery. Combine with an output endpoint listing all the DC
 sources to serve one merged world view.
 
+---
+
 ## Enrichers
 
 An enricher post-processes a dataset already in the cache: resolve DNS, probe
@@ -349,6 +370,8 @@ script is running are not lost (the enricher only overwrites hosts it returns).
 > you can carry the rest through. (A *declarative* enricher — `source_id` +
 > `fields` — has no such constraint: it writes only the fields it owns.)
 
+---
+
 ## Output endpoints
 
 An output script transforms one or more cached datasets into whatever a consumer
@@ -372,6 +395,8 @@ The environment is scrubbed the same way as for connector scripts (see above).
 **Time limit:** the endpoint's `timeout_seconds` (default 300); exceeding it returns
 `504 Gateway Timeout` to the caller. Enrichers have the same knob and fail with a
 clear error when exceeded.
+
+---
 
 ## Testing your script
 

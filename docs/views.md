@@ -8,6 +8,15 @@ nothing itself.
 Consumers get one address for "the facts" and stop needing to know which
 datacenter — and therefore which source — a host lives in.
 
+- [The problem it solves](#the-problem-it-solves)
+- [Configuration — `views.yaml`](#configuration--viewsyaml)
+- [Where it answers](#where-it-answers)
+- [Ownership is declared, not inferred](#ownership-is-declared-not-inferred)
+- [TTL: the refresh gate, not a freshness label](#ttl-the-refresh-gate-not-a-freshness-label)
+- [Reading `/status`](#reading-status)
+- [What it does not do](#what-it-does-not-do)
+- [Caveats worth knowing](#caveats-worth-knowing)
+
 ---
 
 ## The problem it solves
@@ -55,6 +64,8 @@ Right shape, wrong mechanism. A view filters in Rust and keeps refresh.
 ---
 
 ## Configuration — `views.yaml`
+
+A view is declared like any other entity, naming the sources it merges.
 
 ```yaml
 vw-facts-all:
@@ -273,6 +284,8 @@ a view has none; validation refuses them with a message naming the members.
 ---
 
 ## Caveats worth knowing
+
+Ways a view behaves differently from the plain sources underneath it.
 
 - **The ETag is generation-based, not content-based.** A source's plain
   `/dataset` derives a strong ETag from bytes it has already serialized; a view

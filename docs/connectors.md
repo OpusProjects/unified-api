@@ -325,7 +325,11 @@ call to `/status` recovers the data's real age at the origin (dataset-level
 and per-host), and the local cache entry is built with those ages: freshness
 reporting stays truthful across hops instead of resetting to zero on every
 transfer. If the `/status` call fails, the data still lands (with a warning)
-and is treated as fresh — data beats metadata.
+and is treated as fresh — data beats metadata. Each sync also asks the remote
+for its advertised ownership scope (`GET /scope`, best effort — an older
+remote without the route just yields no claim), which is what lets a view
+route by the edge's own claim: see
+[federation → the scope contract](federation.md#the-scope-contract).
 
 Failure semantics follow the house rules: `401`/`403`/`404` produce errors
 that say what to check; a WAN cut fails the sync loudly while the central

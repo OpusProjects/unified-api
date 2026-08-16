@@ -245,7 +245,9 @@ before its first sync. `GET /status` reports each member's `ownership_mode`
 (`declared` / `advertised` / `fallback` / `unknown`), so a member quietly
 running on fallback is visible. During a mixed-version rollout, keep the
 declared fallback until every edge serves `/scope`; dropping it afterwards is
-the moment the duplication actually ends.
+the moment the duplication actually ends. The step-by-step rollout, and the
+edge side of the contract, live in
+[federation → the scope contract](federation.md#the-scope-contract).
 
 ---
 

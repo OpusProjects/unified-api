@@ -257,7 +257,9 @@ ep-ansible-full:
 
 ## projects.yaml
 
-Git repositories that hold connector/enricher/transformer scripts. At boot the
+Git repositories that hold connector/enricher/transformer scripts — the field
+reference; the full lifecycle (boot behavior, script resolution, virtualenvs,
+health) is [its own page](projects.md). At boot the
 app clones each project (shallow, one directory per project id under the
 `projects.dir` from `config.yaml`, default `./projects`) and re-pulls it every
 `sync_interval_seconds` (fetch + hard reset: local drift is discarded). The

@@ -62,15 +62,41 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - run: cargo fmt --check
 
       - run: cargo clippy --all-targets -- -D warnings
 
-      - run: cargo test
+      # One instrumented run does both jobs: cargo-llvm-cov executes the whole
+      # suite while measuring, so tests run ONCE per PR instead of once here
+      # and once in a separate coverage workflow — and the floor is enforced
+      # by this required check, not by an advisory badge.
+      #
+      # The floor is a ratchet against silent erosion, not a target: the suite
+      # measures ~94.5% lines at the time of writing, the gate fails under 92
+      # — a real regression trips it, normal variance does not. Raise it when
+      # the number durably rises; never lower it to make a PR pass.
+      #
+      # main.rs is excluded: it is the composition root — wiring plus boot
+      # orchestration — exercisable only by running the binary, and counting
+      # its lines as permanently red would make the honest number unreadable.
+      # Everything main wires IS covered, through AppBuilder.
+      - name: tests + coverage floor (fail under 92% lines)
+        run: |
+          cargo llvm-cov --ignore-filename-regex 'main\.rs$' --fail-under-lines 92 --summary-only | tee coverage.txt
+          {
+            echo '### Coverage'
+            echo '```'
+            tail -n 3 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   audit:
     runs-on: ubuntu-latest

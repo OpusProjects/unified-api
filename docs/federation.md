@@ -10,6 +10,7 @@ stops needing to know which instance a host sits behind.
 
 - [Edge configuration (each DC)](#edge-configuration-each-dc)
 - [Central configuration](#central-configuration)
+- [The scope contract](#the-scope-contract)
 - [Verifying a federation](#verifying-a-federation)
 - [Operational notes](#operational-notes)
 
@@ -135,6 +136,43 @@ ep-global:
 Secrets the central's deployment must inject: `EDGE_DC1_TOKEN` (the value of
 the edge's `UNIFIED_API_KEY_CENTRAL`) — one env var per DC — plus the
 central's own API keys for its consumers.
+
+---
+
+## The scope contract
+
+Beyond the dataset itself, an edge can tell the central **which hosts it owns** —
+so a central [view](views.md) routes per-host reads without duplicating the edge's config.
+
+Every source serves `GET /api/v1/sources/{id}/scope`: the ownership claim
+derived from **configuration, never cache contents** — an explicit
+`advertise_scope` block (`groups` + `hosts`), or the `hosts_from_source`
+pattern an SSH source already gathers by. On the edge that means the claim is
+maintained exactly once, where the gathering is configured:
+
+```yaml
+# edge: sources.yaml — the source states what it owns
+src-fleet:
+  # ... connector config ...
+  advertise_scope:
+    groups: ["dc1"]            # optional when hosts_from_source already says it
+```
+
+The central's remote syncs fetch the edge's `/scope` alongside the dataset,
+best effort, and remember the **last-known claim**: an unreachable edge keeps
+routing the way it last claimed (stale routing beats no routing). A view
+member opts into that claim with `owns.advertised: true` — the full resolution
+order (live claim → last-known → declared fallback → nothing, never
+everything) lives in [views → advertised ownership](views.md#advertised-ownership).
+
+**Mixed-version rollouts degrade cleanly.** An edge too old to serve `/scope`
+answers `404`; the central treats that as "no claim" and the member falls back
+to its declared `groups`/`hosts`, exactly as before the feature existed. So
+the safe order is: keep the declared fallback while edges upgrade, watch each
+member's `ownership_mode` in `GET /status` flip from `fallback` to
+`advertised`, and only then delete the fallback — from that point the edge's
+config is the single truth, and adding a datacenter's worth of hosts to an
+edge never needs a central change again.
 
 ---
 

@@ -123,6 +123,7 @@ fn script_source(script_path: &str) -> unified_api::domain::source::Source {
         timeout_seconds: 300,
         ttl_overrides: Default::default(),
         allow_on_demand_refresh: false,
+        advertise_scope: None,
         config: std::collections::HashMap::new(),
     }
 }
@@ -344,6 +345,7 @@ async fn readyz_returns_503_before_sync() {
             timeout_seconds: 300,
             ttl_overrides: Default::default(),
             allow_on_demand_refresh: false,
+            advertise_scope: None,
             config: std::collections::HashMap::new(),
         },
     );
@@ -380,6 +382,7 @@ async fn readyz_require_all_sources_waits_for_every_source() {
                 timeout_seconds: 300,
                 ttl_overrides: Default::default(),
                 allow_on_demand_refresh: false,
+                advertise_scope: None,
                 config: std::collections::HashMap::new(),
             },
         );
@@ -1830,4 +1833,74 @@ async fn a_syncs_trigger_reaches_the_script_inside_source_config() {
         "the trigger never reached SOURCE_CONFIG"
     );
     assert!(body.contains("trigger"));
+}
+
+// =========================================================================
+// Test: scope advertising
+// =========================================================================
+#[tokio::test]
+async fn scope_advertises_config_derived_ownership() {
+    let ssh_source: unified_api::domain::source::Source = serde_yaml_ng::from_str(concat!(
+        "name: Edge\n",
+        "project_id: p\n",
+        "script_path: gather_facts\n",
+        "connector_type: \"ssh\"\n",
+        "ttl_seconds: 60\n",
+        "hosts_from_source:\n",
+        "  source: \"src-inv\"\n",
+        "  match_pattern:\n",
+        "    groups: [\"datacenter_dc2\"]\n",
+        "    hosts: [\"appliance.dc2.example\"]\n",
+    ))
+    .unwrap();
+    let mut sources = std::collections::HashMap::new();
+    sources.insert("src-edge".to_string(), ssh_source);
+    sources.insert(
+        "src-plain".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    );
+
+    let view: unified_api::domain::view::View = serde_yaml_ng::from_str(concat!(
+        "name: All\nmembers:\n",
+        "  - source: src-edge\n    owns:\n      source: \"src-inv\"\n      groups: [\"datacenter_dc2\"]\n",
+        "  - source: src-plain\n    owns:\n      source: \"src-inv\"\n      groups: [\"datacenter_dc1\"]\n",
+    ))
+    .unwrap();
+    let mut views = std::collections::HashMap::new();
+    views.insert("vw-all".to_string(), view);
+
+    let app = unified_api::AppBuilder::new()
+        .sources(sources)
+        .views(views)
+        .build();
+
+    // An SSH source advertises the pattern it gathers by — config, not cache,
+    // so it answers before anything has synced
+    let (status, body) = get(app.clone(), "/api/v1/sources/src-edge/scope").await;
+    assert_eq!(status, StatusCode::OK);
+    let scope: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(scope["declared"], true);
+    assert_eq!(scope["groups"][0], "datacenter_dc2");
+    assert_eq!(scope["hosts"][0], "appliance.dc2.example");
+    assert_eq!(scope["catch_all"], false);
+
+    // An ordinary source makes no claim — and says so, rather than answering
+    // with empty lists that could mean anything
+    let (_, body) = get(app.clone(), "/api/v1/sources/src-plain/scope").await;
+    let scope: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(scope["declared"], false);
+
+    // A view advertises its members' ownership union
+    let (_, body) = get(app.clone(), "/api/v1/sources/vw-all/scope").await;
+    let scope: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(scope["kind"], "view");
+    assert_eq!(
+        scope["groups"],
+        serde_json::json!(["datacenter_dc2", "datacenter_dc1"])
+    );
+
+    // Unknown id: the not-configured 404, since scope is about config
+    let (status, body) = get(app, "/api/v1/sources/src-ghost/scope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("not configured"), "body was: {}", body);
 }

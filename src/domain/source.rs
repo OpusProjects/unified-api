@@ -106,9 +106,69 @@ pub struct Source {
     #[serde(default)]
     pub allow_on_demand_refresh: bool,
 
+    // What this source claims to own, stated explicitly for advertising over
+    // `GET /sources/{id}/scope`. Optional: an SSH source with
+    // hosts_from_source already advertises its match_pattern, and this block
+    // overrides that derivation for sources where the pattern does not tell
+    // the story (or does not exist). Must name at least one group or host —
+    // an empty explicit claim is refused at startup, because "explicitly
+    // nothing" and "explicitly everything" are one typo apart.
+    #[serde(default)]
+    pub advertise_scope: Option<AdvertisedScope>,
+
     // Free config for the connector (api_url, filters, etc.)
     #[serde(default)]
     pub config: HashMap<String, String>,
+}
+
+// An explicit ownership claim for scope advertising — the same group/host
+// vocabulary a view's Ownership uses, minus the resolving source (that is the
+// CONSUMER's business: the central decides which of its inventories the
+// groups resolve against).
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AdvertisedScope {
+    #[serde(default)]
+    pub groups: Vec<String>,
+
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+// What a source answers when asked "what do you own?" — derived from config,
+// never from cache contents (the same reasoning as view ownership being
+// DECLARED: a host absent from today's gather is still this source's
+// responsibility).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeClaim {
+    pub groups: Vec<String>,
+    pub hosts: Vec<String>,
+    // True when the claim is "everything my inventory dependency knows" — an
+    // SSH source whose hosts_from_source has an empty match_pattern. Stated
+    // as a flag rather than silently returning empty lists, because a
+    // consumer must be able to tell "claims everything" from "claims nothing".
+    pub catch_all: bool,
+}
+
+impl Source {
+    // The scope this source advertises, in precedence order: the explicit
+    // advertise_scope block, else the hosts_from_source match_pattern it
+    // already gathers by, else nothing (None — an ordinary script source
+    // makes no ownership claim unless its operator writes one).
+    pub fn advertised_scope(&self) -> Option<ScopeClaim> {
+        if let Some(explicit) = &self.advertise_scope {
+            return Some(ScopeClaim {
+                groups: explicit.groups.clone(),
+                hosts: explicit.hosts.clone(),
+                catch_all: false,
+            });
+        }
+        self.hosts_from_source.as_ref().map(|hfs| ScopeClaim {
+            groups: hfs.match_pattern.groups.clone(),
+            hosts: hfs.match_pattern.hosts.clone(),
+            catch_all: hfs.match_pattern.is_empty(),
+        })
+    }
 }
 
 // Dynamic host list: which source to read, which slice of it, and how to
@@ -420,5 +480,61 @@ mod tests {
         assert!(warnings.is_empty());
         assert_eq!(specs[0].name, "bare.example.com");
         assert_eq!(specs[0].addresses, vec!["bare.example.com".to_string()]);
+    }
+
+    #[test]
+    fn an_explicit_advertise_scope_beats_the_derived_pattern() {
+        let source: Source = serde_yaml_ng::from_str(concat!(
+            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
+            "connector_type: \"ssh\"\n",
+            "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n    groups: [\"derived\"]\n",
+            "advertise_scope:\n  groups: [\"explicit\"]\n",
+        ))
+        .expect("source fixture");
+
+        let claim = source.advertised_scope().expect("declared");
+        assert_eq!(claim.groups, vec!["explicit"]);
+        assert!(!claim.catch_all);
+    }
+
+    #[test]
+    fn a_hosts_from_source_pattern_is_the_advertised_scope() {
+        let source: Source = serde_yaml_ng::from_str(concat!(
+            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
+            "connector_type: \"ssh\"\n",
+            "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n",
+            "    groups: [\"datacenter_dc2\"]\n    hosts: [\"appliance.dc2.example\"]\n",
+        ))
+        .expect("source fixture");
+
+        let claim = source.advertised_scope().expect("declared");
+        assert_eq!(claim.groups, vec!["datacenter_dc2"]);
+        assert_eq!(claim.hosts, vec!["appliance.dc2.example"]);
+        assert!(!claim.catch_all);
+    }
+
+    #[test]
+    fn an_empty_pattern_advertises_a_spelled_out_catch_all() {
+        let source: Source = serde_yaml_ng::from_str(concat!(
+            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
+            "connector_type: \"ssh\"\n",
+            "hosts_from_source:\n  source: \"src-inv\"\n",
+        ))
+        .expect("source fixture");
+
+        let claim = source.advertised_scope().expect("declared");
+        assert!(claim.groups.is_empty() && claim.hosts.is_empty());
+        assert!(
+            claim.catch_all,
+            "claims-everything must be a flag, never bare empty lists"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_source_makes_no_claim() {
+        let source: Source =
+            serde_yaml_ng::from_str("name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n")
+                .expect("source fixture");
+        assert!(source.advertised_scope().is_none());
     }
 }

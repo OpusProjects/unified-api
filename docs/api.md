@@ -105,6 +105,7 @@ Reading cached inventory: what is configured, how fresh it is, and the datasets 
 | `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
 | `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=`. `total_hosts` counts the whole source, `returned` this response |
+| `GET /api/v1/sources/{id}/scope` | The ownership scope this source advertises — config-derived (an explicit `advertise_scope`, an SSH source's `hosts_from_source` pattern, or a view's member-ownership union), so it answers before anything has synced. `declared: false` = no claim |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` (comma-separated list) or `?group=y` scope the sync; `&refresh_origin=true` makes a federated source's origin re-gather first — see [on-demand refresh](on-demand-refresh.md) |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
 | `DELETE /api/v1/sources/{id}/hosts/{hostname}` | Remove a host from the cached dataset |

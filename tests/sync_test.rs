@@ -64,6 +64,7 @@ fn test_source(scenario: &str) -> Source {
         timeout_seconds: 300,
         ttl_overrides: TtlOverrides::default(),
         allow_on_demand_refresh: false,
+        advertise_scope: None,
         config,
     }
 }
@@ -703,6 +704,7 @@ async fn sync_infra_source() {
             timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
             allow_on_demand_refresh: false,
+            advertise_scope: None,
             config,
         },
     );
@@ -796,6 +798,7 @@ async fn endpoint_combines_sources() {
             timeout_seconds: 300,
             ttl_overrides: TtlOverrides::default(),
             allow_on_demand_refresh: false,
+            advertise_scope: None,
             config: infra_config,
         },
     );

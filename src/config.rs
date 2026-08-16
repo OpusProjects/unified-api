@@ -352,6 +352,21 @@ impl AppConfig {
             }
         }
 
+        // An explicit advertise_scope must claim SOMETHING: an empty block is
+        // one typo away from "claims everything", and the derivation already
+        // has a spelled-out catch-all (an empty hosts_from_source pattern).
+        for (id, source) in &self.sources {
+            if let Some(scope) = &source.advertise_scope
+                && scope.groups.is_empty()
+                && scope.hosts.is_empty()
+            {
+                errors.push(format!(
+                    "Source '{}' has an empty advertise_scope — name at least one                      group or host, or remove the block",
+                    id
+                ));
+            }
+        }
+
         // A cron schedule must parse, and a source cannot serve two masters:
         // schedule and sync_interval_seconds each define the cadence. The
         // field spent its first year as "reserved for future" and silently
@@ -1059,6 +1074,18 @@ mod tests {
             .expect("an unknown section must not load")
             .to_string();
         assert!(err.contains("caches"), "error was: {}", err);
+    }
+
+    #[test]
+    fn an_empty_advertise_scope_fails_validation() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-a:\n  name: \"A\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  advertise_scope: {}\n",
+        )
+        .unwrap();
+
+        assert!(load_err(&dir).contains("advertise_scope"));
     }
 
     // The schedule field spent its first year ignored; now that it works,

@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod openapi;
 pub mod projects;
 pub mod routes;
+pub mod scope;
 pub mod sources;
 pub mod sync;
 pub mod views;

@@ -103,6 +103,7 @@ fn member_source(counter_file: &str, ttl_seconds: u64, allow: bool) -> Source {
         timeout_seconds: 60,
         ttl_overrides: TtlOverrides::default(),
         allow_on_demand_refresh: allow,
+        advertise_scope: None,
         config,
     }
 }

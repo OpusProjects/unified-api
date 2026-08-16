@@ -118,6 +118,7 @@ src-section9:
 | `timeout_seconds` | Hard limit on connector execution; a timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
 | `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
+| `advertise_scope` | Explicit ownership claim served on `GET /sources/{id}/scope` (`groups` + `hosts`; must name at least one). Optional — an SSH source already advertises its `hosts_from_source` pattern; this overrides the derivation. The consumer side of federation reads it so view ownership stops being a duplicated truth |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path`, `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync) from here — see [connectors](connectors.md) |
 
 ---

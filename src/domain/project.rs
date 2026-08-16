@@ -24,6 +24,12 @@ pub struct GitProject {
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
 
+    // Cron cadence (UTC, 5-field + optional seconds) as the alternative to
+    // the interval — same semantics as a source's schedule. The boot clone
+    // still happens regardless: cron paces the RE-pulls.
+    #[serde(default)]
+    pub schedule: Option<String>,
+
     // Maximum seconds a clone/pull may take before it is aborted (default 300,
     // same convention as sources and enrichers). Bounds whatever awaits the
     // sync — an unreachable remote used to hang git (and its caller) forever.

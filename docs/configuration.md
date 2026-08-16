@@ -250,6 +250,7 @@ enrich-resolve-ssh:
   script_path: "enrichers/resolve.py"
   script_args: []                  # optional CLI args for the script
   sync_interval_seconds: 300       # scheduled run; 0/absent = manual only
+  # schedule: "45 2 * * *"         # OR a cron cadence (UTC) — pick one
   timeout_seconds: 300             # abort a run that takes longer (default 300)
   config: {}
 ```
@@ -306,6 +307,7 @@ prj-connectors-infra:
   branch: "main"                  # default "main"
   credential_id: "cred-github-token"  # optional, for private repos
   sync_interval_seconds: 1800     # 0/absent = no periodic re-pull
+  # schedule: "15 2 * * *"        # OR a cron cadence (UTC) — pick one
   timeout_seconds: 300            # abort a clone/pull that runs longer (default 300)
   python_venv: false              # build a venv from requirements.txt; see below
   sync_on_boot: true              # default true; see below
@@ -315,7 +317,7 @@ Three sync styles compose from those two knobs:
 
 | Style | Config | Behavior |
 |---|---|---|
-| Automatic | `sync_interval_seconds: N` | update at boot + every N seconds |
+| Automatic | `sync_interval_seconds: N` or a cron `schedule` | update at boot + every N seconds / at the cron's UTC times |
 | Boot only | interval 0/absent | clone/update at boot, then frozen |
 | Manual / pipeline-driven | `sync_on_boot: false`, interval 0/absent | an existing checkout is used **as-is** (no network at startup); updates only via `POST /api/v1/projects/{id}/sync` |
 

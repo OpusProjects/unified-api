@@ -397,21 +397,41 @@ impl AppConfig {
         // field spent its first year as "reserved for future" and silently
         // ignored — precisely the config-that-does-nothing trap the strict
         // parsing exists to kill, so now that it works, junk in it fails loud.
+        let mut check_cadence =
+            |kind: &str, id: &str, schedule: &Option<String>, interval: Option<u64>| {
+                if let Some(expression) = schedule {
+                    if let Err(e) = crate::adapters::r#in::scheduler::parse_cron(expression) {
+                        errors.push(format!(
+                            "{} '{}' has an invalid cron schedule '{}': {}",
+                            kind, id, expression, e
+                        ));
+                    }
+                    if interval.is_some_and(|secs| secs > 0) {
+                        errors.push(format!(
+                            "{} '{}' sets both schedule and sync_interval_seconds — pick one",
+                            kind, id
+                        ));
+                    }
+                }
+            };
         for (id, source) in &self.sources {
-            if let Some(expression) = &source.schedule {
-                if let Err(e) = crate::adapters::r#in::scheduler::parse_cron(expression) {
-                    errors.push(format!(
-                        "Source '{}' has an invalid cron schedule '{}': {}",
-                        id, expression, e
-                    ));
-                }
-                if source.sync_interval_seconds.is_some_and(|secs| secs > 0) {
-                    errors.push(format!(
-                        "Source '{}' sets both schedule and sync_interval_seconds — pick one",
-                        id
-                    ));
-                }
-            }
+            check_cadence("Source", id, &source.schedule, source.sync_interval_seconds);
+        }
+        for (id, enricher) in &self.enrichers {
+            check_cadence(
+                "Enricher",
+                id,
+                &enricher.schedule,
+                enricher.sync_interval_seconds,
+            );
+        }
+        for (id, project) in &self.projects {
+            check_cadence(
+                "Project",
+                id,
+                &project.schedule,
+                project.sync_interval_seconds,
+            );
         }
 
         // ssh_known_hosts must name an existing file, checked at startup —
@@ -1162,6 +1182,23 @@ mod tests {
         )
         .unwrap();
 
+        // The same two rules bind enrichers and projects — the cadence is one
+        // concept, whatever kind of periodic work it paces
+        fs::write(
+            dir.path().join("enrichers.yaml"),
+            "en-bad:\n  name: \"E\"\n  target_id: \"src-both\"\n  script_path: \"e.py\"\n  schedule: \"nope\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            concat!(
+                "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+                "prj-both:\n  name: \"P\"\n  git_url: \"https://example.com/p.git\"\n",
+                "  schedule: \"0 2 * * *\"\n  sync_interval_seconds: 60\n",
+            ),
+        )
+        .unwrap();
+
         let err = load_config(dir.path().to_str().unwrap())
             .err()
             .expect("expected validation errors")
@@ -1169,11 +1206,23 @@ mod tests {
         assert!(err.contains("src-bad"), "missing rule: {}", err);
         assert!(err.contains("invalid cron"), "missing rule: {}", err);
         assert!(err.contains("pick one"), "missing rule: {}", err);
+        assert!(err.contains("Enricher 'en-bad'"), "missing rule: {}", err);
+        assert!(err.contains("Project 'prj-both'"), "missing rule: {}", err);
 
-        // A well-formed cron-only source loads
+        // Well-formed cron-only definitions of every kind load
         fs::write(
             dir.path().join("sources.yaml"),
             "src-cron:\n  name: \"OK\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  schedule: \"30 2 * * *\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("enrichers.yaml"),
+            "en-cron:\n  name: \"E\"\n  target_id: \"src-cron\"\n  script_path: \"e.py\"\n  schedule: \"45 2 * * *\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n  schedule: \"15 2 * * *\"\n",
         )
         .unwrap();
         load_config(dir.path().to_str().unwrap()).expect("a valid cron schedule loads");

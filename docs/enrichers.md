@@ -90,11 +90,11 @@ its `bin/` leads the script's PATH — pip-installed imports work.
 Three triggers, all funneling through the same use case so behavior cannot
 diverge between them.
 
-1. **On an interval** — `sync_interval_seconds` schedules a background task
-   with the scheduler's full failure machinery: startup jitter, exponential
-   backoff on failure (occurrences pass 1, 2, 4, up to 8 apart), panic
-   supervision, and shutdown draining. Enrichers are interval-only today;
-   cron cadence covers sources.
+1. **On a schedule** — `sync_interval_seconds`, or a cron `schedule` (UTC,
+   exact times, no jitter), runs a background task with the scheduler's full
+   failure machinery: startup jitter for intervals, exponential backoff on
+   failure (occurrences pass 1, 2, 4, up to 8 apart), panic supervision, and
+   shutdown draining. The two cadences are mutually exclusive per enricher.
 2. **On demand** — `POST /api/v1/enrichers/{id}/run` answers with the outcome
    (hosts updated/removed, duration, error).
 3. **After every sync of the target** — a `replace`-mode sync overwrites what

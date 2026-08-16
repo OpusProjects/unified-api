@@ -44,6 +44,7 @@ and every one of them sees the same inventory.
 | [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
 | [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |
 | [Projects](docs/projects.md) | Git checkouts: sync styles, script resolution, virtualenvs, health |
+| [Output endpoints](docs/endpoints.md) | Consumer-facing transformers: contract, GET vs POST, permissions |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
 | [Federation](docs/federation.md) | One instance per datacenter, one central federating them, no WAN SSH |
 | [Observability](docs/observability.md) | Scheduling, structured logs and the metrics worth alerting on |

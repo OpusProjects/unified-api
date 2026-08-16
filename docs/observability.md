@@ -26,12 +26,12 @@ cannot wedge its scheduler task. Exceeding it **kills** the process rather than
 abandoning it, so a wedged script does not leave a live copy behind on every
 tick; the SSH connector likewise aborts the per-host gathers still in flight.
 
-Sources may pace themselves by **cron schedule** instead of an interval
-(`schedule`, standard 5-field cron evaluated in UTC). A cron source fires at
-its exact times — no jitter, since "02:30" was chosen by a person — and a
-failing one backs off by letting occurrences pass, exactly like the interval
-backoff below. Two sources sharing an expression will fire together; that is
-the operator's explicit choice.
+Sources, enrichers and project pulls may pace themselves by **cron schedule**
+instead of an interval (`schedule`, standard 5-field cron evaluated in UTC). A
+cron task fires at its exact times — no jitter, since "02:30" was chosen by a
+person — and a failing one backs off by letting occurrences pass, exactly like
+the interval backoff below. Two tasks sharing an expression will fire
+together; that is the operator's explicit choice.
 
 Each interval task's schedule is shifted by a small **deterministic jitter** (a hash of
 its id, capped at 30 seconds and at the interval itself), so every source does

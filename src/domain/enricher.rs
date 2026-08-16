@@ -43,6 +43,13 @@ pub struct Enricher {
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,
 
+    // Cron cadence (UTC, 5-field + optional seconds) as the alternative to
+    // the interval — same semantics as a source's schedule: validated at
+    // startup, exclusive with a non-zero interval, no jitter, backoff by
+    // letting occurrences pass.
+    #[serde(default)]
+    pub schedule: Option<String>,
+
     // Free config for the script
     #[serde(default)]
     pub config: HashMap<String, String>,

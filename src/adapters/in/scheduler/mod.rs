@@ -234,6 +234,105 @@ async fn scheduled_sync(
     }
 }
 
+// One scheduled enricher run with the backoff bookkeeping, shared by the
+// interval and cron loops so the two cannot drift.
+async fn scheduled_enrichment(
+    state: &AppState,
+    enricher_id: &str,
+    enricher: &crate::domain::enricher::Enricher,
+    consecutive_failures: &mut u32,
+    skip: &mut u32,
+) {
+    info!(enricher = %enricher_id, "Running");
+
+    // A missing target counts as a failure for backoff too: it is recorded as
+    // one in the health registry, and retrying a target nobody synced every
+    // interval is the same hammering as retrying a broken script.
+    let error = match run_enricher(
+        &*state.cache,
+        &*state.enricher,
+        &state.enrich_health,
+        &state.projects_dir,
+        enricher_id,
+        enricher,
+    )
+    .await
+    {
+        None => {
+            warn!(
+                enricher = %enricher_id,
+                target = %enricher.target_id,
+                "Target not in cache, skipping"
+            );
+            true
+        }
+        Some(outcome) => match outcome.error {
+            None => {
+                info!(
+                    enricher = %enricher_id,
+                    hosts_updated = outcome.hosts_updated,
+                    hosts_removed = outcome.hosts_removed,
+                    "Enriched"
+                );
+                false
+            }
+            Some(e) => {
+                error!(enricher = %enricher_id, error = %e, "Enrichment failed");
+                true
+            }
+        },
+    };
+
+    if error {
+        *consecutive_failures = consecutive_failures.saturating_add(1);
+        *skip = ticks_to_skip(*consecutive_failures);
+    } else {
+        *consecutive_failures = 0;
+    }
+}
+
+// One scheduled project pull with the backoff bookkeeping, shared by the
+// interval and cron loops so the two cannot drift.
+#[allow(clippy::too_many_arguments)]
+async fn scheduled_project_pull(
+    git: &dyn GitPort,
+    secrets: &dyn SecretsPort,
+    venv: &dyn crate::ports::venv::VenvPort,
+    health: &SyncHealthRegistry,
+    project_id: &str,
+    project: &GitProject,
+    projects_dir: &std::path::Path,
+    consecutive_failures: &mut u32,
+    skip: &mut u32,
+) {
+    match sync_project(
+        git,
+        secrets,
+        venv,
+        health,
+        project_id,
+        project,
+        projects_dir,
+    )
+    .await
+    {
+        Ok(()) => {
+            *consecutive_failures = 0;
+            info!(project = %project_id, "Project updated");
+        }
+        Err(e) => {
+            *consecutive_failures = consecutive_failures.saturating_add(1);
+            *skip = ticks_to_skip(*consecutive_failures);
+            error!(
+                project = %project_id,
+                error = %e,
+                next_attempt_in_occurrences = *skip + 1,
+                "Project update failed"
+            );
+        }
+    }
+}
+
 // Every start_* function takes the shutdown receiver and returns the spawned
 // handles: on SIGTERM main flips the watch, each body returns at its next
 // wait point (a running sync is finished, never cut mid-write), and main joins
@@ -415,23 +514,39 @@ pub fn start_project_sync_tasks(
     let mut handles = Vec::new();
 
     for (project_id, project) in projects {
-        let interval_secs = match project.sync_interval_seconds {
-            Some(secs) if secs > 0 => secs,
+        let cadence = match (project.schedule.as_deref(), project.sync_interval_seconds) {
+            (Some(expression), _) => match parse_cron(expression) {
+                Ok(cron) => {
+                    info!(project = %project_id, schedule = %expression, "Project scheduled (cron, UTC)");
+                    Cadence::Cron(Box::new(cron))
+                }
+                Err(e) => {
+                    error!(project = %project_id, error = %e, "Invalid cron schedule — project will NOT re-pull");
+                    continue;
+                }
+            },
+            (None, Some(secs)) if secs > 0 => {
+                info!(project = %project_id, interval_secs = secs, "Project scheduled");
+                Cadence::Interval(secs)
+            }
             _ => continue,
         };
-
-        info!(project = %project_id, interval_secs, "Project scheduled");
+        let restart_delay = match &cadence {
+            Cadence::Interval(secs) => Duration::from_secs(*secs),
+            Cadence::Cron(_) => Duration::from_secs(60),
+        };
 
         let task_git = Arc::clone(&git);
         let task_secrets = Arc::clone(&secrets);
         let task_venv = Arc::clone(&venv);
         let task_health = Arc::clone(&health);
         let task_projects_dir = projects_dir.clone();
+        let task_cadence = cadence;
         let task_shutdown = shutdown.clone();
 
         handles.push(spawn_supervised(
             format!("project:{}", project_id),
-            Duration::from_secs(interval_secs),
+            restart_delay,
             move || {
                 let git = Arc::clone(&task_git);
                 let secrets = Arc::clone(&task_secrets);
@@ -440,60 +555,80 @@ pub fn start_project_sync_tasks(
                 let projects_dir = task_projects_dir.clone();
                 let project_id = project_id.clone();
                 let project = project.clone();
+                let cadence = task_cadence.clone();
                 let mut shutdown = task_shutdown.clone();
 
                 async move {
                     if *shutdown.borrow() {
                         return;
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep(startup_jitter(&project_id, interval_secs)) => {}
-                        _ = shutdown.changed() => return,
-                    }
-
-                    let mut ticker = ticker(interval_secs);
-                    // The boot sequence already cloned; skip the immediate first tick
-                    ticker.tick().await;
-
                     let mut consecutive_failures: u32 = 0;
                     let mut skip: u32 = 0;
 
-                    loop {
-                        tokio::select! {
-                            _ = ticker.tick() => {}
-                            _ = shutdown.changed() => return,
-                        }
-                        if skip > 0 {
-                            skip -= 1;
-                            debug!(project = %project_id, ticks_left = skip, "Backing off, tick skipped");
-                            continue;
-                        }
-                        match sync_project(
-                            &*git,
-                            &*secrets,
-                            &*venv,
-                            &health,
-                            &project_id,
-                            &project,
-                            &projects_dir,
-                        )
-                        .await
-                        {
-                            Ok(()) => {
-                                consecutive_failures = 0;
-                                info!(project = %project_id, "Project updated");
+                    match cadence {
+                        Cadence::Interval(interval_secs) => {
+                            tokio::select! {
+                                _ = tokio::time::sleep(startup_jitter(&project_id, interval_secs)) => {}
+                                _ = shutdown.changed() => return,
                             }
-                            Err(e) => {
-                                consecutive_failures = consecutive_failures.saturating_add(1);
-                                skip = ticks_to_skip(consecutive_failures);
-                                error!(
-                                    project = %project_id,
-                                    error = %e,
-                                    next_attempt_in_intervals = skip + 1,
-                                    "Project update failed"
-                                );
+                            let mut ticker = ticker(interval_secs);
+                            // The boot sequence already cloned; skip the immediate first tick
+                            ticker.tick().await;
+
+                            loop {
+                                tokio::select! {
+                                    _ = ticker.tick() => {}
+                                    _ = shutdown.changed() => return,
+                                }
+                                if skip > 0 {
+                                    skip -= 1;
+                                    debug!(project = %project_id, ticks_left = skip, "Backing off, tick skipped");
+                                    continue;
+                                }
+                                scheduled_project_pull(
+                                    &*git,
+                                    &*secrets,
+                                    &*venv,
+                                    &health,
+                                    &project_id,
+                                    &project,
+                                    &projects_dir,
+                                    &mut consecutive_failures,
+                                    &mut skip,
+                                )
+                                .await;
                             }
                         }
+                        // No jitter and no first-tick handling for cron: the
+                        // first occurrence is in the future by construction,
+                        // so the boot clone is never immediately repeated
+                        Cadence::Cron(cron) => loop {
+                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
+                                error!(project = %project_id, "Cron schedule has no future occurrence — project will NOT re-pull");
+                                return;
+                            };
+                            tokio::select! {
+                                _ = tokio::time::sleep(delay) => {}
+                                _ = shutdown.changed() => return,
+                            }
+                            if skip > 0 {
+                                skip -= 1;
+                                debug!(project = %project_id, occurrences_left = skip, "Backing off, occurrence skipped");
+                                continue;
+                            }
+                            scheduled_project_pull(
+                                &*git,
+                                &*secrets,
+                                &*venv,
+                                &health,
+                                &project_id,
+                                &project,
+                                &projects_dir,
+                                &mut consecutive_failures,
+                                &mut skip,
+                            )
+                            .await;
+                        },
                     }
                 }
             },
@@ -510,102 +645,112 @@ fn start_enricher_tasks(
     let mut handles = Vec::new();
 
     for (enricher_id, enricher) in &state.enrichers {
-        let interval_secs = match enricher.sync_interval_seconds {
-            Some(secs) if secs > 0 => secs,
+        let cadence = match (enricher.schedule.as_deref(), enricher.sync_interval_seconds) {
+            (Some(expression), _) => match parse_cron(expression) {
+                Ok(cron) => {
+                    info!(
+                        enricher = %enricher_id,
+                        target = %enricher.target_id,
+                        schedule = %expression,
+                        "Enricher scheduled (cron, UTC)"
+                    );
+                    Cadence::Cron(Box::new(cron))
+                }
+                Err(e) => {
+                    error!(enricher = %enricher_id, error = %e, "Invalid cron schedule — enricher will NOT run");
+                    continue;
+                }
+            },
+            (None, Some(secs)) if secs > 0 => {
+                info!(
+                    enricher = %enricher_id,
+                    target = %enricher.target_id,
+                    interval_secs = secs,
+                    "Enricher scheduled"
+                );
+                Cadence::Interval(secs)
+            }
             _ => continue,
         };
-
-        info!(
-            enricher = %enricher_id,
-            target = %enricher.target_id,
-            interval_secs,
-            "Enricher scheduled"
-        );
+        let restart_delay = match &cadence {
+            Cadence::Interval(secs) => Duration::from_secs(*secs),
+            Cadence::Cron(_) => Duration::from_secs(60),
+        };
 
         let task_state = Arc::clone(&state);
         let task_enricher_id = enricher_id.clone();
         let task_enricher = enricher.clone();
+        let task_cadence = cadence;
         let task_shutdown = shutdown.clone();
 
         handles.push(spawn_supervised(
             format!("enrich:{}", enricher_id),
-            Duration::from_secs(interval_secs),
+            restart_delay,
             move || {
                 let state = Arc::clone(&task_state);
                 let enricher_id = task_enricher_id.clone();
                 let enricher = task_enricher.clone();
+                let cadence = task_cadence.clone();
                 let mut shutdown = task_shutdown.clone();
 
                 async move {
                     if *shutdown.borrow() {
                         return;
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep(startup_jitter(&enricher_id, interval_secs)) => {}
-                        _ = shutdown.changed() => return,
-                    }
-
-                    let mut ticker = ticker(interval_secs);
                     let mut consecutive_failures: u32 = 0;
                     let mut skip: u32 = 0;
 
-                    loop {
-                        tokio::select! {
-                            _ = ticker.tick() => {}
-                            _ = shutdown.changed() => return,
-                        }
-                        if skip > 0 {
-                            skip -= 1;
-                            debug!(enricher = %enricher_id, ticks_left = skip, "Backing off, tick skipped");
-                            continue;
-                        }
-                        info!(enricher = %enricher_id, "Running");
-
-                        // A missing target counts as a failure for backoff too:
-                        // it is recorded as one in the health registry, and
-                        // retrying a target nobody synced every interval is the
-                        // same hammering as retrying a broken script.
-                        let error = match run_enricher(
-                            &*state.cache,
-                            &*state.enricher,
-                            &state.enrich_health,
-                            &state.projects_dir,
-                            &enricher_id,
-                            &enricher,
-                        )
-                        .await
-                        {
-                            None => {
-                                warn!(
-                                    enricher = %enricher_id,
-                                    target = %enricher.target_id,
-                                    "Target not in cache, skipping"
-                                );
-                                true
+                    match cadence {
+                        Cadence::Interval(interval_secs) => {
+                            tokio::select! {
+                                _ = tokio::time::sleep(startup_jitter(&enricher_id, interval_secs)) => {}
+                                _ = shutdown.changed() => return,
                             }
-                            Some(outcome) => match outcome.error {
-                                None => {
-                                    info!(
-                                        enricher = %enricher_id,
-                                        hosts_updated = outcome.hosts_updated,
-                                        hosts_removed = outcome.hosts_removed,
-                                        "Enriched"
-                                    );
-                                    false
-                                }
-                                Some(e) => {
-                                    error!(enricher = %enricher_id, error = %e, "Enrichment failed");
-                                    true
-                                }
-                            },
-                        };
+                            let mut ticker = ticker(interval_secs);
 
-                        if error {
-                            consecutive_failures = consecutive_failures.saturating_add(1);
-                            skip = ticks_to_skip(consecutive_failures);
-                        } else {
-                            consecutive_failures = 0;
+                            loop {
+                                tokio::select! {
+                                    _ = ticker.tick() => {}
+                                    _ = shutdown.changed() => return,
+                                }
+                                if skip > 0 {
+                                    skip -= 1;
+                                    debug!(enricher = %enricher_id, ticks_left = skip, "Backing off, tick skipped");
+                                    continue;
+                                }
+                                scheduled_enrichment(
+                                    &state,
+                                    &enricher_id,
+                                    &enricher,
+                                    &mut consecutive_failures,
+                                    &mut skip,
+                                )
+                                .await;
+                            }
                         }
+                        Cadence::Cron(cron) => loop {
+                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
+                                error!(enricher = %enricher_id, "Cron schedule has no future occurrence — enricher will NOT run again");
+                                return;
+                            };
+                            tokio::select! {
+                                _ = tokio::time::sleep(delay) => {}
+                                _ = shutdown.changed() => return,
+                            }
+                            if skip > 0 {
+                                skip -= 1;
+                                debug!(enricher = %enricher_id, occurrences_left = skip, "Backing off, occurrence skipped");
+                                continue;
+                            }
+                            scheduled_enrichment(
+                                &state,
+                                &enricher_id,
+                                &enricher,
+                                &mut consecutive_failures,
+                                &mut skip,
+                            )
+                            .await;
+                        },
                     }
                 }
             },
@@ -779,6 +924,80 @@ mod tests {
         }
     }
 
+    // The same machinery for an enricher: the cron occurrence runs it and the
+    // health registry records the success. Declarative merge, so no script
+    // process is involved — the test exercises the cadence, not the enricher.
+    #[tokio::test]
+    async fn a_cron_scheduled_enricher_runs_and_records_health() {
+        let enricher: crate::domain::enricher::Enricher = serde_yaml_ng::from_str(concat!(
+            "name: cron-merge\n",
+            "target_id: src-target\n",
+            "source_id: src-extra\n",
+            "fields: [\"role\"]\n",
+            "schedule: \"* * * * * *\"\n",
+        ))
+        .expect("enricher fixture");
+        let mut enrichers = HashMap::new();
+        enrichers.insert("en-cron".to_string(), enricher);
+        let (_, state) = crate::AppBuilder::new()
+            .enrichers(enrichers)
+            .build_with_state();
+
+        // A declarative merge needs both the target and the source cached
+        let dataset = || Dataset {
+            hostvars: [(
+                "motoko.section9.net".to_string(),
+                [("role".to_string(), serde_json::json!("commander"))]
+                    .into_iter()
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
+            groups: HashMap::new(),
+            remove_hosts: Vec::new(),
+        };
+        state
+            .cache
+            .set("src-target", CacheEntry::new(dataset(), 3600));
+        state
+            .cache
+            .set("src-extra", CacheEntry::new(dataset(), 3600));
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_sync_tasks(Arc::clone(&state), shutdown_rx);
+        assert_eq!(
+            handles.len(),
+            1,
+            "a schedule alone must schedule the enricher"
+        );
+
+        let mut ran = false;
+        for _ in 0..150 {
+            if state.enrich_health.get("en-cron").is_some() {
+                ran = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(ran, "the cron occurrence never ran the enricher");
+        assert_eq!(
+            state
+                .enrich_health
+                .get("en-cron")
+                .unwrap()
+                .consecutive_failures,
+            0
+        );
+
+        shutdown_tx.send(true).expect("receiver alive");
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(10), handle)
+                .await
+                .expect("drains")
+                .expect("no panic");
+        }
+    }
+
     #[test]
     fn backoff_doubles_and_caps() {
         // Attempts land 1, 2, 4, 8 intervals apart, then stay at 8: the first
@@ -891,39 +1110,41 @@ mod tests {
         }
     }
 
+    // Always-succeeding stand-ins for the project tests below: the scheduler
+    // under test only cares WHEN the pull runs, not what git does.
+    struct StubGit;
+    impl crate::ports::git::GitPort for StubGit {
+        fn ensure(
+            &self,
+            _dir: &std::path::Path,
+            _project: &GitProject,
+            _credentials: &HashMap<String, String>,
+        ) -> crate::ports::git::GitFuture<'_> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct StubVenv;
+    impl crate::ports::venv::VenvPort for StubVenv {
+        fn ensure(
+            &self,
+            _projects_dir: &std::path::Path,
+            _project_id: &str,
+        ) -> crate::ports::venv::VenvFuture<'_> {
+            Box::pin(async { Ok(crate::ports::venv::VenvOutcome::NoRequirements) })
+        }
+    }
+
     // The project task end to end with a stub git: the boot tick is skipped,
     // the first pull lands at the interval, health is recorded, drain works.
     #[tokio::test]
     async fn a_scheduled_project_pull_runs_and_records_health() {
-        struct StubGit;
-        impl crate::ports::git::GitPort for StubGit {
-            fn ensure(
-                &self,
-                _dir: &std::path::Path,
-                _project: &GitProject,
-                _credentials: &HashMap<String, String>,
-            ) -> crate::ports::git::GitFuture<'_> {
-                Box::pin(async { Ok(()) })
-            }
-        }
-
         let project: GitProject = serde_yaml_ng::from_str(
             "name: p\ngit_url: \"https://example.com/r.git\"\nsync_interval_seconds: 1\n",
         )
         .expect("project fixture");
         let mut projects = HashMap::new();
         projects.insert("prj-a".to_string(), project);
-
-        struct StubVenv;
-        impl crate::ports::venv::VenvPort for StubVenv {
-            fn ensure(
-                &self,
-                _projects_dir: &std::path::Path,
-                _project_id: &str,
-            ) -> crate::ports::venv::VenvFuture<'_> {
-                Box::pin(async { Ok(crate::ports::venv::VenvOutcome::NoRequirements) })
-            }
-        }
 
         let health = Arc::new(SyncHealthRegistry::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -948,6 +1169,53 @@ mod tests {
         }
         assert!(recorded, "the scheduled pull never recorded health");
         assert_eq!(health.get("prj-a").unwrap().consecutive_failures, 0);
+
+        shutdown_tx.send(true).expect("receiver alive");
+        for handle in handles {
+            tokio::time::timeout(Duration::from_secs(10), handle)
+                .await
+                .expect("drains")
+                .expect("no panic");
+        }
+    }
+
+    // The same task on a cron cadence: no boot-tick handling is needed because
+    // the first occurrence is in the future by construction, and the pull
+    // still lands and records health.
+    #[tokio::test]
+    async fn a_cron_scheduled_project_pull_runs_and_records_health() {
+        let project: GitProject = serde_yaml_ng::from_str(concat!(
+            "name: p\n",
+            "git_url: \"https://example.com/r.git\"\n",
+            "schedule: \"* * * * * *\"\n",
+        ))
+        .expect("project fixture");
+        let mut projects = HashMap::new();
+        projects.insert("prj-cron".to_string(), project);
+
+        let health = Arc::new(SyncHealthRegistry::new());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handles = start_project_sync_tasks(
+            Arc::new(StubGit),
+            Arc::new(crate::adapters::out::secrets::mock::MockSecrets::new()),
+            Arc::new(StubVenv),
+            Arc::clone(&health),
+            projects,
+            PathBuf::from("unused"),
+            shutdown_rx,
+        );
+        assert_eq!(handles.len(), 1, "a schedule alone must schedule the pull");
+
+        let mut recorded = false;
+        for _ in 0..150 {
+            if health.get("prj-cron").is_some() {
+                recorded = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(recorded, "the cron occurrence never ran the pull");
+        assert_eq!(health.get("prj-cron").unwrap().consecutive_failures, 0);
 
         shutdown_tx.send(true).expect("receiver alive");
         for handle in handles {

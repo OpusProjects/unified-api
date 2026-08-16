@@ -96,9 +96,11 @@ Scripts are read from disk on every execution and paths resolve per run, so
 an updated checkout takes effect on the next sync/enrich/endpoint run — no
 restart, ever.
 
-The periodic pull (`sync_interval_seconds`) runs with the scheduler's full
-failure machinery: startup jitter, exponential backoff on failure, panic
-supervision, shutdown draining. The on-demand route is how a pipeline in the
+The periodic pull (`sync_interval_seconds`, or a cron `schedule` in UTC —
+mutually exclusive; the boot clone happens either way, cron only paces the
+re-pulls) runs with the scheduler's full failure machinery: startup jitter
+for intervals, exponential backoff on failure, panic supervision, shutdown
+draining. The on-demand route is how a pipeline in the
 scripts repository rolls a new version deliberately:
 
 ```bash

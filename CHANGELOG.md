@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Cron schedules for enrichers and project pulls.** The `schedule` field
+  sources gained in 0.17 now works on enrichers and git projects with
+  identical semantics: standard 5-field cron (optional leading seconds)
+  evaluated in UTC, validated at startup, mutually exclusive with a non-zero
+  `sync_interval_seconds`, exact times with no startup jitter, and failure
+  backoff by letting occurrences pass. A project's boot clone is unchanged —
+  cron only paces the re-pulls.
+
 - **View ownership can resolve from what a member advertises** — the second
   half, ending federation's duplicated truth. `advertised: true` on a view
   member routes by the member source's own claim: read from local config for

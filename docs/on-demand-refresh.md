@@ -16,6 +16,15 @@ all, coalesces concurrent callers, bounds the wait, and answers from cache if
 the refresh does not work out. The `POST` form is the explicit one: it always
 refreshes and it tells you if it could not.
 
+- [Who decides what](#who-decides-what)
+- [What actually happens on the wire](#what-actually-happens-on-the-wire)
+- [Configuration](#configuration)
+- [Verification](#verification)
+- [Failure modes](#failure-modes)
+- [Operational notes](#operational-notes)
+- [Consumer recipes](#consumer-recipes)
+- [Not covered](#not-covered)
+
 ---
 
 ## Who decides what
@@ -77,6 +86,8 @@ Two limits sit under that one, covering what the TTL window does not:
 ---
 
 ## What actually happens on the wire
+
+One request, followed from the consumer through the central to the origin and back.
 
 ```
      AnsibleForms / a browser / anything that fetches a URL
@@ -451,6 +462,8 @@ Unlike the read, this one ignores the TTL (it always refreshes) and reports
 
 ## Failure modes
 
+Every way a refresh can fall short, and what the caller is told in each case.
+
 | What happens | What the caller sees | Why |
 |---|---|---|
 | Host inside its TTL | `200`, `refreshed: true`, no hosts header | Nothing needed. The ceiling. |
@@ -469,6 +482,8 @@ Unlike the read, this one ignores the TTL (it always refreshes) and reports
 ---
 
 ## Operational notes
+
+What running this in earnest asks of the configuration around it.
 
 ### Choosing the TTL — this is now load bearing
 
@@ -537,6 +552,8 @@ served stale data and told so, which nothing else in the stack will report.
 ---
 
 ## Consumer recipes
+
+How the common consumers are wired up to use it.
 
 ### AnsibleForms
 

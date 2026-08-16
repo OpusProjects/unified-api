@@ -5,6 +5,15 @@ write to it. It is in-memory (a concurrent DashMap keyed by source id) — by de
 a restart starts empty, repopulated by scheduled syncs. Optional disk persistence
 (below) changes that to "starts from the last snapshot".
 
+- [The three-level freshness model](#the-three-level-freshness-model)
+- [How writes land](#how-writes-land)
+- [The read path: shared data, serialize-once JSON](#the-read-path-shared-data-serialize-once-json)
+- [Atomicity guarantees](#atomicity-guarantees)
+- [Disk persistence (optional)](#disk-persistence-optional)
+- [Memory notes](#memory-notes)
+
+---
+
 ## The three-level freshness model
 
 Each cached source is a `CacheEntry`: the Dataset plus timestamps.
@@ -37,6 +46,8 @@ Staleness is *reported*, not enforced: `GET /sources` and `/status` expose
 `is_fresh`/`age_seconds`, but stale data keeps being served — by design, a slow
 backend should degrade to "older data", not "no data". Consumers that care check
 the status endpoint or trigger a scoped sync.
+
+---
 
 ## How writes land
 
@@ -73,6 +84,8 @@ suppress a refresh a consumer asked for. Hosts the enricher introduces are stamp
 Their `remove_hosts` deletes hosts from `hostvars`, the per-host timestamps, and
 every group's member list.
 
+---
+
 ## The read path: shared data, serialize-once JSON
 
 Serving a dataset used to mean copying it — once out of the cache, once into
@@ -98,6 +111,8 @@ The practical consequence: worst-case memory for a source is roughly *two*
 copies of its dataset (a sync landing while old readers still hold the previous
 version), no longer `1 + number of concurrent readers`.
 
+---
+
 ## Atomicity guarantees
 
 `CachePort::get` returns a **clone** — a read snapshot (cheap, per the section
@@ -119,6 +134,8 @@ other's writes. Two rules follow:
 2. Closures passed to the atomic operations must be quick and must never call back
    into the cache — script execution happens *outside* the lock, on a snapshot,
    and only the final merge is atomic
+
+---
 
 ## Disk persistence (optional)
 
@@ -158,6 +175,8 @@ This is a durability optimization for restarts, not shared storage: with
 multiple replicas each pod snapshots its own cache, so give each its own path
 (or its own volume). The DashMap remains the source of truth — reads and
 writes never wait on disk.
+
+---
 
 ## Memory notes
 

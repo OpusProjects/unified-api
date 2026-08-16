@@ -7,6 +7,11 @@ For what the *data* looks like rather than the process, see
 [caching & TTLs](caching.md); for the health probes as Kubernetes consumes them,
 see [deployment](deployment.md).
 
+- [Scheduling behavior](#scheduling-behavior)
+- [Logs and metrics](#logs-and-metrics)
+
+---
+
 ## Scheduling behavior
 
 Background sync tasks start for every source with
@@ -68,6 +73,8 @@ serializes, and the periodic snapshot task has already stopped, so it cannot
 race the final save on the same temp file. A task that outlives the grace is
 logged and the snapshot proceeds anyway (best effort beats a SIGKILL with no
 snapshot at all).
+
+---
 
 ## Logs and metrics
 

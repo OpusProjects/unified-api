@@ -7,7 +7,21 @@ mandatory; every other file defaults to empty if absent.
 All cross-references are **validated at startup** — an unknown source, credential
 or project id anywhere in the config aborts boot with a list of every error found.
 
+- [config.yaml (required)](#configyaml-required)
+- [sources.yaml](#sourcesyaml)
+- [views.yaml](#viewsyaml)
+- [credentials.yaml](#credentialsyaml)
+- [enrichers.yaml](#enrichersyaml)
+- [endpoints.yaml](#endpointsyaml)
+- [projects.yaml](#projectsyaml)
+- [api_keys.yaml](#api_keysyaml)
+- [Environment variables](#environment-variables)
+
+---
+
 ## config.yaml (required)
+
+The one file that must exist, holding the `server`, `cache`, `projects` and `secrets` settings.
 
 ```yaml
 server:
@@ -62,6 +76,8 @@ secrets:
   cache_ttl_seconds: 60
 ```
 
+---
+
 ## sources.yaml
 
 One entry per inventory source; the key is the source id used in URLs.
@@ -103,6 +119,8 @@ src-section9:
 | `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `config` | Arbitrary `key: value` strings the connector script receives as JSON. The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `gather_mode`, `fact_path`, `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync) from here — see [connectors](connectors.md) |
+
+---
 
 ## views.yaml
 
@@ -147,6 +165,8 @@ otherwise parse as an empty pattern, which claims everything.
 
 A view is granted to an API key exactly like a source, by its id under
 `sources:`; the key needs no access to the members.
+
+---
 
 ## credentials.yaml
 
@@ -212,6 +232,8 @@ re-read on every resolution, so rotating the token needs no restart. Pair Vault
 with `secrets.cache_ttl_seconds` (it is what keeps the sync schedule from
 becoming a request storm against Vault).
 
+---
+
 ## enrichers.yaml
 
 Post-processors over data already in the cache. Two modes:
@@ -242,6 +264,8 @@ enrich-business-unit:
   sync_interval_seconds: 3600
 ```
 
+---
+
 ## endpoints.yaml
 
 Output endpoints combine one or more cached datasets through a transformer script.
@@ -256,6 +280,8 @@ ep-ansible-full:
   config:
     filter_datacenter: "section9"   # free-form, script-specific
 ```
+
+---
 
 ## projects.yaml
 
@@ -329,6 +355,8 @@ passed to git through the environment, never on the command line); an
 clone/pull logs an error and does not stop the boot — affected sources fail
 at sync time and the periodic re-pull retries.
 
+---
+
 ## api_keys.yaml
 
 API keys with per-consumer permissions. The secret is NEVER here — `env` names
@@ -356,7 +384,11 @@ unknown source/endpoint ids also fail startup; a `sources:` entry may name a
 `UNIFIED_API_KEY` = open API (with a loud warning). See
 [API → Authentication](api.md#authentication) for the exact route semantics.
 
+---
+
 ## Environment variables
+
+Everything the process reads from the environment, including where each credential looks for its secret.
 
 | Variable | Effect |
 |---|---|

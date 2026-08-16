@@ -17,13 +17,27 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+- [Prerequisites](#prerequisites)
+- [What runs](#what-runs)
+- [Sample scripts](#sample-scripts)
+- [Why there are no `unit/`, `integration/`, `sanity/` folders](#why-there-are-no-unit-integration-sanity-folders)
+- [Load-testing an instance](#load-testing-an-instance)
+- [Running a subset](#running-a-subset)
+- [Adding tests](#adding-tests)
+
+---
+
 ## Prerequisites
+
+What has to be on the machine before the suite will run.
 
 - **A Rust toolchain** (edition 2024) — `cargo` is all you invoke.
 - **Python 3 on `PATH`** — the integration tests spawn the sample scripts under
   `tests/adapters/out/{connectors,enrichers,output}/`, which start with
   `#!/usr/bin/env python3`. No packages are required; they use only the standard
   library. No databases, network access or real sources of truth are involved.
+
+---
 
 ## What runs
 
@@ -53,6 +67,8 @@ Integration tests build a real `AppState` via `AppBuilder`, which defaults to th
 (including `connectors/slow.py`, used to prove the execution timeout aborts a
 hung run).
 
+---
+
 ## Sample scripts
 
 These Python scripts are **not tests** — they are stand-in external programs
@@ -80,6 +96,8 @@ the test harness — the same mechanism as the conventional `tests/common/`. The
 default `config/` and the Docker image point at these same scripts, so they
 double as the shipped zero-config demo.
 
+---
+
 ## Why there are no `unit/`, `integration/`, `sanity/` folders
 
 The layout follows Rust's conventions, which differ from the folder-per-tier
@@ -99,6 +117,8 @@ them, not where a directory name says:
   [deployment](deployment.md#smoke-test) against a running instance. For a
   fast local pass, `cargo test --lib` runs the in-src unit tests in a couple
   of seconds; the full suite stays the gate.
+
+---
 
 ## Load-testing an instance
 
@@ -122,6 +142,8 @@ histogram buckets, so percentiles aggregate) and the process RSS while it
 runs. Compare an instance against itself before/after a change — never
 against numbers from a different machine.
 
+---
+
 ## Running a subset
 
 `cargo test` passes any filter straight through to the test binaries, matching on
@@ -136,7 +158,11 @@ cargo test -- --nocapture          # let tests print to stdout/stderr
 cargo test -- --test-threads=1     # run serially instead of in parallel
 ```
 
+---
+
 ## Adding tests
+
+Where a new test belongs, by the kind of change that prompted it.
 
 - **A new HTTP endpoint** gets an integration test in `tests/` — see the
   checklist in [CONTRIBUTING.md](../CONTRIBUTING.md#adding-an-http-endpoint).

@@ -98,6 +98,7 @@ pub async fn run_enricher(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<EnrichResult>, ApiError> {
     let enricher_def = state
         .enrichers
@@ -116,6 +117,12 @@ pub async fn run_enricher(
     // None = target not in cache. Same status as an unknown enricher id before
     // this change, which sent a caller looking for a config typo that wasn't
     // there.
+    // The id the request-id layer assigned (or the caller sent), handed to
+    // the script as SOURCE_CONFIG's `trigger` — same trace-joining as a sync
+    let trigger = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok());
+
     let outcome = application_run_enricher(
         &*state.cache,
         &*state.enricher,
@@ -123,6 +130,7 @@ pub async fn run_enricher(
         &state.projects_dir,
         &id,
         enricher_def,
+        trigger,
     )
     .await
     .ok_or_else(|| {

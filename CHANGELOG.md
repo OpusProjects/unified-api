@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Enricher runs carry a `trigger`.** Script enrichers now receive the
+  reserved `trigger` key inside `SOURCE_CONFIG`, exactly like connectors: the
+  request id for `POST /enrichers/{id}/run`, `scheduled` for background runs,
+  and — when enrichment is re-applied after a sync — the trigger of that sync
+  itself, so a script's logs join the same trace end to end.
+
 - **Cron schedules for enrichers and project pulls.** The `schedule` field
   sources gained in 0.17 now works on enrichers and git projects with
   identical semantics: standard 5-field cron (optional leading seconds)

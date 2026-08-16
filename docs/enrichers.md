@@ -65,7 +65,7 @@ connectors — no API keys, no other sources' credentials) and bounded by
 |---|---|
 | stdin | The target's **current dataset** as JSON (`hostvars` + `groups`) |
 | CLI arguments | `script_args`, verbatim — no shell |
-| `SOURCE_CONFIG` env | The enricher's `config` map as JSON |
+| `SOURCE_CONFIG` env | The enricher's `config` map as JSON, plus the reserved `trigger` key: the request id behind a manual run, `scheduled` for the background task, or the causing sync's own trigger when the run re-applies enrichment after a sync — so the script's logs join the same trace as the access log |
 | stdout | A *partial* Dataset: only what changed |
 
 The partial output merges as follows: `hostvars` entries replace that host's

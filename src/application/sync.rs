@@ -286,6 +286,10 @@ pub async fn sync_source(
         };
     }
 
+    // Kept aside before run_sync consumes the request: the post-sync
+    // enrichment below is part of the same causal chain, so its scripts see
+    // the same trigger the connector did.
+    let trigger = request.trigger.clone();
     let outcome = run_sync(
         cache, connector, secrets, scopes, source_id, source, request,
     )
@@ -309,6 +313,7 @@ pub async fn sync_source(
             enrichment.projects_dir,
             enrichment.enrichers,
             source_id,
+            trigger.as_deref(),
         )
         .await;
         if applied > 0 {

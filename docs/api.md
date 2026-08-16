@@ -301,15 +301,19 @@ federation. Clients that don't advertise gzip get identity bytes, unchanged.
 
 ## Enrichers
 
-One route, which runs a configured enricher against the cached dataset of its target.
+Listing the configured enrichers, and running one against its target's cached dataset.
 
 | Route | Meaning |
 |---|---|
+| `GET /api/v1/enrichers` | Configured enrichers with target readiness and `sync_health` |
 | `POST /api/v1/enrichers/{id}/run` | Run an enricher against its target's cached dataset |
 
 `404` if the enricher isn't configured **or** its target has never synced.
 The result reports `hosts_updated` / `hosts_removed` and any script error.
 For declarative merges, `404` is also returned if the source has never synced.
+Like a sync, the request's `x-request-id` reaches a script enricher as
+`SOURCE_CONFIG`'s `trigger` key (`scheduled` for background runs; a run
+re-applying enrichment after a sync inherits that sync's trigger).
 
 ---
 

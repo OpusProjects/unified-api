@@ -150,8 +150,10 @@ A view is granted to an API key exactly like a source, by its id under
 
 ## credentials.yaml
 
-Credentials **never contain secrets** — they describe *where* to read them
-(environment variables or files that the infrastructure injects).
+Credentials **never contain secrets** — they describe *where* to read them;
+this is the field reference, and the full resolution story (backends, the
+cache and rotation, native Vault, failure semantics) is
+[its own page](secrets.md).
 
 ```yaml
 cred-section9-api:

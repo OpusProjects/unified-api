@@ -255,6 +255,7 @@ async fn scheduled_enrichment(
         &state.projects_dir,
         enricher_id,
         enricher,
+        Some("scheduled"),
     )
     .await
     {

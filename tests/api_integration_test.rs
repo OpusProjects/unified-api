@@ -1835,6 +1835,66 @@ async fn a_syncs_trigger_reaches_the_script_inside_source_config() {
     assert!(body.contains("trigger"));
 }
 
+// The same trace-joining for enricher runs: the request id behind a manual
+// run — and the trigger of the sync being re-applied — reaches the script
+// inside SOURCE_CONFIG.
+#[tokio::test]
+async fn an_enrichers_trigger_reaches_the_script_inside_source_config() {
+    let mut sources = std::collections::HashMap::new();
+    sources.insert(
+        "src-probe".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    );
+    let enricher: unified_api::domain::enricher::Enricher = serde_yaml_ng::from_str(concat!(
+        "name: Probe\n",
+        "target_id: src-probe\n",
+        "script_path: \"tests/adapters/out/enrichers/env_probe.py\"\n",
+    ))
+    .expect("enricher fixture");
+    let mut enrichers = std::collections::HashMap::new();
+    enrichers.insert("en-probe".to_string(), enricher);
+    let app = unified_api::AppBuilder::new()
+        .sources(sources)
+        .enrichers(enrichers)
+        .build();
+
+    // A sync whose re-applied enrichment must inherit the sync's own trigger
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-probe/sync")
+        .header("x-request-id", "sync-trace-11")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (status, body) = get(app.clone(), "/api/v1/sources/src-probe/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("sync-trace-11"),
+        "the sync's trigger never reached the re-applied enricher: {}",
+        body
+    );
+
+    // A manual run passes its own request id
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/enrichers/en-probe/run")
+        .header("x-request-id", "enrich-trace-22")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (status, body) = get(app, "/api/v1/sources/src-probe/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("enrich-trace-22"),
+        "the run's request id never reached SOURCE_CONFIG: {}",
+        body
+    );
+}
+
 // =========================================================================
 // Test: scope advertising
 // =========================================================================

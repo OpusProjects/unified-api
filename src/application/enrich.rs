@@ -44,11 +44,25 @@ pub async fn run_enricher(
     projects_dir: &std::path::Path,
     enricher_id: &str,
     enricher: &Enricher,
+    // Who caused this run — an HTTP request id, "scheduled", or the trigger of
+    // the sync being re-applied. Handed to a script enricher inside
+    // SOURCE_CONFIG as the reserved `trigger` key, exactly like a connector's,
+    // so its logs join the same trace. A declarative merge runs no script and
+    // ignores it.
+    trigger: Option<&str>,
 ) -> Option<EnrichOutcome> {
     let result = if enricher.is_declarative() {
         execute_declarative_merge(cache, enricher)
     } else {
-        execute_enricher(cache, enricher_port, projects_dir, enricher_id, enricher).await
+        execute_enricher(
+            cache,
+            enricher_port,
+            projects_dir,
+            enricher_id,
+            enricher,
+            trigger,
+        )
+        .await
     };
 
     let Some(outcome) = result else {
@@ -97,6 +111,7 @@ pub async fn run_enrichers_for_target(
     projects_dir: &std::path::Path,
     enrichers: &HashMap<String, Enricher>,
     target_id: &str,
+    trigger: Option<&str>,
 ) -> usize {
     let mut matching: Vec<(&String, &Enricher)> = enrichers
         .iter()
@@ -106,9 +121,17 @@ pub async fn run_enrichers_for_target(
 
     let mut applied = 0;
     for (id, enricher) in matching {
-        if run_enricher(cache, enricher_port, health, projects_dir, id, enricher)
-            .await
-            .is_some()
+        if run_enricher(
+            cache,
+            enricher_port,
+            health,
+            projects_dir,
+            id,
+            enricher,
+            trigger,
+        )
+        .await
+        .is_some()
         {
             applied += 1;
         }
@@ -196,6 +219,7 @@ async fn execute_enricher(
     projects_dir: &std::path::Path,
     enricher_id: &str,
     enricher: &Enricher,
+    trigger: Option<&str>,
 ) -> Option<EnrichOutcome> {
     let current_entry = cache.get(&enricher.target_id)?;
 
@@ -231,6 +255,9 @@ async fn execute_enricher(
         && let Some(bin) = crate::application::scripts::venv_bin_dir(projects_dir, project_id)
     {
         config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+    }
+    if let Some(trigger) = trigger {
+        config.insert("trigger".to_string(), trigger.to_string());
     }
 
     let start = Instant::now();
@@ -381,6 +408,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
+            None,
         )
         .await
         .expect("target is cached, so the enricher runs");
@@ -440,6 +468,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
+            None,
         )
         .await
         .expect("target is cached");
@@ -477,6 +506,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
+            None,
         )
         .await
         .expect("target is cached");
@@ -505,6 +535,7 @@ mod tests {
                 std::path::Path::new("unused"),
                 "en-spy",
                 &script_enricher(),
+                None,
             )
             .await
             .is_none()
@@ -562,6 +593,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-d",
             &declarative_enricher(),
+            None,
         )
         .await
         .expect("target is cached");
@@ -592,6 +624,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-d",
             &declarative_enricher(),
+            None,
         )
         .await
         .expect("target IS cached, so an outcome is produced");
@@ -623,6 +656,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-bare",
             &enricher,
+            None,
         )
         .await
         .expect("target is cached");
@@ -660,6 +694,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-hung",
             &enricher,
+            None,
         )
         .await
         .expect("target is cached");
@@ -689,6 +724,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
+            None,
         )
         .await;
         assert_eq!(health.get("en-spy").unwrap().consecutive_failures, 1);
@@ -702,6 +738,7 @@ mod tests {
             std::path::Path::new("unused"),
             "en-spy",
             &script_enricher(),
+            None,
         )
         .await
         .expect("target is cached now");

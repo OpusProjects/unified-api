@@ -42,6 +42,7 @@ and every one of them sees the same inventory.
 | [CLI](docs/cli.md) | Environment variables, log tuning, health checks and common curl operations |
 | [Configuration](docs/configuration.md) | Every YAML file field by field, env vars and startup validation |
 | [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
+| [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
 | [Federation](docs/federation.md) | One instance per datacenter, one central federating them, no WAN SSH |
 | [Observability](docs/observability.md) | Scheduling, structured logs and the metrics worth alerting on |

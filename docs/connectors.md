@@ -318,7 +318,9 @@ sources to serve one merged world view.
 ## Enrichers
 
 An enricher post-processes a dataset already in the cache: resolve DNS, probe
-reachability, tag hosts, drop stale entries.
+reachability, tag hosts, drop stale entries. This section is the script I/O
+contract; triggers, ordering, freshness rules and health live in
+[enrichers](enrichers.md).
 
 **Input:** `SOURCE_CONFIG` env var (the enricher's `config`), the enricher's
 `script_args` as CLI arguments (default: none), and the **current dataset on

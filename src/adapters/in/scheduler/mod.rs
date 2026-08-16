@@ -199,6 +199,7 @@ async fn scheduled_sync(
         &**connector,
         &*state.secrets,
         &state.sync_health,
+        &state.advertised_scopes,
         &state.syncs,
         source_id,
         &source,

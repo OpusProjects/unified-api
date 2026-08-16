@@ -166,6 +166,7 @@ fn record_view_gauges(state: &AppState) {
         let snapshot = crate::application::views::snapshot(
             &*state.cache,
             &state.sources,
+            &state.advertised_scopes,
             view_id.as_str(),
             view,
         );

@@ -8,7 +8,7 @@ use crate::application::enrich::run_enrichers_for_target;
 use crate::domain::cache_entry::{CacheEntry, RetainedHost};
 use crate::domain::dataset::HostVars;
 use crate::domain::enricher::Enricher;
-use crate::domain::source::Source;
+use crate::domain::source::{AdvertisedScopeRegistry, Source};
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
@@ -231,6 +231,10 @@ pub async fn sync_source(
     connector: &dyn ConnectorPort,
     secrets: &dyn SecretsPort,
     health: &SyncHealthRegistry,
+    // Last-known advertised scopes, updated by any sync whose connector
+    // answered /scope (the remote one). Threaded here for the same reason as
+    // health: every sync in the process passes through this function.
+    scopes: &AdvertisedScopeRegistry,
     // Serialises syncs of the same source. Held for the whole use case — gather,
     // cache write and enrichment — because all three are the sync's effect on
     // one entry, and a second sync interleaving with any of them is what lets an
@@ -282,7 +286,10 @@ pub async fn sync_source(
         };
     }
 
-    let outcome = run_sync(cache, connector, secrets, source_id, source, request).await;
+    let outcome = run_sync(
+        cache, connector, secrets, scopes, source_id, source, request,
+    )
+    .await;
 
     // Recorded here rather than at the call sites so the scheduler and the HTTP
     // handler cannot drift: every sync in the process goes through this
@@ -353,6 +360,7 @@ async fn run_sync(
     cache: &dyn CachePort,
     connector: &dyn ConnectorPort,
     secrets: &dyn SecretsPort,
+    scopes: &AdvertisedScopeRegistry,
     source_id: &str,
     source: &Source,
     request: SyncRequest,
@@ -483,6 +491,13 @@ async fn run_sync(
             let total_hosts = output.dataset.hostvars.len();
             let total_groups = output.dataset.groups.len();
 
+            // Recorded before the cache write and only when present: a None
+            // (origin too old, scope route failing) must not erase the
+            // last-known claim a view may be routing by
+            if let Some(claim) = &output.advertised_scope {
+                scopes.record(source_id, claim.clone());
+            }
+
             apply_to_cache(cache, source_id, source, &scope, output);
 
             SyncOutcome {
@@ -510,6 +525,8 @@ fn apply_to_cache(
 ) {
     let ConnectorOutput {
         dataset,
+        // Recorded by run_sync before the cache write; nothing to do here
+        advertised_scope: _,
         ages,
         unreachable,
     } = output;
@@ -743,6 +760,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "web")]),
                 ages: None,
                 unreachable: vec!["b.example".to_string()],
@@ -774,6 +792,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "web")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -801,6 +820,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "web")]),
                 ages: None,
                 unreachable: vec!["b.example".to_string()],
@@ -842,6 +862,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of_grouped(
                     vec![host("a.example", "web")],
                     vec![
@@ -892,6 +913,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of_grouped(
                     vec![host("a.example", "web")],
                     vec![("ssh_gathered", vec!["a.example"])],
@@ -928,6 +950,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "web")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -962,6 +985,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("b.example", "db")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -1004,6 +1028,7 @@ mod tests {
             &source,
             &SyncScope::Full,
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("b.example", "db")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -1036,6 +1061,7 @@ mod tests {
             &source,
             &SyncScope::Hosts(vec!["a.example".to_string()]),
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "web")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -1060,6 +1086,7 @@ mod tests {
             &source,
             &SyncScope::Group("web".to_string()),
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of_grouped(
                     vec![host("a.example", "web")],
                     vec![("web", vec!["a.example"])],
@@ -1087,6 +1114,7 @@ mod tests {
             &source,
             &SyncScope::Hosts(vec!["a.example".to_string()]),
             ConnectorOutput {
+                advertised_scope: None,
                 dataset: dataset_of(vec![host("a.example", "db")]),
                 ages: None,
                 unreachable: Vec::new(),
@@ -1113,6 +1141,7 @@ mod tests {
                 &source,
                 &SyncScope::Hosts(vec!["a.example".to_string()]),
                 ConnectorOutput {
+                    advertised_scope: None,
                     dataset: dataset_of(vec![host("a.example", "web")]),
                     ages: None,
                     unreachable: Vec::new(),
@@ -1126,6 +1155,7 @@ mod tests {
                 &source,
                 &SyncScope::Full,
                 ConnectorOutput {
+                    advertised_scope: None,
                     dataset: dataset_of(vec![host("a.example", "web"), host("b.example", "db")]),
                     ages: None,
                     unreachable: Vec::new(),
@@ -1264,6 +1294,7 @@ mod concurrency_tests {
                     &*connector,
                     &*secrets,
                     &health,
+                    &AdvertisedScopeRegistry::new(),
                     &syncs,
                     "src",
                     &src,
@@ -1276,11 +1307,13 @@ mod concurrency_tests {
 
         // let the full gather get under way, then refresh one host
         tokio::time::sleep(Duration::from_millis(50)).await;
+        let scopes = AdvertisedScopeRegistry::new();
         sync_source(
             &*cache,
             &*connector,
             &*secrets,
             &health,
+            &scopes,
             &syncs,
             "src",
             &src,
@@ -1378,6 +1411,7 @@ mod concurrency_tests {
                     &*connector,
                     &*secrets,
                     &health,
+                    &AdvertisedScopeRegistry::new(),
                     &syncs,
                     "src",
                     &src,

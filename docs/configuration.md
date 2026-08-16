@@ -153,6 +153,7 @@ vw-facts-all:
 | `members[].owns.source` | Source whose cached dataset the groups below resolve against |
 | `members[].owns.groups` | Groups of that source whose members this member owns |
 | `members[].owns.hosts` | Hosts claimed literally, whether or not the inventory knows them — a host built this morning is exactly the one somebody needs to reach |
+| `members[].owns.advertised` | Route by what the member SOURCE claims to own (its `advertise_scope` locally, the edge's `GET /scope` for remote members, refreshed per sync with the last-known claim surviving an unreachable edge). `groups`/`hosts` become the fallback; with neither claim nor fallback the member claims nothing — see [views](views.md#advertised-ownership) |
 | `ttl_seconds` | The view's own freshness policy, which is also the **gate** for `refresh=true`. Absent = each host inherits its owning member's TTL. A member's per-host/per-group `ttl_overrides` win either way |
 
 Ownership is **declared, not inferred from what a member has cached**: facts

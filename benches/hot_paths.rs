@@ -101,7 +101,13 @@ fn view_snapshot_union(c: &mut Criterion) {
 
     c.bench_function("view_snapshot_hosts_union_1000_hosts", |b| {
         b.iter(|| {
-            let snap = snapshot(&cache, &sources, black_box("vw-bench"), &view);
+            let snap = snapshot(
+                &cache,
+                &sources,
+                &unified_api::domain::source::AdvertisedScopeRegistry::new(),
+                black_box("vw-bench"),
+                &view,
+            );
             snap.hosts().len()
         })
     });

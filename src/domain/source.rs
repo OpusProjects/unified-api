@@ -150,6 +150,40 @@ pub struct ScopeClaim {
     pub catch_all: bool,
 }
 
+// Last-known advertised scopes of REMOTE member sources, keyed by the local
+// source id, written by every sync of a remote source that answers /scope.
+// In-process state like the health registries — and like them it lives
+// outside the cache on purpose: an edge that stops answering keeps its
+// last-known scope, because stale routing beats no routing (the same stance
+// the cache takes about stale data). Not persisted: after a restart the
+// scope is re-learned by the first sync, and view members fall back to their
+// declared groups/hosts (or claim nothing) until then.
+#[derive(Debug, Default)]
+pub struct AdvertisedScopeRegistry {
+    inner: std::sync::Mutex<HashMap<String, ScopeClaim>>,
+}
+
+impl AdvertisedScopeRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&self, source_id: &str, claim: ScopeClaim) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(source_id.to_string(), claim);
+    }
+
+    pub fn get(&self, source_id: &str) -> Option<ScopeClaim> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(source_id)
+            .cloned()
+    }
+}
+
 impl Source {
     // The scope this source advertises, in precedence order: the explicit
     // advertise_scope block, else the hosts_from_source match_pattern it

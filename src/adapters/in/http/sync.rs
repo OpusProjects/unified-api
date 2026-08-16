@@ -126,6 +126,7 @@ pub async fn sync_source(
         &**connector,
         &*state.secrets,
         &state.sync_health,
+        &state.advertised_scopes,
         &state.syncs,
         &id,
         &source,

@@ -187,7 +187,11 @@ Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
   (`owns.groups` resolved against another source's dataset) rather than by
   which member happens to have the host cached — see `docs/views.md` for why
   cache-membership routing is wrong. Writes (sync, evict, host PUT/DELETE)
-  refuse a view id. A view's `ttl_seconds` is the on-demand refresh GATE, not a
+  refuse a view id. A member with `owns.advertised: true` routes by what its
+  SOURCE claims (`GET /sources/{id}/scope` — local config, or fetched per
+  sync for remote members with last-known surviving outages); declared
+  groups/hosts become the fallback, and no claim + no fallback claims
+  NOTHING, never everything. A view's `ttl_seconds` is the on-demand refresh GATE, not a
   label, which is why `refresh_hosts` takes a `ttl_override`.
 - **Sync health:** every sync goes through `application::sync`, which records
   last attempt / last success / last error / consecutive failures into the

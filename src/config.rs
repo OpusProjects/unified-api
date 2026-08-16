@@ -282,6 +282,31 @@ impl AppConfig {
                         id, member.source
                     ));
                 }
+                // An advertised LOCAL member must have something to route by
+                // at startup: its source's own claim, or declared fallback
+                // groups/hosts. Only a REMOTE member may rely on the claim its
+                // syncs will fetch — and even there a fallback is what covers
+                // the window before the first sync. Without either, the
+                // member claims nothing, ever, which is a config error worth
+                // naming rather than an eternally empty slice of the view.
+                if member.owns.advertised {
+                    let member_source = self.sources.get(&member.source);
+                    let is_remote = member_source.is_some_and(|source| {
+                        source.connector_type == crate::domain::source::ConnectorType::Remote
+                    });
+                    let has_local_claim =
+                        member_source.is_some_and(|source| source.advertised_scope().is_some());
+                    let has_fallback =
+                        !member.owns.groups.is_empty() || !member.owns.hosts.is_empty();
+                    if !is_remote && !has_local_claim && !has_fallback {
+                        errors.push(format!(
+                            "View '{}' member '{}' uses advertised ownership, but the source \
+                             advertises no scope and no fallback groups/hosts are declared — \
+                             the member would claim nothing, ever",
+                            id, member.source
+                        ));
+                    }
+                }
                 if !seen.insert(&member.source) {
                     errors.push(format!(
                         "View '{}' lists source '{}' twice — the second member could never \
@@ -1074,6 +1099,27 @@ mod tests {
             .expect("an unknown section must not load")
             .to_string();
         assert!(err.contains("caches"), "error was: {}", err);
+    }
+
+    #[test]
+    fn an_advertised_local_member_needs_a_claim_or_a_fallback() {
+        let dir = dir_with_one_source();
+        // src-a is a plain script source with no advertise_scope: advertised
+        // ownership with no fallback can never route anything
+        fs::write(
+            dir.path().join("views.yaml"),
+            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        advertised: true\n",
+        )
+        .unwrap();
+        assert!(load_err(&dir).contains("claim nothing"));
+
+        // A declared fallback makes it valid
+        fs::write(
+            dir.path().join("views.yaml"),
+            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        advertised: true\n        groups: [\"dc1\"]\n",
+        )
+        .unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("fallback makes it valid");
     }
 
     #[test]

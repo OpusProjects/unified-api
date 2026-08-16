@@ -42,6 +42,10 @@ pub struct AppState {
     // success, last error). Not a port: it is in-process state with no
     // outside world behind it, like the cache's contents.
     pub sync_health: Arc<SyncHealthRegistry>,
+    // Last-known advertised scopes of remote member sources (see
+    // domain::source::AdvertisedScopeRegistry): written by syncs, read by
+    // view members with `advertised: true`. In-process state like the rest.
+    pub advertised_scopes: Arc<crate::domain::source::AdvertisedScopeRegistry>,
     // The same record for the OTHER periodic work, one registry per kind so
     // the id spaces cannot collide: enricher runs (keyed by enricher id),
     // project pulls (keyed by project id) and the cache snapshot task (a

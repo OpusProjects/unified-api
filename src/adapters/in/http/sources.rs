@@ -118,6 +118,7 @@ async fn refresh_before_reading(
         &**connector,
         &*state.secrets,
         &state.sync_health,
+        &state.advertised_scopes,
         &state.refresh,
         &state.syncs,
         id,

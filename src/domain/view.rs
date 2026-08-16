@@ -89,6 +89,17 @@ pub struct Ownership {
     // to reach.
     #[serde(default)]
     pub hosts: Vec<String>,
+
+    // Resolve this member's claim from what the member SOURCE advertises
+    // (GET /sources/{id}/scope) instead of the groups/hosts written here —
+    // the end of federation's duplicated truth. For a local member the
+    // advertisement comes straight from its config; for a remote member it is
+    // fetched with every sync and the last-known value survives an
+    // unreachable edge. Groups/hosts above then become the FALLBACK used
+    // until an advertisement is known; with no fallback and no advertisement
+    // the member claims nothing (never everything).
+    #[serde(default)]
+    pub advertised: bool,
 }
 
 impl Ownership {
@@ -161,7 +172,10 @@ impl View {
         let mut hosts: Vec<String> = Vec::new();
         let mut catch_all = false;
         for member in &self.members {
-            catch_all |= member.owns.is_catch_all();
+            // An advertised member's claim is runtime knowledge; its declared
+            // groups/hosts (the fallback) are still truthful config to
+            // re-advertise, but its emptiness is not a catch-all statement.
+            catch_all |= member.owns.is_catch_all() && !member.owns.advertised;
             for group in &member.owns.groups {
                 if !groups.contains(group) {
                     groups.push(group.clone());

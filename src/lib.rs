@@ -191,6 +191,7 @@ impl AppBuilder {
             projects: self.projects,
             projects_dir: self.projects_dir,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            advertised_scopes: Arc::new(domain::source::AdvertisedScopeRegistry::new()),
             enrich_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             project_health: self.project_health,
             snapshot_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),

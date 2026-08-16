@@ -226,6 +226,7 @@ async fn central_cache_entry_keeps_the_origin_age() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-dc1",
         &source,
@@ -260,6 +261,7 @@ async fn host_scope_only_fetches_the_named_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-dc1",
         &remote_source(&url),
@@ -291,6 +293,7 @@ async fn host_scope_keeps_the_origin_age_for_that_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-dc1",
         &remote_source(&url),
@@ -327,6 +330,7 @@ async fn successive_host_scopes_accumulate_in_the_entry() {
             &RemoteConnector::new(),
             &MockSecrets::new(),
             &SyncHealthRegistry::new(),
+            &unified_api::domain::source::AdvertisedScopeRegistry::new(),
             &SyncCoordinator::new(),
             "src-dc1",
             &source,
@@ -363,6 +367,7 @@ async fn host_scope_naming_an_unknown_host_caches_nothing() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-dc1",
         &remote_source(&url),
@@ -453,6 +458,7 @@ async fn without_refresh_origin_the_edge_does_not_re_gather() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
@@ -501,6 +507,7 @@ async fn refresh_origin_makes_the_edge_re_gather_the_host() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
@@ -546,6 +553,7 @@ async fn an_origin_that_cannot_re_gather_fails_the_sync() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
@@ -580,6 +588,7 @@ async fn an_exhausted_hop_budget_still_serves_the_data() {
         &RemoteConnector::new(),
         &MockSecrets::new(),
         &SyncHealthRegistry::new(),
+        &unified_api::domain::source::AdvertisedScopeRegistry::new(),
         &SyncCoordinator::new(),
         "src-central",
         &remote_source(&url),
@@ -600,4 +609,91 @@ async fn an_exhausted_hop_budget_still_serves_the_data() {
         .host_age_seconds("motoko.section9.net")
         .unwrap();
     assert!(edge_age >= 300, "the edge re-gathered with no hops left");
+}
+
+// =========================================================================
+// Test: the central learns the edge's advertised scope with the sync
+// =========================================================================
+// An edge whose SOURCE advertises ownership (here via advertise_scope on a
+// plain source) serves it on /scope; the central's remote connector fetches
+// it beside the dataset and sync_source records it — the registry entry a
+// view member with `advertised: true` routes by.
+#[tokio::test]
+async fn a_sync_records_the_edges_advertised_scope() {
+    // Edge with a CONFIGURED source that advertises a claim
+    let edge_source: Source = serde_yaml_ng::from_str(concat!(
+        "name: Edge\n",
+        "project_id: p\n",
+        "script_path: x\n",
+        "ttl_seconds: 600\n",
+        "advertise_scope:\n",
+        "  groups: [\"datacenter_dc1\"]\n",
+        "  hosts: [\"appliance.dc1.example\"]\n",
+    ))
+    .unwrap();
+    let mut sources = HashMap::new();
+    sources.insert("src-edge".to_string(), edge_source);
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .build_with_state();
+    state
+        .cache
+        .set("src-edge", CacheEntry::new(edge_dataset(), 3600));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let url = format!("http://{}", addr);
+
+    // Central: sync the remote source and watch the registry
+    let cache = MemoryCache::new();
+    let scopes = unified_api::domain::source::AdvertisedScopeRegistry::new();
+    let outcome = sync_source(
+        &cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        &scopes,
+        &SyncCoordinator::new(),
+        "src-dc1-mirror",
+        &remote_source(&url),
+        SyncScope::Full,
+        None,
+    )
+    .await;
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+
+    let claim = scopes
+        .get("src-dc1-mirror")
+        .expect("the sync must record the edge's claim");
+    assert_eq!(claim.groups, vec!["datacenter_dc1"]);
+    assert_eq!(claim.hosts, vec!["appliance.dc1.example"]);
+    assert!(!claim.catch_all);
+}
+
+// An edge whose source declares nothing (or an edge too old for the route):
+// the sync succeeds and the registry stays empty — no advertisement is not
+// an error, it is the fallback-or-nothing case the view resolution handles.
+#[tokio::test]
+async fn an_edge_without_a_claim_leaves_the_registry_empty() {
+    let url = spawn_open_edge().await;
+
+    let cache = MemoryCache::new();
+    let scopes = unified_api::domain::source::AdvertisedScopeRegistry::new();
+    let outcome = sync_source(
+        &cache,
+        &RemoteConnector::new(),
+        &MockSecrets::new(),
+        &SyncHealthRegistry::new(),
+        &scopes,
+        &SyncCoordinator::new(),
+        "src-dc1-mirror",
+        &remote_source(&url),
+        SyncScope::Full,
+        None,
+    )
+    .await;
+    assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+    assert!(scopes.get("src-dc1-mirror").is_none());
 }

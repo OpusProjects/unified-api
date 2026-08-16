@@ -42,6 +42,12 @@ pub struct ViewMemberStatus {
     /// false = its group patterns cannot be expanded, so it claims nothing
     /// beyond the hosts named literally in the config.
     pub ownership_cached: bool,
+    /// How this member's ownership pattern was determined: "declared" (written
+    /// in the view), "advertised" (resolved from the member's own claim),
+    /// "fallback" (advertised wanted, declared pattern standing in until a
+    /// claim is known), or "unknown" (advertised wanted, nothing to route by —
+    /// the member claims nothing)
+    pub ownership_mode: &'static str,
     /// Absent while the member has never synced
     pub age_seconds: Option<u64>,
     pub is_fresh: bool,
@@ -70,7 +76,13 @@ pub async fn dataset(
         None
     };
 
-    let snap = snapshot(&*state.cache, &state.sources, id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
 
     // Routed before any validator is minted. A named host no member claims is a
     // 404 — the request cannot be routed at all — and that has to be decided
@@ -178,7 +190,13 @@ pub fn status(
     view: &View,
     params: StatusParams,
 ) -> Result<SourceStatus, ApiError> {
-    let snap = snapshot(&*state.cache, &state.sources, id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
 
     let selection = snap
         .select(params.host.as_deref(), params.group.as_deref())
@@ -220,6 +238,7 @@ pub fn status(
             source_id: member.source_id.to_string(),
             cached: member.entry.is_some(),
             ownership_cached: member.ownership_cached(),
+            ownership_mode: member.ownership_mode,
             age_seconds: member.entry.as_ref().map(|entry| entry.age_seconds()),
             is_fresh: member.entry.as_ref().is_some_and(|entry| entry.is_fresh()),
             ttl_seconds: member.default_ttl(view),
@@ -250,7 +269,13 @@ pub fn status(
 
 // GET /api/v1/sources/{id}/groups for a view.
 pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
-    let snap = snapshot(&*state.cache, &state.sources, id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
 
     // Already sorted: the merged namespace is a BTreeMap
     snap.groups()
@@ -267,7 +292,13 @@ pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
 
 // GET /api/v1/sources/{id}/hosts for a view.
 pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
-    let snap = snapshot(&*state.cache, &state.sources, id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
     let hosts: Vec<String> = snap.hosts().into_iter().map(str::to_string).collect();
 
     HostList {
@@ -284,7 +315,13 @@ pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
 // than an entry: it is listed so a consumer can discover it, and `is_fresh` /
 // `age_seconds` say what state it is in.
 pub fn info(state: &Arc<AppState>, id: &str, view: &View) -> CachedSourceInfo {
-    let snap = snapshot(&*state.cache, &state.sources, id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
 
     CachedSourceInfo {
         source_id: id.to_string(),
@@ -351,7 +388,13 @@ async fn refresh_before_reading(
         return Err(ApiError::refresh_needs_hosts());
     }
 
-    let snap = snapshot(&*state.cache, &state.sources, view_id, view);
+    let snap = snapshot(
+        &*state.cache,
+        &state.sources,
+        &state.advertised_scopes,
+        view_id,
+        view,
+    );
     let routed = snap
         .route(&hosts)
         .map_err(|unclaimed| unclaimed_error(view_id, view, unclaimed))?;
@@ -390,6 +433,7 @@ async fn refresh_before_reading(
             &**connector,
             &*state.secrets,
             &state.sync_health,
+            &state.advertised_scopes,
             &state.refresh,
             &state.syncs,
             member.source_id,

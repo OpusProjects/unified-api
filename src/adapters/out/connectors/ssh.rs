@@ -347,6 +347,7 @@ impl ConnectorPort for SshConnector {
                     remove_hosts: Vec::new(),
                 },
                 ages: None,
+                advertised_scope: None,
                 // Named here so a full sync can keep their last-known data
                 // rather than dropping them for a failure that is ours, not
                 // theirs: one saturated batch of workers took every host in it

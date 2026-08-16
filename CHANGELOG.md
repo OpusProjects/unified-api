@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **View ownership can resolve from what a member advertises** — the second
+  half, ending federation's duplicated truth. `advertised: true` on a view
+  member routes by the member source's own claim: read from local config for
+  local members, fetched from the edge's `GET /scope` with every sync for
+  remote members (best effort — an edge too old for the route degrades
+  cleanly). The rules, in the order they apply: live claim, else last-known
+  claim (an unreachable edge keeps routing — stale routing beats no routing),
+  else the declared `groups`/`hosts` as fallback, else the member claims
+  **nothing** — an unknown advertisement never widens into a catch-all.
+  `GET /status` reports each member's `ownership_mode`
+  (`declared`/`advertised`/`fallback`/`unknown`), and startup validation
+  refuses an advertised local member that could never route. Declared
+  ownership is untouched: keep the fallback during a mixed-version rollout,
+  drop it once every edge serves `/scope`.
+
 - **Sources advertise their ownership scope.** `GET /api/v1/sources/{id}/scope`
   answers "what does this source claim to own" from **configuration, never
   cache contents**: an explicit new `advertise_scope` block (`groups` +

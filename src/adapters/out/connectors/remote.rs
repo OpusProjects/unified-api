@@ -156,17 +156,27 @@ impl ConnectorPort for RemoteConnector {
                 }
             };
 
+            // 3. What the origin claims to own, for view members that route
+            // by advertisement. Best effort on purpose: an origin too old to
+            // have the route (pre-0.18), or one answering 403 for a key not
+            // granted the source, degrades to None — the sync keeps working
+            // and the view keeps its declared fallback or last-known scope.
+            let scope_url = format!("{}/api/v1/sources/{}/scope", base_url, remote_source);
+            let advertised_scope = fetch_scope(&client, &scope_url, &api_key).await;
+
             debug!(
                 url = %base_url,
                 source = %remote_source,
                 hosts = dataset.hostvars.len(),
                 age_propagated = ages.is_some(),
+                scope_advertised = advertised_scope.is_some(),
                 "Remote dataset fetched"
             );
 
             Ok(ConnectorOutput {
                 dataset,
                 ages,
+                advertised_scope,
                 // The edge reports what it gathered; a host it could not reach
                 // is already absent from the dataset it federates to us, and we
                 // have no way to tell which from here.
@@ -293,6 +303,35 @@ async fn fetch_ages(
             .into_iter()
             .map(|h| (h.hostname, h.age_seconds))
             .collect(),
+    })
+}
+
+// The origin's advertised scope, or None for any failure shape: this is the
+// one fetch beside the dataset that must never fail the sync, because the
+// data is the point and the scope has a fallback.
+async fn fetch_scope(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &Option<String>,
+) -> Option<crate::domain::source::ScopeClaim> {
+    #[derive(serde::Deserialize)]
+    struct ScopeResponse {
+        declared: bool,
+        #[serde(default)]
+        groups: Vec<String>,
+        #[serde(default)]
+        hosts: Vec<String>,
+        #[serde(default)]
+        catch_all: bool,
+    }
+
+    let response = get(client, url, api_key).await.ok()?;
+    let scope: ScopeResponse = response.json().await.ok()?;
+    // "declares nothing" is information the caller treats as no advertisement
+    scope.declared.then_some(crate::domain::source::ScopeClaim {
+        groups: scope.groups,
+        hosts: scope.hosts,
+        catch_all: scope.catch_all,
     })
 }
 

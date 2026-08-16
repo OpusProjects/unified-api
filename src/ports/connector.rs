@@ -21,6 +21,13 @@ pub struct ConnectorOutput {
     // never attempted and never appears here, so a full sync can tell a
     // decommissioned host from one that simply did not answer.
     pub unreachable: Vec<String>,
+
+    // What the origin advertises as its ownership scope, when the connector
+    // can ask (only the remote/federation one can — it fetches /scope beside
+    // the dataset). None = not asked, not answered, or an origin too old to
+    // have the route; the sync records Some into the scope registry so a
+    // view member with `advertised: true` routes by it.
+    pub advertised_scope: Option<crate::domain::source::ScopeClaim>,
 }
 
 #[derive(Debug)]
@@ -36,6 +43,7 @@ impl From<Dataset> for ConnectorOutput {
             dataset,
             ages: None,
             unreachable: Vec::new(),
+            advertised_scope: None,
         }
     }
 }

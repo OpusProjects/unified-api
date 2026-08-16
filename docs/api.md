@@ -149,7 +149,9 @@ nobody: the next request in the queue gathers for real.
 
 A [view](views.md) answers on every route above, in the same shapes: a per-host
 read is served by whichever member owns that host, and `refresh=true` is
-delegated to that member. `GET .../status` gains a `members` array, and the
+delegated to that member. `GET .../status` gains a `members` array — each with
+an `ownership_mode` (`declared`/`advertised`/`fallback`/`unknown`) saying how
+its routing pattern was determined — and the
 write routes (`POST .../sync`, `DELETE`, host `PUT`/`DELETE`) answer `400` with
 a body naming the members — a view gathers nothing and holds no cache entry.
 

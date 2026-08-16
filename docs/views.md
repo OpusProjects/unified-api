@@ -12,6 +12,7 @@ datacenter — and therefore which source — a host lives in.
 - [Configuration — `views.yaml`](#configuration--viewsyaml)
 - [Where it answers](#where-it-answers)
 - [Ownership is declared, not inferred](#ownership-is-declared-not-inferred)
+- [Advertised ownership](#advertised-ownership)
 - [TTL: the refresh gate, not a freshness label](#ttl-the-refresh-gate-not-a-freshness-label)
 - [Reading `/status`](#reading-status)
 - [What it does not do](#what-it-does-not-do)
@@ -203,6 +204,48 @@ visible on a dashboard before somebody reports it.
 A host that **is** claimed but that its owner has no data for is different: it
 routes normally (so a refresh can go and get it) and simply does not appear in
 the data, exactly as it would from the member itself.
+
+---
+
+## Advertised ownership
+
+Declared ownership has a documented cost: a duplicated truth. The edge says
+"I am datacenter_dc2" in its own config, and the view repeats it — renaming a
+group at the edge silently un-claims those hosts at the central. `advertised:
+true` on a member ends the duplication: the member routes by what its SOURCE
+claims to own.
+
+```yaml
+members:
+  - source: "src-edge-dc2"        # a remote (federated) member
+    owns:
+      source: "src-d42"           # the inventory the claim resolves against
+      advertised: true            # route by the edge's own claim
+      groups: ["datacenter_dc2"]  # FALLBACK until a claim is known
+```
+
+Where the claim comes from, in order:
+
+1. **A local member**: its source's own `advertise_scope` (or derived
+   `hosts_from_source` pattern) — read straight from config, never stale.
+2. **A remote member**: the scope its syncs fetch from the edge's
+   `GET /sources/{id}/scope`, refreshed with every sync. An unreachable edge
+   keeps its **last-known** claim — stale routing beats no routing, the same
+   stance the cache takes about stale data.
+3. **The declared `groups`/`hosts` as fallback** — used until a claim is
+   known (a fresh restart, an edge too old to have the `/scope` route).
+4. **Nothing**: with no claim and no fallback the member claims *nothing* —
+   never everything. An unknown advertisement must not widen into a
+   catch-all; that direction fails dangerous.
+
+Startup validation refuses an advertised **local** member with neither a
+source claim nor a fallback (it could never route); a remote member may rely
+on the runtime claim alone, though a fallback is what covers the window
+before its first sync. `GET /status` reports each member's `ownership_mode`
+(`declared` / `advertised` / `fallback` / `unknown`), so a member quietly
+running on fallback is visible. During a mixed-version rollout, keep the
+declared fallback until every edge serves `/scope`; dropping it afterwards is
+the moment the duplication actually ends.
 
 ---
 

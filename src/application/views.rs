@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::HostVars;
-use crate::domain::source::Source;
+use crate::domain::source::{AdvertisedScopeRegistry, Source};
 use crate::domain::view::{Ownership, View, ViewMember};
 use crate::ports::cache::CachePort;
 
@@ -32,24 +32,41 @@ pub struct MemberSnapshot<'a> {
     // it is the difference between "no member claims this host" and "the
     // routing table has not loaded yet".
     pub ownership: Option<CacheEntry>,
-    pub owns: &'a Ownership,
+    // The EFFECTIVE ownership pattern this snapshot routes by. Owned rather
+    // than borrowed from the config, because an `advertised: true` member's
+    // pattern comes from outside the config: the member source's own
+    // advertise_scope (local members) or the scope its last sync fetched
+    // (remote members). None = an advertised member with no known scope and
+    // no declared fallback — it claims NOTHING, never everything.
+    pub owns: Option<Ownership>,
+    // How `owns` was determined, for /status: "declared" (written in the
+    // view), "advertised" (resolved from the member's claim), "fallback"
+    // (advertised wanted, declared pattern standing in), "unknown" (advertised
+    // wanted, nothing to route by)
+    pub ownership_mode: &'static str,
 }
 
 impl<'a> MemberSnapshot<'a> {
     pub fn claims(&self, hostname: &str) -> bool {
+        let Some(owns) = &self.owns else {
+            return false;
+        };
         match &self.ownership {
-            Some(entry) => self.owns.claims(&entry.dataset, hostname),
+            Some(entry) => owns.claims(&entry.dataset, hostname),
             // Without the inventory the group patterns cannot be expanded, but
             // an explicitly named host is a claim in its own right and stays
             // routable.
-            None => self.owns.hosts.iter().any(|host| host == hostname),
+            None => owns.hosts.iter().any(|host| host == hostname),
         }
     }
 
     pub fn claimed_hosts(&self) -> HashSet<&str> {
+        let Some(owns) = &self.owns else {
+            return HashSet::new();
+        };
         match &self.ownership {
-            Some(entry) => self.owns.claimed_hosts(&entry.dataset),
-            None => self.owns.hosts.iter().map(String::as_str).collect(),
+            Some(entry) => owns.claimed_hosts(&entry.dataset),
+            None => owns.hosts.iter().map(String::as_str).collect(),
         }
     }
 
@@ -120,24 +137,75 @@ pub struct ViewSnapshot<'a> {
     routing: OnceLock<HashMap<String, usize>>,
 }
 
+// The ownership pattern a member routes by, and how it was determined.
+//
+// Declared members keep exactly the old behavior. An `advertised: true`
+// member resolves, in order: the member source's own config claim (a LOCAL
+// member — always current, no staleness), the registry's last-known claim
+// from the member's syncs (a REMOTE member), the declared groups/hosts as a
+// fallback, or nothing. Nothing means the member claims NOTHING: an unknown
+// advertisement must never widen into a catch-all, that direction fails
+// dangerous (a member silently swallowing the whole inventory).
+fn effective_ownership(
+    member: &ViewMember,
+    source: Option<&Source>,
+    scopes: &AdvertisedScopeRegistry,
+) -> (Option<Ownership>, &'static str) {
+    if !member.owns.advertised {
+        return (Some(member.owns.clone()), "declared");
+    }
+
+    let claim = source
+        .and_then(|source| source.advertised_scope())
+        .or_else(|| scopes.get(&member.source));
+
+    if let Some(claim) = claim {
+        // A catch-all claim maps to the empty pattern, which IS Ownership's
+        // catch-all — deliberate: the edge explicitly said "everything".
+        return (
+            Some(Ownership {
+                source: member.owns.source.clone(),
+                groups: claim.groups,
+                hosts: claim.hosts,
+                advertised: true,
+            }),
+            "advertised",
+        );
+    }
+
+    if !member.owns.groups.is_empty() || !member.owns.hosts.is_empty() {
+        let mut fallback = member.owns.clone();
+        fallback.advertised = false;
+        return (Some(fallback), "fallback");
+    }
+
+    (None, "unknown")
+}
+
 // Take the snapshot. Cheap on purpose — a few cache reads and no host
 // resolution — because the refresh path takes one to route the request and
 // another to serve the data the refresh just wrote.
 pub fn snapshot<'a>(
     cache: &dyn CachePort,
     sources: &'a HashMap<String, Source>,
+    scopes: &AdvertisedScopeRegistry,
     view_id: &'a str,
     view: &'a View,
 ) -> ViewSnapshot<'a> {
     let members = view
         .members
         .iter()
-        .map(|member: &'a ViewMember| MemberSnapshot {
-            source_id: member.source.as_str(),
-            source: sources.get(&member.source),
-            entry: cache.get(&member.source),
-            ownership: cache.get(&member.owns.source),
-            owns: &member.owns,
+        .map(|member: &'a ViewMember| {
+            let (owns, ownership_mode) =
+                effective_ownership(member, sources.get(&member.source), scopes);
+            MemberSnapshot {
+                source_id: member.source.as_str(),
+                source: sources.get(&member.source),
+                entry: cache.get(&member.source),
+                ownership: cache.get(&member.owns.source),
+                owns,
+                ownership_mode,
+            }
         })
         .collect();
 
@@ -571,7 +639,13 @@ mod tests {
         sources: &'a HashMap<String, Source>,
         view: &'a View,
     ) -> ViewSnapshot<'a> {
-        snapshot(cache, sources, "view-all", view)
+        snapshot(
+            cache,
+            sources,
+            &AdvertisedScopeRegistry::new(),
+            "view-all",
+            view,
+        )
     }
 
     #[test]
@@ -824,5 +898,133 @@ mod tests {
             .map(String::as_str)
             .collect();
         assert_eq!(group_keys, vec!["children", "hosts", "vars"]);
+    }
+
+    // ---- advertised ownership resolution ----
+
+    fn scoped_sources(with_claim: bool) -> HashMap<String, Source> {
+        let claim = if with_claim {
+            "advertise_scope:\n  groups: [\"dc1\"]\n"
+        } else {
+            ""
+        };
+        let mut sources = HashMap::new();
+        sources.insert(
+            "src-dc1".to_string(),
+            serde_yaml_ng::from_str(&format!(
+                "name: A\nproject_id: p\nscript_path: x\nttl_seconds: 60\n{}",
+                claim
+            ))
+            .unwrap(),
+        );
+        sources
+    }
+
+    fn inventory_cache() -> MemoryCache {
+        let cache = MemoryCache::new();
+        cache.set(
+            "src-inv",
+            CacheEntry::new(
+                dataset(serde_json::json!({
+                    "hostvars": {"web01.dc1": {}},
+                    "groups": {"dc1": {"hosts": ["web01.dc1"]}}
+                })),
+                60,
+            ),
+        );
+        cache.set(
+            "src-dc1",
+            CacheEntry::new(
+                dataset(
+                    serde_json::json!({"hostvars": {"web01.dc1": {"role": "web"}}, "groups": {}}),
+                ),
+                60,
+            ),
+        );
+        cache
+    }
+
+    fn advertised_view(fallback: &str) -> View {
+        serde_yaml_ng::from_str(&format!(
+            "name: v\nmembers:\n  - source: src-dc1\n    owns:\n      source: \"src-inv\"\n      advertised: true\n{}",
+            fallback
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_local_member_routes_by_its_sources_own_claim() {
+        let cache = inventory_cache();
+        let sources = scoped_sources(true);
+        let view = advertised_view("");
+
+        let snap = snapshot(
+            &cache,
+            &sources,
+            &AdvertisedScopeRegistry::new(),
+            "vw",
+            &view,
+        );
+        assert_eq!(snap.members[0].ownership_mode, "advertised");
+        assert!(snap.members[0].claims("web01.dc1"));
+    }
+
+    #[test]
+    fn a_remote_style_member_routes_by_the_registry_claim() {
+        let cache = inventory_cache();
+        let sources = scoped_sources(false);
+        let view = advertised_view("");
+
+        let scopes = AdvertisedScopeRegistry::new();
+        scopes.record(
+            "src-dc1",
+            crate::domain::source::ScopeClaim {
+                groups: vec!["dc1".to_string()],
+                hosts: Vec::new(),
+                catch_all: false,
+            },
+        );
+
+        let snap = snapshot(&cache, &sources, &scopes, "vw", &view);
+        assert_eq!(snap.members[0].ownership_mode, "advertised");
+        assert!(snap.members[0].claims("web01.dc1"));
+    }
+
+    #[test]
+    fn an_unknown_claim_falls_back_to_the_declared_pattern() {
+        let cache = inventory_cache();
+        let sources = scoped_sources(false);
+        let view = advertised_view("      groups: [\"dc1\"]\n");
+
+        let snap = snapshot(
+            &cache,
+            &sources,
+            &AdvertisedScopeRegistry::new(),
+            "vw",
+            &view,
+        );
+        assert_eq!(snap.members[0].ownership_mode, "fallback");
+        assert!(snap.members[0].claims("web01.dc1"));
+    }
+
+    // The direction that must fail safe: no claim, no fallback = claims
+    // NOTHING — never everything, which is what a bare empty Ownership would
+    // have meant (catch-all).
+    #[test]
+    fn an_unknown_claim_without_fallback_claims_nothing() {
+        let cache = inventory_cache();
+        let sources = scoped_sources(false);
+        let view = advertised_view("");
+
+        let snap = snapshot(
+            &cache,
+            &sources,
+            &AdvertisedScopeRegistry::new(),
+            "vw",
+            &view,
+        );
+        assert_eq!(snap.members[0].ownership_mode, "unknown");
+        assert!(!snap.members[0].claims("web01.dc1"));
+        assert!(snap.members[0].claimed_hosts().is_empty());
     }
 }

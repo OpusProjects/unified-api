@@ -352,7 +352,9 @@ script is running are not lost (the enricher only overwrites hosts it returns).
 ## Output endpoints
 
 An output script transforms one or more cached datasets into whatever a consumer
-needs — the shipped example renders a merged Ansible inventory.
+needs — the shipped example renders a merged Ansible inventory. This section is
+the script I/O contract; routes, GET-vs-POST semantics, permissions and failure
+shapes live in [endpoints](endpoints.md).
 
 **Input:**
 

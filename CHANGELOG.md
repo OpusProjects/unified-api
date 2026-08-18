@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Audit trail for write operations.** Every mutating route that actually
+  runs — sync, cache evict, host put/delete, enricher run, project sync —
+  emits one structured log event under the dedicated `audit` tracing target:
+  `actor` (API key name, never the secret), `action`, `resource`,
+  `request_id` and `outcome`. Filter or route it independently of the rest of
+  the logs (`RUST_LOG=warn,audit=info`).
+
 - **Validate-only config check.** `unified-api --check-config` loads and
   validates the configuration directory exactly as startup would — strict
   keys, cross-references, cron expressions — prints every error found, and

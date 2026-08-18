@@ -92,6 +92,18 @@ log lines. Authenticated requests additionally log the API key's `key_name`,
 so an access-log line answers *who* did what; the field stays empty on public
 routes and on an API running open, where absence means nobody authenticated.
 
+**Mutating operations additionally emit an audit event** under the dedicated
+`audit` tracing target — one line per operation that actually ran, with
+`actor` (the key name, or `open` on an unauthenticated deployment), `action`
+(`sync`, `evict`, `host_put`, `host_delete`, `enricher_run`, `project_sync`),
+`resource`, `request_id` and `outcome` (`success`/`error` — a sync answers
+HTTP 200 either way, so the status alone cannot say). Denied attempts (401/403)
+are deliberately absent: they return before anything happens, and the access
+log line with the same `key_name` and `request_id` already records the attempt.
+The target makes the trail separable from the rest of the logs — keep it while
+quieting everything else with `RUST_LOG=warn,audit=info`, or route it in the
+log pipeline by the `audit` target field.
+
 **Prometheus metrics** are exposed at `GET /metrics` (public, like the health
 probes — scrapers don't carry the API key):
 

@@ -110,6 +110,7 @@ pub async fn sync_project_now(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<(StatusCode, Json<ProjectSyncResult>), ApiError> {
     if !auth.permissions.is_admin() {
         return Err(ApiError::admin_only());
@@ -136,6 +137,14 @@ pub async fn sync_project_now(
     // into the checkout per run (application::scripts) — so both an updated
     // script and one that first APPEARS with this sync take effect on the
     // next sync/enrich/endpoint run. No restart for either case.
+    crate::adapters::r#in::http::audit::record(
+        &auth,
+        &headers,
+        "project_sync",
+        &id,
+        if result.is_ok() { "success" } else { "error" },
+    );
+
     match result {
         Ok(()) => Ok((
             StatusCode::OK,

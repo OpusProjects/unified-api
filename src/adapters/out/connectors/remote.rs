@@ -27,7 +27,27 @@ use crate::ports::connector::{
 // second call to /status recovers how old the data already is at the origin
 // (dataset age + per-host ages) so the local cache entry can be built with
 // truthful freshness instead of pretending the data was born on transfer.
-pub struct RemoteConnector;
+//
+// Full pulls are CONDITIONAL: the origin's /dataset serves an ETag, so this
+// connector remembers the last one per URL and revalidates with
+// If-None-Match. A 304 skips the transfer and the re-parse — the steady
+// state of a central polling an unchanged edge every couple of minutes was
+// re-downloading megabytes per tick — and reuses the remembered dataset, so
+// the rest of the sync (ages, scope, cache apply) proceeds exactly as if the
+// bytes had travelled.
+pub struct RemoteConnector {
+    // Last validated full-pull response per dataset URL. Process-local like
+    // the scope registry: a restart just pays one full transfer again. The
+    // remembered dataset is the price of answering a 304 without touching the
+    // cache from here (a port must not) — one copy per remote source, shared
+    // via Arc with the output it produced.
+    memo: std::sync::Mutex<HashMap<String, FetchMemo>>,
+}
+
+struct FetchMemo {
+    etag: String,
+    dataset: std::sync::Arc<Dataset>,
+}
 
 impl Default for RemoteConnector {
     fn default() -> Self {
@@ -37,7 +57,9 @@ impl Default for RemoteConnector {
 
 impl RemoteConnector {
     pub fn new() -> Self {
-        Self
+        Self {
+            memo: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -125,18 +147,70 @@ impl ConnectorPort for RemoteConnector {
                 trigger_remote_refresh(&client, &sync_url, &api_key).await?;
             }
 
-            // 1. The data
+            // 1. The data. Only a FULL pull revalidates: a host-scoped
+            // response is partial data that must never be remembered as "the
+            // dataset", so scoped pulls stay unconditional.
             let dataset_url = format!(
                 "{}/api/v1/sources/{}/dataset{}",
                 base_url, remote_source, host_filter
             );
-            let response = get(&client, &dataset_url, &api_key).await?;
-            let dataset: Dataset = response.json().await.map_err(|e| {
-                connector_error(&format!(
-                    "remote dataset from '{}' is not valid Dataset JSON: {}",
-                    dataset_url, e
-                ))
-            })?;
+            let validator = if host_filter.is_empty() {
+                self.memo
+                    .lock()
+                    .expect("memo lock is never poisoned")
+                    .get(&dataset_url)
+                    .map(|memo| memo.etag.clone())
+            } else {
+                None
+            };
+
+            let response = get_conditional(&client, &dataset_url, &api_key, &validator).await?;
+            let dataset: Dataset = if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+                // Only reachable when a validator was sent, and a validator is
+                // only sent while its memo exists — the unwrap documents that.
+                let dataset = std::sync::Arc::clone(
+                    &self
+                        .memo
+                        .lock()
+                        .expect("memo lock is never poisoned")
+                        .get(&dataset_url)
+                        .expect("a 304 answers the validator this memo provided")
+                        .dataset,
+                );
+                metrics::counter!(
+                    "unified_api_remote_not_modified_total",
+                    "url" => base_url.clone(),
+                    "source" => remote_source.clone(),
+                )
+                .increment(1);
+                debug!(url = %dataset_url, "origin answered 304 — transfer and re-parse skipped");
+                (*dataset).clone()
+            } else {
+                let etag = response
+                    .headers()
+                    .get(reqwest::header::ETAG)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string);
+                let dataset: Dataset = response.json().await.map_err(|e| {
+                    connector_error(&format!(
+                        "remote dataset from '{}' is not valid Dataset JSON: {}",
+                        dataset_url, e
+                    ))
+                })?;
+                if let (Some(etag), true) = (etag, host_filter.is_empty()) {
+                    self.memo
+                        .lock()
+                        .expect("memo lock is never poisoned")
+                        .insert(
+                            dataset_url.clone(),
+                            FetchMemo {
+                                etag,
+                                dataset: std::sync::Arc::new(dataset.clone()),
+                            },
+                        );
+                }
+                dataset
+            };
 
             // 2. The truth about its age. Failing to get it degrades to
             // "fresh as of now" with a warning — data beats metadata.
@@ -263,7 +337,7 @@ async fn trigger_remote_refresh(
         total_hosts: usize,
     }
 
-    let response = send(client, reqwest::Method::POST, url, api_key).await?;
+    let response = send(client, reqwest::Method::POST, url, api_key, None).await?;
     let result: RemoteSyncResult = response.json().await.map_err(|e| {
         connector_error(&format!(
             "remote sync at '{}' did not answer a sync result: {}",
@@ -340,7 +414,26 @@ async fn get(
     url: &str,
     api_key: &Option<String>,
 ) -> Result<reqwest::Response, ConnectorError> {
-    send(client, reqwest::Method::GET, url, api_key).await
+    get_conditional(client, url, api_key, &None).await
+}
+
+// A GET that may carry If-None-Match, in which case 304 comes back as a
+// SUCCESS the caller handles — every other caller passes no validator and can
+// never see one.
+async fn get_conditional(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: &Option<String>,
+    if_none_match: &Option<String>,
+) -> Result<reqwest::Response, ConnectorError> {
+    send(
+        client,
+        reqwest::Method::GET,
+        url,
+        api_key,
+        if_none_match.as_deref(),
+    )
+    .await
 }
 
 // One place for the error mapping, because a 401 or a 403 means the same thing
@@ -350,10 +443,14 @@ async fn send(
     method: reqwest::Method,
     url: &str,
     api_key: &Option<String>,
+    if_none_match: Option<&str>,
 ) -> Result<reqwest::Response, ConnectorError> {
     let mut request = client.request(method, url);
     if let Some(key) = api_key {
         request = request.header("x-api-key", key);
+    }
+    if let Some(validator) = if_none_match {
+        request = request.header(reqwest::header::IF_NONE_MATCH, validator);
     }
 
     let response = request
@@ -363,6 +460,8 @@ async fn send(
 
     match response.status().as_u16() {
         200 => Ok(response),
+        // Only possible when a validator was sent (see get_conditional)
+        304 => Ok(response),
         401 => Err(connector_error(&format!(
             "'{}' answered 401 — is the token credential the remote API key?",
             url

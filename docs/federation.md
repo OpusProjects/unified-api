@@ -214,6 +214,11 @@ How the arrangement behaves once it is running, and what it costs to change its 
 - **A WAN cut does not lose data**: the central's cached copy keeps being
   served (stale beats nothing) and its `unified_api_sync_total{result="error"}`
   metric flags the broken link — alert on that.
+- **An unchanged edge costs almost nothing to poll**: full pulls revalidate
+  with the edge's `ETag` and a `304` skips the transfer — see
+  [connectors → remote](connectors.md#remote-sources--federation-connector_type-remote).
+  `unified_api_remote_not_modified_total` counts the skips, so a low ratio of
+  skips to syncs on a source that rarely changes is worth a look.
 - **Adding a DC** = deploy an edge (same manifests, different config), give
   it a `key-central`, add one credential + one remote source on the central,
   and append its id to `ep-global`. No consumer changes.

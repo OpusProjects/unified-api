@@ -331,6 +331,16 @@ remote without the route just yields no claim), which is what lets a view
 route by the edge's own claim: see
 [federation → the scope contract](federation.md#the-scope-contract).
 
+Full pulls are **conditional**: the remote's `/dataset` serves an `ETag`, the
+connector revalidates with `If-None-Match`, and a `304` skips the transfer
+and the re-parse entirely — the rest of the sync (ages, scope, cache apply)
+proceeds from the remembered dataset as if the bytes had travelled. A central
+polling an unchanged edge pays a handful of header bytes per tick instead of
+the full dataset; `unified_api_remote_not_modified_total` counts the skips.
+Host-scoped pulls stay unconditional (a partial response must never be
+remembered as "the dataset"), and the memory is process-local — a restart
+just pays one full transfer again.
+
 Failure semantics follow the house rules: `401`/`403`/`404` produce errors
 that say what to check; a WAN cut fails the sync loudly while the central
 keeps serving the last good dataset from its cache (stale beats nothing).

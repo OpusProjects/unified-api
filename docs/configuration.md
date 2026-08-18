@@ -6,6 +6,8 @@ mandatory; every other file defaults to empty if absent.
 
 All cross-references are **validated at startup** — an unknown source, credential
 or project id anywhere in the config aborts boot with a list of every error found.
+The same validation runs standalone with `unified-api --check-config`
+(see [CLI](cli.md#validating-configuration---check-config)) — for CI on a config repository.
 
 - [config.yaml (required)](#configyaml-required)
 - [sources.yaml](#sourcesyaml)

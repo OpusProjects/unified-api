@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Validate-only config check.** `unified-api --check-config` loads and
+  validates the configuration directory exactly as startup would — strict
+  keys, cross-references, cron expressions — prints every error found, and
+  exits 0/1 without binding, scheduling or resolving secrets. Run it in the
+  CI of a config repository so a typo fails the pull request instead of the
+  deploy.
+
 ## [0.18.0] - 2026-08-17
 
 ### Added

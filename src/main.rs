@@ -5,6 +5,36 @@ use unified_api::adapters::out::secrets::env::EnvSecrets;
 
 #[tokio::main]
 async fn main() {
+    // Validate-only mode for CI on config repositories: load and validate the
+    // configuration exactly as startup would, report, and exit — nothing
+    // binds, no scheduler starts, and no secrets are resolved (a CI runner
+    // validating YAML has no reason to hold the deployment's env vars).
+    // Plain prints rather than tracing: this output is for a human or a CI
+    // log, not for a log pipeline.
+    if std::env::args().skip(1).any(|arg| arg == "--check-config") {
+        let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
+        match unified_api::config::load_config(&config_dir) {
+            Ok(cfg) => {
+                println!(
+                    "configuration OK ({}): {} sources, {} views, {} credentials, \
+                     {} enrichers, {} endpoints, {} projects",
+                    config_dir,
+                    cfg.sources.len(),
+                    cfg.views.len(),
+                    cfg.credentials.len(),
+                    cfg.enrichers.len(),
+                    cfg.endpoints.len(),
+                    cfg.projects.len(),
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("configuration INVALID ({}): {}", config_dir, e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Structured logging — level configurable with RUST_LOG env var
     // RUST_LOG=debug cargo run → shows debug+info+warn+error
     // RUST_LOG=unified_api=debug → only debug from our crate

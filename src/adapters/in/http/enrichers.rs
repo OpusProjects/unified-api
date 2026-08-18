@@ -140,6 +140,18 @@ pub async fn run_enricher(
         ))
     })?;
 
+    crate::adapters::r#in::http::audit::record(
+        &auth,
+        &headers,
+        "enricher_run",
+        &id,
+        if outcome.success() {
+            "success"
+        } else {
+            "error"
+        },
+    );
+
     Ok(Json(EnrichResult {
         target_id: enricher_def.target_id.clone(),
         enricher_id: id,

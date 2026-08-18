@@ -35,6 +35,7 @@ pub async fn evict_source(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<EvictResult>, ApiError> {
     // Same permission as the other writes to a source's entry (host
     // PUT/DELETE): a key that may replace the hosts one by one may drop them
@@ -60,6 +61,7 @@ pub async fn evict_source(
     let hosts_dropped = entry.dataset.hostvars.len();
 
     state.cache.remove(&id);
+    crate::adapters::r#in::http::audit::record(&auth, &headers, "evict", &id, "success");
 
     Ok(Json(EvictResult {
         source_id: id,

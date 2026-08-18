@@ -135,6 +135,18 @@ pub async fn sync_source(
     )
     .await;
 
+    crate::adapters::r#in::http::audit::record(
+        &auth,
+        &headers,
+        "sync",
+        &id,
+        if outcome.success() {
+            "success"
+        } else {
+            "error"
+        },
+    );
+
     Ok(Json(SyncResult {
         source_id: id,
         success: outcome.success(),

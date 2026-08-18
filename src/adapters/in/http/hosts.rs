@@ -29,6 +29,7 @@ pub async fn put_host(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
     Json(vars): Json<HostVars>,
 ) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
@@ -50,6 +51,13 @@ pub async fn put_host(
     if !found {
         return Err(ApiError::source_not_cached(&id));
     }
+    crate::adapters::r#in::http::audit::record(
+        &auth,
+        &headers,
+        "host_put",
+        &format!("{}/{}", id, hostname),
+        "success",
+    );
     Ok(StatusCode::OK)
 }
 
@@ -71,6 +79,7 @@ pub async fn delete_host(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
     Path((id, hostname)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
@@ -102,5 +111,12 @@ pub async fn delete_host(
             hostname, id
         )));
     }
+    crate::adapters::r#in::http::audit::record(
+        &auth,
+        &headers,
+        "host_delete",
+        &format!("{}/{}", id, hostname),
+        "success",
+    );
     Ok(StatusCode::OK)
 }

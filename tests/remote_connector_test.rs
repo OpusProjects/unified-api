@@ -138,6 +138,162 @@ async fn fetches_the_remote_dataset_and_its_ages() {
     assert!(ages.host_ages["web02.dc1.example.com"] < 300);
 }
 
+// A fake edge that serves the raw wire contract, recording each /dataset
+// request's If-None-Match so the test can assert what the connector sent:
+// first pull unconditional, later pulls revalidating, 304 honoured.
+async fn spawn_etag_edge(
+    etag: &'static str,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+) {
+    use axum::http::{HeaderMap, StatusCode};
+
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>> = Default::default();
+    let record = std::sync::Arc::clone(&seen);
+
+    let app = axum::Router::new()
+        .route(
+            "/api/v1/sources/{id}/dataset",
+            axum::routing::get(move |headers: HeaderMap| {
+                let record = std::sync::Arc::clone(&record);
+                async move {
+                    let validator = headers
+                        .get("if-none-match")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string);
+                    let revalidated = validator.as_deref() == Some(etag);
+                    record.lock().unwrap().push(validator);
+                    if revalidated {
+                        StatusCode::NOT_MODIFIED.into_response()
+                    } else {
+                        (
+                            [("etag", etag)],
+                            axum::Json(serde_json::json!({
+                                "hostvars": {"web01.dc1.example.com": {"os": "OracleLinux"}},
+                                "groups": {}
+                            })),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        )
+        .route(
+            "/api/v1/sources/{id}/status",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({"dataset_age_seconds": 10, "hosts": []}))
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{}", addr), seen)
+}
+
+use axum::response::IntoResponse;
+
+#[tokio::test]
+async fn a_second_full_pull_revalidates_and_reuses_the_dataset_on_304() {
+    let (url, seen) = spawn_etag_edge("\"v1\"").await;
+
+    // ONE connector instance across pulls, as in production: the memo is its state
+    let connector = RemoteConnector::new();
+    for _ in 0..2 {
+        let output = connector
+            .execute(
+                "src-edge",
+                &[],
+                Default::default(),
+                &remote_config(&url),
+                &HashMap::new(),
+            )
+            .await
+            .expect("pull must succeed");
+        // The 304 pull serves the remembered dataset, indistinguishable here
+        assert_eq!(
+            output.dataset.hostvars.len(),
+            1,
+            "dataset must survive a 304"
+        );
+        assert!(output.ages.is_some(), "ages are still fetched on a 304");
+    }
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0], None, "the first pull has nothing to revalidate");
+    assert_eq!(
+        seen[1].as_deref(),
+        Some("\"v1\""),
+        "the second pull must revalidate with the remembered ETag"
+    );
+}
+
+#[tokio::test]
+async fn a_host_scoped_pull_never_revalidates() {
+    let (url, seen) = spawn_etag_edge("\"v1\"").await;
+
+    let connector = RemoteConnector::new();
+    // A full pull first, so a memo exists to wrongly tempt the scoped one
+    connector
+        .execute(
+            "src-edge",
+            &[],
+            Default::default(),
+            &remote_config(&url),
+            &HashMap::new(),
+        )
+        .await
+        .expect("full pull");
+
+    let mut scoped = remote_config(&url);
+    scoped.insert("scope".to_string(), "host".to_string());
+    scoped.insert("target".to_string(), "web01.dc1.example.com".to_string());
+    connector
+        .execute(
+            "src-edge",
+            &[],
+            Default::default(),
+            &scoped,
+            &HashMap::new(),
+        )
+        .await
+        .expect("scoped pull");
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        seen[1], None,
+        "a partial response must never be remembered or revalidated"
+    );
+}
+
+// The same round trip against a REAL edge instance, whose /dataset serves the
+// production ETag: two pulls through sync_source land the same dataset in the
+// central's cache — the compatibility check the fake edge cannot give.
+#[tokio::test]
+async fn revalidation_works_against_a_real_edge() {
+    let url = spawn_open_edge().await;
+
+    let connector = RemoteConnector::new();
+    for _ in 0..2 {
+        let output = connector
+            .execute(
+                "src-edge",
+                &[],
+                Default::default(),
+                &remote_config(&url),
+                &HashMap::new(),
+            )
+            .await
+            .expect("pull must succeed");
+        assert_eq!(output.dataset.hostvars.len(), 2);
+    }
+}
+
 #[tokio::test]
 async fn wrong_key_is_a_clear_401_error() {
     let url = spawn_edge("edge-key").await;

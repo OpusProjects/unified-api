@@ -15,6 +15,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   CI of a config repository so a typo fails the pull request instead of the
   deploy.
 
+### Changed
+
+- **Federation pulls are conditional.** The remote connector now revalidates
+  full pulls with the edge's `ETag` (`If-None-Match`); a `304` skips the
+  transfer and the re-parse while the sync still refreshes ages, scope and
+  health as before. A central polling an unchanged edge pays header bytes per
+  tick instead of the full dataset. New counter
+  `unified_api_remote_not_modified_total{url, source}` counts the skips.
+
 ## [0.18.0] - 2026-08-17
 
 ### Added

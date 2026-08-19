@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-19
+
 ### Added
 
 - **Configuration API.** The configuration directory is now readable and
@@ -1434,7 +1436,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/OpusProjects/unified-api/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/OpusProjects/unified-api/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/OpusProjects/unified-api/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/OpusProjects/unified-api/compare/v0.16.0...v0.17.0

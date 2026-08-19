@@ -61,6 +61,7 @@ The integration files:
 | `tests/remote_connector_test.rs` | Federation: the remote connector against a stub upstream |
 | `tests/static_inventory_test.rs` | Ansible YAML inventories read from disk |
 | `tests/git_test.rs` | Project checkouts through the git CLI adapter |
+| `tests/config_api_test.rs` | The configuration API: what a push reads, validates, writes and reloads — and the four things it refuses (a change that would not load, a stale `If-Match`, a reload that would remove authentication, a key whose env var is missing) |
 
 Integration tests build a real `AppState` via `AppBuilder`, which defaults to the
 `MockSecrets` adapter, and point sources at the sample scripts under `tests/`

@@ -1358,6 +1358,83 @@ mod tests {
         }
     }
 
+    // A reload does not reconfigure the running tasks, it replaces them: the
+    // generation spawned for the old configuration stops, and a new one runs
+    // the new sources. Without this the API would report a reload that had
+    // changed nothing about what is actually being gathered.
+    #[tokio::test]
+    async fn a_reload_replaces_the_running_task_generation() {
+        fn source_syncing_every_second() -> crate::domain::source::Source {
+            serde_yaml_ng::from_str(concat!(
+                "name: fast\n",
+                "project_id: p\n",
+                "script_path: \"tests/adapters/out/connectors/inventory.py\"\n",
+                "ttl_seconds: 3600\n",
+                "sync_interval_seconds: 1\n",
+            ))
+            .expect("source fixture")
+        }
+
+        async fn wait_for(state: &AppState, id: &str) -> bool {
+            for _ in 0..150 {
+                if state.cache.get(id).is_some() {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            false
+        }
+
+        let mut before = HashMap::new();
+        before.insert("src-before".to_string(), source_syncing_every_second());
+        let (_, state) = crate::AppBuilder::new().sources(before).build_with_state();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let supervisor = start_supervisor(Arc::clone(&state), shutdown_rx);
+
+        assert!(
+            wait_for(&state, "src-before").await,
+            "the first generation never synced"
+        );
+
+        // What a configuration reload does to the state, without the HTTP
+        // layer in the way: swap the snapshot, then say so.
+        let mut after = HashMap::new();
+        after.insert("src-after".to_string(), source_syncing_every_second());
+        let previous = state.config();
+        state.swap_config(Arc::new(crate::RuntimeConfig {
+            sources: after,
+            credentials: previous.credentials.clone(),
+            views: previous.views.clone(),
+            enrichers: previous.enrichers.clone(),
+            endpoints: previous.endpoints.clone(),
+            projects: previous.projects.clone(),
+            secrets: previous.secrets.clone(),
+            readyz_require_all_sources: previous.readyz_require_all_sources,
+        }));
+        state.reload.bump();
+
+        assert!(
+            wait_for(&state, "src-after").await,
+            "the source that arrived with the reload never got a task"
+        );
+
+        // And the outgoing generation really is gone: evict its source and
+        // nothing puts it back.
+        state.cache.remove("src-before");
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(
+            state.cache.get("src-before").is_none(),
+            "a task from the previous generation is still syncing a source that is no longer configured"
+        );
+
+        shutdown_tx.send(true).expect("receiver alive");
+        tokio::time::timeout(Duration::from_secs(10), supervisor)
+            .await
+            .expect("the supervisor drains its generations")
+            .expect("no panic");
+    }
+
     // The tokio default for a panicking task is silence: the JoinHandle is
     // dropped and that source simply stops syncing forever. The supervisor
     // restarts the body instead (and counts the panic).

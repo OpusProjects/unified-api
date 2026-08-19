@@ -186,3 +186,26 @@ fn diff(
 
     report
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_delta_names_what_arrived_left_and_changed() {
+        let old: HashMap<String, u8> = [("a".into(), 1), ("b".into(), 2)].into_iter().collect();
+        let new: HashMap<String, u8> = [("b".into(), 9), ("c".into(), 3)].into_iter().collect();
+
+        let delta = SectionDelta::between(&old, &new);
+
+        assert_eq!(delta.added, vec!["c"]);
+        assert_eq!(delta.removed, vec!["a"]);
+        assert_eq!(delta.changed, vec!["b"]);
+        assert_eq!(delta.total(), 3);
+    }
+
+    #[test]
+    fn an_identical_map_is_an_empty_delta() {
+        let map: HashMap<String, u8> = [("a".into(), 1)].into_iter().collect();
+        assert!(SectionDelta::between(&map, &map).is_empty());
+    }
+}

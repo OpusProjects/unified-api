@@ -821,6 +821,90 @@ mod tests {
     // Config tests need real files on disk.
     // We create a temporary directory with test YAML.
 
+    fn config_with(yaml: &str) -> AppConfig {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.yaml"), yaml).unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("fixture must load")
+    }
+
+    // A reload swaps what it can and has to be honest about the rest: these
+    // are the keys whose value was consumed once, at construction, and cannot
+    // be adopted by a process that is already running on them.
+    #[test]
+    fn the_settings_a_reload_cannot_apply_are_named_one_by_one() {
+        let live = RestartOnlySettings::from_config(&config_with(
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ));
+        let proposed = RestartOnlySettings::from_config(&config_with(concat!(
+            "server:\n",
+            "  host: \"0.0.0.0\"\n",
+            "  port: 9091\n",
+            "cache:\n",
+            "  persistence:\n",
+            "    path: \"/var/lib/unified-api/cache.json\"\n",
+        )));
+
+        let changed = live.changed_keys(&proposed);
+
+        assert!(changed.contains(&"server.host".to_string()));
+        assert!(changed.contains(&"server.port".to_string()));
+        assert!(changed.contains(&"cache.persistence".to_string()));
+        assert!(
+            !changed.contains(&"projects.dir".to_string()),
+            "an untouched key must not be reported: {:?}",
+            changed
+        );
+    }
+
+    #[test]
+    fn an_unchanged_configuration_needs_no_restart() {
+        let yaml = "server:\n  host: \"127.0.0.1\"\n  port: 9090\n";
+        let live = RestartOnlySettings::from_config(&config_with(yaml));
+        assert!(live.changed_keys(&live).is_empty());
+    }
+
+    // Reloadable settings are NOT restart-only: reporting one would tell an
+    // operator to restart for something that already took effect.
+    #[test]
+    fn a_reloadable_setting_is_not_reported_as_needing_a_restart() {
+        let live = RestartOnlySettings::from_config(&config_with(
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        ));
+        let proposed = RestartOnlySettings::from_config(&config_with(concat!(
+            "server:\n",
+            "  host: \"127.0.0.1\"\n",
+            "  port: 9090\n",
+            "  readyz_require_all_sources: true\n",
+        )));
+
+        assert!(live.changed_keys(&proposed).is_empty());
+    }
+
+    #[test]
+    fn the_config_api_is_off_unless_it_is_asked_for() {
+        let cfg = config_with("server:\n  host: \"127.0.0.1\"\n  port: 9090\n");
+        assert!(!cfg.config_api.enabled);
+
+        let cfg = config_with(concat!(
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+            "config_api:\n  enabled: true\n",
+        ));
+        assert!(cfg.config_api.enabled);
+    }
+
+    // The list the API serves and the list the loader reads have to be the
+    // same list, or a file becomes writable that nothing reads (or the other
+    // way round, which is worse).
+    #[test]
+    fn every_file_the_loader_reads_is_a_known_config_file() {
+        for name in CONFIG_FILES {
+            assert!(is_config_file(name));
+        }
+        assert!(is_config_file(REQUIRED_CONFIG_FILE));
+        assert!(!is_config_file("secrets.yaml"));
+        assert!(!is_config_file("../etc/passwd"));
+    }
+
     #[test]
     fn load_config_from_directory() {
         // tempdir: we create a temporary directory for the test

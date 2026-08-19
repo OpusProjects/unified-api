@@ -76,9 +76,10 @@ pub async fn dataset(
         None
     };
 
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         id,
         view,
@@ -190,9 +191,10 @@ pub fn status(
     view: &View,
     params: StatusParams,
 ) -> Result<SourceStatus, ApiError> {
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         id,
         view,
@@ -269,9 +271,10 @@ pub fn status(
 
 // GET /api/v1/sources/{id}/groups for a view.
 pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         id,
         view,
@@ -292,9 +295,10 @@ pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
 
 // GET /api/v1/sources/{id}/hosts for a view.
 pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         id,
         view,
@@ -315,9 +319,10 @@ pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
 // than an entry: it is listed so a consumer can discover it, and `is_fresh` /
 // `age_seconds` say what state it is in.
 pub fn info(state: &Arc<AppState>, id: &str, view: &View) -> CachedSourceInfo {
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         id,
         view,
@@ -388,9 +393,10 @@ async fn refresh_before_reading(
         return Err(ApiError::refresh_needs_hosts());
     }
 
+    let config = state.config();
     let snap = snapshot(
         &*state.cache,
-        &state.sources,
+        &config.sources,
         &state.advertised_scopes,
         view_id,
         view,
@@ -421,12 +427,12 @@ async fn refresh_before_reading(
     for (member, member_hosts) in routed {
         // Resolved for execution (script path into its checkout), not the bare
         // config entry: the refresh is about to run the member's connector.
-        // Members come from state.sources, so the id is always configured.
+        // Members come from the snapshot's sources, so the id is always configured.
         let source = state
             .source_for_sync(member.source_id)
             .expect("view members are configured sources");
         let connector = state.connector_for(&source.connector_type);
-        let enrichment = state.enrichment();
+        let enrichment = state.enrichment(&config);
 
         let outcome = refresh_hosts(
             &*state.cache,

@@ -193,7 +193,8 @@ async fn scheduled_sync(
         .unwrap_or_else(|| fallback.clone());
 
     let connector = state.connector_for(&source.connector_type);
-    let enrichment = state.enrichment();
+    let config = state.config();
+    let enrichment = state.enrichment(&config);
     let outcome = sync_source(
         &*state.cache,
         &**connector,
@@ -339,13 +340,142 @@ async fn scheduled_project_pull(
 // wait point (a running sync is finished, never cut mid-write), and main joins
 // the handles before the final snapshot — so the snapshot cannot serialize a
 // cache a sync task is still mutating.
+// The scheduler as something that can be REBUILT, not only started.
+//
+// Every periodic task captures the source (or enricher, or project) it was
+// spawned for, which is exactly what makes it cheap — and exactly what makes
+// it wrong the moment the configuration changes underneath it. So a reload
+// does not try to talk to the running tasks: it replaces them. One generation
+// of tasks is told to stop, a new generation is spawned from the new
+// snapshot, and the difference is invisible to everything else.
+//
+// The outgoing generation is NOT waited for here. Its tasks stop at their
+// next wait point, which for a task in the middle of a gather means after
+// that gather finishes — the same "never cut mid-write" rule shutdown
+// follows. Waiting would put a datacenter-wide sync between a pipeline's push
+// and its response. It is safe to overlap because SyncCoordinator already
+// serialises syncs of one source: the outgoing task's last gather and the
+// incoming task's first cannot interleave, whichever order they arrive in.
+//
+// Shutdown still drains everything, outgoing generations included, because
+// main's final cache snapshot may not run while any task can still write.
+pub fn start_supervisor(
+    state: Arc<AppState>,
+    mut shutdown: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut reload = state.reload.subscribe();
+        // Generations that have been told to stop and are finishing their
+        // in-flight work. Pruned on every reload so a long-lived process does
+        // not accumulate handles of tasks that ended hours ago.
+        let mut draining: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        loop {
+            if *shutdown.borrow() {
+                return;
+            }
+
+            let generation = state.reload.generation();
+            let (stop, stop_rx) = watch::channel(false);
+
+            let mut handles = start_sync_tasks(Arc::clone(&state), stop_rx.clone());
+            handles.extend(start_project_tasks(Arc::clone(&state), stop_rx.clone()));
+            // A project that arrived WITH this reload has no checkout yet, and
+            // the scripts of any source pointing into it would be missing
+            // until its first periodic pull — which for a project without an
+            // interval is never. Boot already clones (main), so this is only
+            // for what a reload added.
+            if generation > 0 {
+                handles.extend(clone_missing_checkouts(Arc::clone(&state)));
+            }
+
+            info!(generation, tasks = handles.len(), "Scheduler tasks started");
+
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    let _ = stop.send(true);
+                    draining.extend(handles);
+                    for handle in draining {
+                        let _ = handle.await;
+                    }
+                    return;
+                }
+                _ = reload.changed() => {
+                    let _ = stop.send(true);
+                    draining.retain(|handle| !handle.is_finished());
+                    draining.extend(handles);
+                }
+            }
+        }
+    })
+}
+
+// The project tasks, wired from the state rather than from main's locals —
+// which is what lets a reload restart them with a different projects.yaml.
+fn start_project_tasks(
+    state: Arc<AppState>,
+    shutdown: watch::Receiver<bool>,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    let projects = state.config().projects.clone();
+    if projects.is_empty() {
+        return Vec::new();
+    }
+    start_project_sync_tasks(
+        Arc::clone(&state.git),
+        Arc::clone(&state.secrets),
+        Arc::clone(&state.venv),
+        Arc::clone(&state.project_health),
+        projects,
+        state.projects_dir.clone(),
+        shutdown,
+    )
+}
+
+// One clone attempt per configured project that has no checkout on disk,
+// concurrently, each bounded by its own timeout_seconds (applied inside
+// sync_project). A project that is already checked out is left alone: its
+// periodic task will pull it, and re-cloning on every reload would throw away
+// a working tree for nothing.
+fn clone_missing_checkouts(state: Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
+    let projects = state.config().projects.clone();
+    let mut handles = Vec::new();
+
+    for (project_id, project) in projects {
+        let state = Arc::clone(&state);
+        handles.push(tokio::spawn(async move {
+            let checkout = state.projects_dir.join(&project_id).join(".git");
+            if tokio::fs::try_exists(&checkout).await.unwrap_or(false) {
+                return;
+            }
+            info!(project = %project_id, "New project — cloning its checkout");
+            match sync_project(
+                &*state.git,
+                &*state.secrets,
+                &*state.venv,
+                &state.project_health,
+                &project_id,
+                &project,
+                &state.projects_dir,
+            )
+            .await
+            {
+                Ok(()) => info!(project = %project_id, "Project checkout ready"),
+                Err(e) => error!(project = %project_id, error = %e, "Project sync failed"),
+            }
+        }));
+    }
+
+    handles
+}
+
 pub fn start_sync_tasks(
     state: Arc<AppState>,
     shutdown: watch::Receiver<bool>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
+    let config = state.config();
 
-    for (source_id, source) in &state.sources {
+    for (source_id, source) in &config.sources {
         // Config validation rejects schedule + interval together and a
         // schedule that does not parse; the match still has to answer for a
         // Source built without validation (tests), so it fails loudly rather
@@ -644,8 +774,9 @@ fn start_enricher_tasks(
     shutdown: watch::Receiver<bool>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
+    let config = state.config();
 
-    for (enricher_id, enricher) in &state.enrichers {
+    for (enricher_id, enricher) in &config.enrichers {
         let cadence = match (enricher.schedule.as_deref(), enricher.sync_interval_seconds) {
             (Some(expression), _) => match parse_cron(expression) {
                 Ok(cron) => {

@@ -56,6 +56,7 @@ src/
 │   ├── endpoint.rs           # OutputEndpoint
 │   └── view.rs               # View, ViewMember, Ownership (read-only composite)
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
+│   ├── config.rs             # reload: swap the RuntimeConfig, diff what changed
 │   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
 │   ├── enrich.rs             # run_enricher, EnrichOutcome
 │   ├── projects.rs           # sync_project (git checkout up to date, bounded by timeout_seconds)
@@ -64,6 +65,7 @@ src/
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
 │   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
+│   ├── config_store.rs       # ConfigStorePort (read/validate/commit the config dir)
 │   ├── connector.rs          # ConnectorPort
 │   ├── enricher.rs           # EnricherPort
 │   ├── git.rs                # GitPort (project checkouts)
@@ -79,6 +81,7 @@ src/
 │   │   │   ├── sources.rs    # Reads: list/dataset/status/groups/hosts
 │   │   │   ├── views.rs      # Same reads for a view id (sources.rs dispatches here)
 │   │   │   ├── cache.rs      # DELETE a source's cache entry (eviction)
+│   │   │   ├── config.rs     # The config directory over HTTP (admin-only, opt-in)
 │   │   │   ├── sync.rs       # POST sync
 │   │   │   ├── enrichers.rs  # POST enricher run
 │   │   │   ├── hosts.rs      # PUT/DELETE host
@@ -90,13 +93,16 @@ src/
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
 │       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
+│       ├── config/           # fs.rs: ConfigStorePort → staged validation + atomic commit
 │       ├── connectors/       # process.rs → tokio::process; ssh.rs → russh;
 │       │                     #   static_inventory.rs → Ansible YAML on disk;
 │       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
 │       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
 │       ├── output/           # process.rs: OutputPort → tokio::process
-│       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double
+│       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double;
+│                             #   vault.rs; cache.rs; reloadable.rs (swappable chain);
+│                             #   build_chain() — the one place the chain is wired
 config/                       # Split YAML config (server, credentials, sources, etc.)
 tests/                        # Integration tests (*.rs), with sample scripts mirroring src/adapters/out/:
 └── adapters/
@@ -122,6 +128,13 @@ Configuration from YAML files, parsed STRICTLY: every config struct carries
 `deny_unknown_fields`, so a typo'd key fails startup naming the key instead of
 silently applying the default (policy comment in `config.rs`). Free-form data
 belongs in the `config:` maps, which stay arbitrary.
+The reloadable part of it lives in `RuntimeConfig` behind one pointer on
+`AppState`: handlers and tasks call `state.config()` for a snapshot (an Arc
+clone, safe to hold across awaits) rather than reading fields directly, which
+is what lets a reload be a single swap. Whether a setting can reload is decided
+by where it is READ — per request/tick = reloadable; consumed once at
+construction (the bound socket, router layers, the snapshot task, the refresh
+semaphore) = restart-only, and named in `config::RestartOnlySettings`.
 Secrets resolved via `SecretsPort`: env vars / JSON files by default, native
 Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
 `secrets.vault:`, all behind a short resolution cache
@@ -179,6 +192,22 @@ Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
   "0 seconds old" exactly when a source stops syncing. The recorder is a
   process global installed once via `OnceLock`, so tests building many apps
   share it.
+- **Configuration is pushable, and reloads live:** with
+  `config_api.enabled: true` the config directory is readable and writable
+  over `/api/v1/config` (admin-only, reads included). A proposed change is
+  STAGED in a temp directory and loaded there before anything moves, so a
+  rejected push never touched the real directory; it is accepted or refused
+  whole (cross-file references only make sense against the complete set) and
+  each file lands via temp+rename. `?reload=true` or `POST /config/reload`
+  then swaps `RuntimeConfig`, rebuilds the secrets chain, replaces the API key
+  list and bumps a watch generation the scheduler supervisor listens on — it
+  stops the old task generation (finishing in-flight gathers, never cut
+  mid-write) and spawns a new one, overlapping safely because `SyncCoordinator`
+  serialises syncs per source. Two refusals are deliberate and happen BEFORE
+  the commit: a reload that would leave the API with no keys (silent auth
+  removal) and one naming an api-key env var that is not set. See
+  `docs/config-api.md`.
+
 - **Views:** `views.yaml` declares read-only composites over several sources.
   A view is served on the SOURCE routes and shares their id space (config
   validation rejects a collision) — that is what makes migrating a consumer a

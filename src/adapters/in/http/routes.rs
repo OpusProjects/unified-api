@@ -18,14 +18,14 @@ use utoipa_swagger_ui::{Config, SwaggerUi};
 
 use crate::AppState;
 use crate::adapters::r#in::http;
-use crate::adapters::r#in::http::auth::{ApiKeys, ResolvedApiKey};
+use crate::adapters::r#in::http::auth::{ApiKeyRegistry, ApiKeys};
 use crate::adapters::r#in::http::openapi::ApiDoc;
 
 // Build the complete router: API routes (protected by API keys if
 // configured), public health probes, and Swagger UI.
 pub fn create_router(
     state: Arc<AppState>,
-    api_keys: Vec<ResolvedApiKey>,
+    api_keys: Arc<ApiKeyRegistry>,
     cors_allowed_origins: Vec<String>,
     metrics_require_auth: bool,
 ) -> Router<()> {
@@ -68,6 +68,25 @@ pub fn create_router(
         .route(
             "/api/v1/projects/{id}/sync",
             post(http::projects::sync_project_now),
+        )
+        // The configuration directory itself. The two static segments and the
+        // {file} capture coexist because a static segment wins the match —
+        // there is no configuration file called "reload" or "validate", and
+        // even if someone made one, the route would still be the route.
+        .route(
+            "/api/v1/config",
+            get(http::config::get_config).put(http::config::put_config),
+        )
+        .route(
+            "/api/v1/config/validate",
+            post(http::config::validate_config),
+        )
+        .route("/api/v1/config/reload", post(http::config::reload_config))
+        .route(
+            "/api/v1/config/{file}",
+            get(http::config::get_config_file)
+                .put(http::config::put_config_file)
+                .delete(http::config::delete_config_file),
         );
 
     // The exposition labels every source id and host count, which describes
@@ -81,7 +100,7 @@ pub fn create_router(
 
     let api_routes = api_routes
         .layer(middleware::from_fn(http::auth::require_api_key))
-        .layer(axum::Extension(ApiKeys(api_keys.into())));
+        .layer(axum::Extension(ApiKeys(api_keys)));
 
     let mut router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))

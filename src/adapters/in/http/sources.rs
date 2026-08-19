@@ -112,7 +112,8 @@ async fn refresh_before_reading(
     }
 
     let connector = state.connector_for(&source.connector_type);
-    let enrichment = state.enrichment();
+    let config = state.config();
+    let enrichment = state.enrichment(&config);
     Ok(refresh_hosts(
         &*state.cache,
         &**connector,
@@ -238,6 +239,7 @@ pub async fn list_cached_sources(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
 ) -> Json<Vec<CachedSourceInfo>> {
+    let config = state.config();
     let keys = state.cache.keys();
 
     let mut sources: Vec<CachedSourceInfo> = keys
@@ -259,7 +261,7 @@ pub async fn list_cached_sources(
     // Views are appended sorted by id, and are listed whether or not their
     // members have synced: a view is a contract to discover, not a cache entry
     // that appears once there is data.
-    let mut view_ids: Vec<&String> = state
+    let mut view_ids: Vec<&String> = config
         .views
         .keys()
         .filter(|id| auth.permissions.allows_source(id))
@@ -268,7 +270,7 @@ pub async fn list_cached_sources(
     sources.extend(
         view_ids
             .into_iter()
-            .map(|id| views::info(&state, id, &state.views[id])),
+            .map(|id| views::info(&state, id, &config.views[id])),
     );
 
     Json(sources)
@@ -356,7 +358,8 @@ pub async fn get_source_dataset(
 
     // A view answers here, in the same shapes: the id space is shared and
     // config validation rejects a collision, so this dispatch is unambiguous.
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         return views::dataset(&state, &id, view, params, headers).await;
     }
 
@@ -571,7 +574,8 @@ pub async fn list_source_groups(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         return Ok(Json(views::groups(&state, &id, view)));
     }
     let entry = state
@@ -631,7 +635,8 @@ pub async fn list_source_hosts(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         return Ok(Json(views::hosts(&state, &id, view)));
     }
     let entry = state
@@ -712,14 +717,15 @@ pub async fn source_status(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         return Ok(Json(views::status(&state, &id, view, params)?));
     }
     let entry = state
         .cache
         .get(&id)
         .ok_or_else(|| ApiError::source_not_cached(&id))?;
-    let source = state.sources.get(&id);
+    let source = config.sources.get(&id);
 
     let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
 

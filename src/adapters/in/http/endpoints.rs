@@ -34,7 +34,8 @@ pub async fn list_endpoints(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
 ) -> Json<Vec<EndpointInfo>> {
-    let mut endpoints: Vec<EndpointInfo> = state
+    let config = state.config();
+    let mut endpoints: Vec<EndpointInfo> = config
         .endpoints
         .iter()
         .filter(|(id, _)| auth.permissions.allows_endpoint(id))
@@ -144,7 +145,8 @@ async fn execute_endpoint(
             id
         )));
     }
-    let endpoint = state
+    let config = state.config();
+    let endpoint = config
         .endpoints
         .get(&id)
         .ok_or_else(|| ApiError::not_found(format!("endpoint '{}' is not configured", id)))?;

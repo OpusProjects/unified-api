@@ -12,7 +12,7 @@ use serde::Deserialize;
 // Here the stakes are highest: this file is the access-control list, and a
 // silently dropped key means a permission the operator believes is in force
 // and is not.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyDef {
     pub name: String,

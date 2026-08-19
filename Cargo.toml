@@ -26,6 +26,10 @@ dashmap = "6"
 # same versions adds no new code to the build.
 hmac = "0.13"
 sha1 = "0.11"
+# Content hashes for the configuration API: a file's ETag is the sha256 of
+# its bytes, so a write can be refused when someone else changed it first.
+# Same digest generation as sha1 above, and already in the tree transitively.
+sha2 = "0.11"
 metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # Remote connector (federation): fetch datasets from other unified-api

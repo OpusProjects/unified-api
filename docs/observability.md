@@ -117,6 +117,8 @@ probes — scrapers don't carry the API key):
 | `unified_api_enrich_total` | `source`, `result` | Enricher runs |
 | `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |
 | `unified_api_endpoint_total` | `endpoint`, `result` | Output endpoint runs |
+| `unified_api_config_writes_total` | `outcome` | Configuration writes over the API: `success`, `rejected` (did not validate — nothing was written) or `error` (could not be written). See [Configuration API](config-api.md) |
+| `unified_api_config_reloads_total` | `outcome` | Configuration reloads: `success` or `invalid` |
 | `unified_api_endpoint_duration_seconds` | `endpoint` | Endpoint duration histogram |
 | `unified_api_source_cached` | `source` | 1 if the configured source has a cache entry, 0 if it has never synced |
 | `unified_api_source_age_seconds` | `source` | Seconds since the dataset was last fetched |

@@ -20,7 +20,7 @@ use super::dataset::Dataset;
 // of `groups:`) would otherwise deserialize into an empty pattern, which claims
 // everything. A hard startup error beats a member that silently swallows the
 // whole inventory.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct View {
     pub name: String,
@@ -43,7 +43,7 @@ pub struct View {
     pub ttl_seconds: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ViewMember {
     // Source id this member serves data from
@@ -73,7 +73,7 @@ pub struct ViewMember {
 // The cost is a duplicated truth (the edge says "I am datacenter_dc2" in its
 // own config; the view repeats it). The no-drift version would have the edge
 // advertise its scope over the API and the view read it.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Ownership {
     // Source whose cached dataset the groups below are resolved against

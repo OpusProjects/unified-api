@@ -87,12 +87,13 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> String {
 // syncing, which is the failure this is meant to catch. Reading the cache at
 // scrape time is one pass over the entries and is always current.
 fn record_source_gauges(state: &AppState) {
+    let config = state.config();
     let cached: HashSet<String> = state.cache.keys().into_iter().collect();
 
     // Every CONFIGURED source reports whether it is in the cache at all, so a
     // source that has never synced is a 0 to alert on instead of an absent
     // series (which is indistinguishable from a renamed or removed source).
-    for source_id in state.sources.keys() {
+    for source_id in config.sources.keys() {
         metrics::gauge!("unified_api_source_cached", "source" => source_id.clone())
             .set(if cached.contains(source_id) { 1.0 } else { 0.0 });
 
@@ -162,10 +163,11 @@ fn record_source_gauges(state: &AppState) {
 // hosts are its members' hosts — folding them into one series would double-count
 // every host in any sum across the label.
 fn record_view_gauges(state: &AppState) {
-    for (view_id, view) in &state.views {
+    let config = state.config();
+    for (view_id, view) in &config.views {
         let snapshot = crate::application::views::snapshot(
             &*state.cache,
-            &state.sources,
+            &config.sources,
             &state.advertised_scopes,
             view_id.as_str(),
             view,
@@ -221,7 +223,8 @@ fn record_view_gauges(state: &AppState) {
 // a configured-but-never-run job simply has no series yet (like a source with
 // no cache entry), and a job removed from config stops being re-set.
 fn record_task_health_gauges(state: &AppState) {
-    for enricher_id in state.enrichers.keys() {
+    let config = state.config();
+    for enricher_id in config.enrichers.keys() {
         if let Some(health) = state.enrich_health.get(enricher_id) {
             metrics::gauge!("unified_api_enricher_consecutive_failures", "enricher" => enricher_id.clone())
                 .set(health.consecutive_failures as f64);
@@ -232,7 +235,7 @@ fn record_task_health_gauges(state: &AppState) {
         }
     }
 
-    for project_id in state.projects.keys() {
+    for project_id in config.projects.keys() {
         if let Some(health) = state.project_health.get(project_id) {
             metrics::gauge!("unified_api_project_sync_consecutive_failures", "project" => project_id.clone())
                 .set(health.consecutive_failures as f64);

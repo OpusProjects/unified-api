@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::Request;
 use axum::http::StatusCode;
@@ -50,6 +50,102 @@ impl Permissions {
     }
 }
 
+// The keys in force right now, behind one pointer a reload can replace.
+//
+// The middleware reads this on every request rather than holding a list, so
+// rewriting api_keys.yaml takes effect on the next request — the one thing
+// that would otherwise still need a restart on a system whose whole point is
+// that a configuration push does not need one. A request already in flight
+// keeps the set it authenticated against.
+pub struct ApiKeyRegistry {
+    keys: RwLock<Arc<[ResolvedApiKey]>>,
+}
+
+impl ApiKeyRegistry {
+    pub fn new(keys: Vec<ResolvedApiKey>) -> Self {
+        Self {
+            keys: RwLock::new(keys.into()),
+        }
+    }
+
+    pub fn load(&self) -> Arc<[ResolvedApiKey]> {
+        Arc::clone(&self.keys.read().expect("api key registry lock"))
+    }
+
+    pub fn replace(&self, keys: Vec<ResolvedApiKey>) {
+        *self.keys.write().expect("api key registry lock") = keys.into();
+    }
+
+    pub fn len(&self) -> usize {
+        self.load().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.load().is_empty()
+    }
+}
+
+// Turn api_keys.yaml definitions into runtime keys by reading each declared
+// env var. A declared-but-missing env var is a hard error: the alternative
+// (skip the key with a warn) means a typo silently locks a consumer out. The
+// legacy UNIFIED_API_KEY, if set, joins as an admin key — existing
+// deployments keep working unchanged.
+//
+// In the adapter that owns the keys rather than in main, because a
+// configuration reload has to do exactly this again, against the file it just
+// accepted, and a second copy of the rules is a second set of rules.
+pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedApiKey>, String> {
+    use crate::domain::api_key::ApiKeyRole;
+
+    let mut keys = Vec::new();
+
+    // Sorted so the order is deterministic in tests and logs
+    let mut ids: Vec<&String> = cfg.api_keys.keys().collect();
+    ids.sort();
+
+    for id in ids {
+        let def = &cfg.api_keys[id];
+        let secret = std::env::var(&def.env).map_err(|_| {
+            format!(
+                "API key '{}' expects the secret in env var '{}', which is not set",
+                id, def.env
+            )
+        })?;
+        if secret.is_empty() {
+            return Err(format!(
+                "API key '{}': env var '{}' is set but empty",
+                id, def.env
+            ));
+        }
+
+        let permissions = match def.role {
+            ApiKeyRole::Admin => Permissions::Admin,
+            ApiKeyRole::Restricted => Permissions::Scoped {
+                sources: def.sources.iter().cloned().collect(),
+                endpoints: def.endpoints.iter().cloned().collect(),
+            },
+        };
+
+        keys.push(ResolvedApiKey {
+            name: def.name.clone(),
+            secret,
+            permissions,
+        });
+    }
+
+    if let Ok(secret) = std::env::var("UNIFIED_API_KEY")
+        && !secret.is_empty()
+    {
+        keys.push(ResolvedApiKey {
+            name: "default".to_string(),
+            secret,
+            permissions: Permissions::Admin,
+        });
+    }
+
+    Ok(keys)
+}
+
 // Who authenticated this request. The middleware inserts it into the request
 // extensions; handlers extract it with Extension<AuthContext> and enforce the
 // permissions for the specific id they operate on (the middleware cannot — it
@@ -61,22 +157,24 @@ pub struct AuthContext {
     pub permissions: Permissions,
 }
 
-// The full set of configured keys, injected as a router Extension.
-// Arc<[...]> instead of Vec: the middleware clones this on every request, and
-// cloning an Arc is a pointer copy instead of a Vec deep-copy.
+// The registry, injected as a router Extension. The middleware clones the
+// Arc (a pointer copy) on every request and reads the current key list
+// through it, so a reload that replaces the list is picked up without
+// rebuilding the router.
 #[derive(Clone)]
-pub struct ApiKeys(pub Arc<[ResolvedApiKey]>);
+pub struct ApiKeys(pub Arc<ApiKeyRegistry>);
 
 pub async fn require_api_key(mut request: Request, next: Next) -> Result<Response, StatusCode> {
     let keys = request
         .extensions()
         .get::<ApiKeys>()
         .expect("ApiKeys extension missing")
-        .clone();
+        .0
+        .load();
 
     // No keys configured = open API (main.rs warns loudly about this).
     // Everything is admin so handlers don't need a special "no auth" path.
-    if keys.0.is_empty() {
+    if keys.is_empty() {
         request.extensions_mut().insert(AuthContext {
             key_name: None,
             permissions: Permissions::Admin,
@@ -104,7 +202,7 @@ pub async fn require_api_key(mut request: Request, next: Next) -> Result<Respons
     // early break: the scan always visits every key so the response time does
     // not reveal WHICH key matched, only that one did.
     let mut matched: Option<&ResolvedApiKey> = None;
-    for key in keys.0.iter() {
+    for key in keys.iter() {
         // ct_eq always compares all bytes (if lengths match) — a normal ==
         // short-circuits on the first different byte and that time delta
         // leaks info to guess the secret byte-by-byte.
@@ -158,7 +256,9 @@ mod tests {
         Router::new()
             .route("/protected", get(whoami))
             .layer(middleware::from_fn(require_api_key))
-            .layer(axum::Extension(ApiKeys(keys.into())))
+            .layer(axum::Extension(ApiKeys(Arc::new(ApiKeyRegistry::new(
+                keys,
+            )))))
     }
 
     async fn body_string(resp: Response) -> String {

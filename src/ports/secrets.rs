@@ -20,3 +20,14 @@ pub trait SecretsPort: Send + Sync {
 pub struct SecretsError {
     pub message: String,
 }
+
+// Replacing the resolver chain under a running process.
+//
+// A separate trait from SecretsPort because it is a different direction of
+// use: everything in the application RESOLVES secrets, and exactly one thing —
+// a configuration reload — replaces the resolver. Keeping them apart means a
+// handler cannot swap the chain by accident, and AppState can hold the swap
+// capability without naming the adapter that implements it.
+pub trait SecretsSwapPort: Send + Sync {
+    fn replace(&self, next: std::sync::Arc<dyn SecretsPort>);
+}

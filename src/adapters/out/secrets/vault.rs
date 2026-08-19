@@ -23,7 +23,7 @@ use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 // Config shape of the `secrets.vault:` block in config.yaml. Defined next to
 // the adapter it configures and embedded by config::SecretsConfig; strict
 // like every config struct (see the policy comment in config.rs).
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VaultConfig {
     // e.g. "https://vault.example.com:8200" (scheme required)

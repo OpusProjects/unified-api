@@ -75,7 +75,8 @@ pub async fn sync_source(
     // A view gathers nothing, so a sync of it has no meaning to invent. The
     // tempting reading — "sync every member" — would let a request aimed at one
     // consumer's view re-gather somebody else's datacenter.
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         return Err(crate::adapters::r#in::http::views::write_refused(
             &id,
             view,
@@ -120,7 +121,7 @@ pub async fn sync_source(
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)
     let connector = state.connector_for(&source.connector_type);
-    let enrichment = state.enrichment();
+    let enrichment = state.enrichment(&config);
     let outcome = application_sync_source(
         &*state.cache,
         &**connector,

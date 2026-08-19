@@ -201,9 +201,20 @@ impl ConfigStorePort for FsConfigStore {
         // Write every file first, rename every file second. The window in
         // which the directory holds a mix of old and new is the duration of
         // the renames rather than the duration of the writes.
+        //
+        // `files` is the whole directory, not just the payload — that is what
+        // makes the change transactional. But a file whose bytes are already
+        // what we would write is SKIPPED, because writing it would reset an
+        // mtime that nothing changed, and mtime is exactly what
+        // GET /api/v1/config reports as `modified`. A single-file PUT used to
+        // stamp all eight files with the time of the request, so "when did
+        // credentials.yaml last change" answered "just now" forever.
         let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
         for (name, contents) in &files {
             let target = self.dir.join(name);
+            if std::fs::read_to_string(&target).is_ok_and(|current| current == *contents) {
+                continue;
+            }
             let tmp = self.dir.join(format!(".{}.tmp", name));
             std::fs::write(&tmp, contents)
                 .map_err(|e| format!("write '{}': {}", tmp.display(), e))?;
@@ -308,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commit_writes_every_file_and_removes_the_temporaries() {
+    fn a_commit_leaves_no_temporary_files_behind() {
         let dir = dir_with_minimal_config();
         let store = FsConfigStore::new(dir.path());
 
@@ -327,6 +338,53 @@ mod tests {
             .filter(|name| name.ends_with(".tmp"))
             .collect();
         assert!(temporaries.is_empty(), "left behind: {:?}", temporaries);
+    }
+
+    // A write of one file must not restamp the other seven. `modified` in the
+    // inventory is what an operator reads to answer "when did this last
+    // change", and a commit that rewrites the whole directory makes every
+    // file answer "just now" whether or not anything happened to it.
+    #[test]
+    fn a_commit_leaves_the_files_it_does_not_change_alone() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+
+        let untouched = || {
+            std::fs::metadata(dir.path().join("config.yaml"))
+                .and_then(|m| m.modified())
+                .expect("mtime")
+        };
+        let before = untouched();
+
+        // Long enough that a rewrite would land on a different mtime, so this
+        // test fails if the skip is ever removed.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let change = writing(&[(
+            "credentials.yaml",
+            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+        )]);
+        store.commit(&change).expect("commits");
+
+        assert_eq!(
+            before,
+            untouched(),
+            "config.yaml was not part of the change and must not have been rewritten"
+        );
+        assert!(dir.path().join("credentials.yaml").exists());
+
+        // And re-committing identical bytes is a no-op on disk too.
+        let written = std::fs::metadata(dir.path().join("credentials.yaml"))
+            .and_then(|m| m.modified())
+            .expect("mtime");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        store.commit(&change).expect("commits");
+        assert_eq!(
+            written,
+            std::fs::metadata(dir.path().join("credentials.yaml"))
+                .and_then(|m| m.modified())
+                .expect("mtime"),
+            "re-pushing the same bytes has changed nothing and must not say otherwise"
+        );
     }
 
     #[test]

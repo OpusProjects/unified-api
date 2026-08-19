@@ -363,3 +363,31 @@ versions without restarting the app (see
 duration on success, `502` when git fails (bad URL, auth, network), `404` for
 an unknown project id. Scripts are re-read from disk on every execution, so an
 updated checkout takes effect on the next run.
+
+---
+
+## Configuration (admin-only)
+
+Present only where `config_api.enabled` is set; otherwise every route below
+answers `403` with a body saying so. Restricted keys always get `403` — these
+files describe the estate.
+
+| Route | Meaning |
+|---|---|
+| `GET /api/v1/config` | Every file with its sha256, what is missing, whether it still loads, whether the process is running it |
+| `GET /api/v1/config/{file}` | One file verbatim; `ETag` is the sha256, `If-None-Match` answers `304` |
+| `PUT /api/v1/config/{file}` | Replace one file (raw YAML body) |
+| `DELETE /api/v1/config/{file}` | Remove one optional file |
+| `PUT /api/v1/config` | Replace the whole directory in one transaction |
+| `POST /api/v1/config/validate` | Dry run — the same checks as `--check-config`, nothing written |
+| `POST /api/v1/config/reload` | Apply what is on disk to the running process |
+
+Writes take `?reload=true` to apply the change as part of the write. Status
+codes: `400` the directory would not load (body carries `errors`, an array of
+every problem, alongside the usual `error`), `409` it would break the running
+process (a key's env var is missing, or authentication would be turned off),
+`412` `If-Match` did not match, `404` not a configuration file.
+
+Nothing is written unless the whole proposed directory validates, and nothing
+is applied unless it can be applied completely. Full contract, including which
+settings still need a restart: [Configuration API](config-api.md).

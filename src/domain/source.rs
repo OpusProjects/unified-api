@@ -35,7 +35,7 @@ pub enum OutputFormat {
 
 // Unknown keys are config typos: fail startup naming the key instead of
 // silently applying a default (the policy is explained once, in config.rs).
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
     pub name: String,
@@ -125,7 +125,7 @@ pub struct Source {
 // vocabulary a view's Ownership uses, minus the resolving source (that is the
 // CONSUMER's business: the central decides which of its inventories the
 // groups resolve against).
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AdvertisedScope {
     #[serde(default)]
@@ -207,7 +207,7 @@ impl Source {
 
 // Dynamic host list: which source to read, which slice of it, and how to
 // connect to each host.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct HostsFromSource {
     // Source id whose cached dataset provides the hosts
@@ -223,7 +223,7 @@ pub struct HostsFromSource {
 
 // The UNION of: members of the listed groups + the individually listed
 // hosts. Names are matched exactly.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MatchPattern {
     #[serde(default)]
@@ -392,7 +392,7 @@ impl Source {
 }
 
 // TTL Overrides: you can give different TTLs to specific groups or hosts
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TtlOverrides {
     // HashMap<String, u64> = dict[str, int] in Python

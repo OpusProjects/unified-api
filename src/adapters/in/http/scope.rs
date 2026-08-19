@@ -55,7 +55,8 @@ pub async fn source_scope(
     }
 
     // Views share the source routes and id space, as everywhere else
-    if let Some(view) = state.views.get(&id) {
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
         let claim = view.advertised_scope();
         return Ok(Json(ScopeInfo {
             source_id: id,
@@ -68,7 +69,7 @@ pub async fn source_scope(
     }
 
     // Config, not cache: this is the not-configured 404, like POST /sync
-    let source = state
+    let source = config
         .sources
         .get(&id)
         .ok_or_else(|| ApiError::source_not_configured(&id))?;

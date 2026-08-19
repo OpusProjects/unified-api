@@ -37,9 +37,10 @@ pub struct ReadyStatus {
     )
 )]
 pub async fn readyz(State(state): State<Arc<AppState>>) -> (StatusCode, Json<ReadyStatus>) {
-    let sources_total = state.sources.len();
+    let config = state.config();
+    let sources_total = config.sources.len();
 
-    let sources_pending: Vec<String> = state
+    let sources_pending: Vec<String> = config
         .sources
         .keys()
         .filter(|id| state.cache.get(id).is_none())
@@ -54,7 +55,7 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Rea
     // configured source must be in cache first, for deployments where a
     // partial inventory is worse than none (a job template that would run
     // against half a datacenter).
-    let ready = if state.readyz_require_all_sources {
+    let ready = if config.readyz_require_all_sources {
         sources_pending.is_empty()
     } else {
         sources_total == 0 || sources_synced > 0

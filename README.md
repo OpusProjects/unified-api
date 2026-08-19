@@ -28,6 +28,7 @@ and every one of them sees the same inventory.
 - **Views**: one id over several sources, routing each host to the member that owns it
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **Refresh**: a read can bring the hosts it names up to date, bounded by the source's TTL
+- **Configuration API**: a pipeline pushes the config directory and reloads it live, no restart
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~11k lines
 
@@ -41,6 +42,7 @@ and every one of them sees the same inventory.
 | [Architecture](docs/architecture.md) | The four layers, the dependency rule and the concurrency model |
 | [CLI](docs/cli.md) | Environment variables, log tuning, health checks and common curl operations |
 | [Configuration](docs/configuration.md) | Every YAML file field by field, env vars and startup validation |
+| [Configuration API](docs/config-api.md) | Pushing the config directory over HTTP, validating it and reloading it live |
 | [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
 | [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |

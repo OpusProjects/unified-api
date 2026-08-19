@@ -8,3 +8,11 @@ server:
 #   persistence:
 #     path: "/var/lib/unified-api/cache.json"
 #     interval_seconds: 60
+
+# Optional: let an admin key read, write and reload this directory over HTTP,
+# so a configuration pipeline can push a change instead of publishing an
+# artifact this instance has to pull. OFF by default — turning it on means an
+# admin key can rewrite every file the loader reads, api_keys.yaml included.
+# See docs/config-api.md.
+# config_api:
+#   enabled: true

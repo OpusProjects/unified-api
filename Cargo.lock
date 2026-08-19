@@ -3459,6 +3459,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha1",
+ "sha2 0.11.0",
  "subtle",
  "tempfile",
  "tokio",

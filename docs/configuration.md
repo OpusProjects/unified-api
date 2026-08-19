@@ -19,6 +19,9 @@ The same validation runs standalone with `unified-api --check-config`
 - [api_keys.yaml](#api_keysyaml)
 - [Environment variables](#environment-variables)
 
+Configuration is read at startup, and can also be **written and reloaded over
+HTTP** where that is enabled — see [Configuration API](config-api.md).
+
 ---
 
 ## config.yaml (required)
@@ -76,6 +79,14 @@ secrets:
   # against a networked backend. This is also the rotation latency: a rotated
   # secret is picked up within this many seconds.
   cache_ttl_seconds: 60
+
+# Optional, OFF by default. Lets an admin key read, write and reload this
+# directory over HTTP, so a pipeline can push a change instead of publishing
+# an artifact the instance has to pull. Turning it on means an admin key can
+# rewrite every file the loader reads, api_keys.yaml included — the same
+# authority as editing the mounted directory. See docs/config-api.md.
+config_api:
+  enabled: false
 ```
 
 ---

@@ -60,7 +60,8 @@ pub async fn list_enrichers(
 ) -> Json<Vec<EnricherInfo>> {
     // Same rule as running one: an enricher writes into its target, so the
     // target's permission is the one that governs.
-    let mut enrichers: Vec<EnricherInfo> = state
+    let config = state.config();
+    let mut enrichers: Vec<EnricherInfo> = config
         .enrichers
         .iter()
         .filter(|(_, enricher)| auth.permissions.allows_source(&enricher.target_id))
@@ -100,7 +101,8 @@ pub async fn run_enricher(
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<EnrichResult>, ApiError> {
-    let enricher_def = state
+    let config = state.config();
+    let enricher_def = config
         .enrichers
         .get(&id)
         .ok_or_else(|| ApiError::not_found(format!("enricher '{}' is not configured", id)))?;

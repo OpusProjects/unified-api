@@ -1,7 +1,6 @@
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use unified_api::adapters::out::git::cli::CliGit;
-use unified_api::adapters::out::secrets::env::EnvSecrets;
 
 #[tokio::main]
 async fn main() {
@@ -54,9 +53,14 @@ async fn main() {
         }
     };
 
+    // What this process is about to be BUILT with, recorded before the
+    // configuration is consumed. A later reload diffs against it to name the
+    // keys it cannot adopt (see config::RestartOnlySettings).
+    let live_settings = unified_api::config::RestartOnlySettings::from_config(&cfg);
+
     // Secrets are read here, at the boundary: the rest of the app receives
     // resolved keys as parameters and does not touch environment variables.
-    let api_keys = match resolve_api_keys(&cfg) {
+    let api_keys = match unified_api::adapters::r#in::http::auth::resolve_api_keys(&cfg) {
         Ok(keys) => keys,
         Err(e) => {
             error!("Failed to resolve API keys: {}", e);
@@ -83,34 +87,10 @@ async fn main() {
         "Configuration loaded"
     );
 
-    // The secrets chain, innermost out: env/file resolution, optionally
-    // fronted by Vault (credentials with a vault_path read there, the rest
-    // fall through), optionally behind the short resolution cache — which
-    // stops being a nicety and becomes load-bearing the moment Vault turns
-    // every resolution into a network call.
-    let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> = {
-        let env = EnvSecrets::new(cfg.credentials.clone());
-        let base: Box<dyn unified_api::ports::secrets::SecretsPort> =
-            match &cfg.secrets_config.vault {
-                Some(vault) => Box::new(
-                    unified_api::adapters::out::secrets::vault::VaultSecrets::new(
-                        vault.clone(),
-                        cfg.credentials.clone(),
-                        Box::new(env),
-                    ),
-                ),
-                None => Box::new(env),
-            };
-        match cfg.secrets_config.cache_ttl_seconds {
-            0 => std::sync::Arc::from(base),
-            ttl => std::sync::Arc::new(
-                unified_api::adapters::out::secrets::cache::CachedSecrets::new(
-                    base,
-                    std::time::Duration::from_secs(ttl),
-                ),
-            ),
-        }
-    };
+    // The chain, built by the library so that a configuration reload rebuilds
+    // exactly the same one from the new credentials.
+    let secrets: std::sync::Arc<dyn unified_api::ports::secrets::SecretsPort> =
+        unified_api::adapters::out::secrets::build_chain(&cfg);
 
     // Created before the AppState exists because the boot clones below already
     // record into it; handed to the builder so the HTTP layer reads the same
@@ -118,26 +98,31 @@ async fn main() {
     let project_health =
         std::sync::Arc::new(unified_api::domain::sync_health::SyncHealthRegistry::new());
 
-    let (app, state) = unified_api::AppBuilder::new()
-        .sources(cfg.sources)
-        .views(cfg.views)
-        .enrichers(cfg.enrichers)
-        .endpoints(cfg.endpoints)
-        .projects(
-            cfg.projects.clone(),
-            std::path::PathBuf::from(&cfg.projects_config.dir),
-        )
+    // Writing the configuration directory over HTTP is opt-in: without it the
+    // directory is read once at startup and never touched again, which is what
+    // every deployment that has not asked for anything else expects.
+    let config_store: Option<
+        std::sync::Arc<dyn unified_api::ports::config_store::ConfigStorePort>,
+    > = if cfg.config_api.enabled {
+        info!(dir = %config_dir, "Configuration API enabled — this directory is writable over HTTP");
+        Some(std::sync::Arc::new(
+            unified_api::adapters::out::config::fs::FsConfigStore::new(&config_dir),
+        ))
+    } else {
+        None
+    };
+
+    let mut builder = unified_api::AppBuilder::new()
+        .from_config(&cfg)
         .secrets(std::sync::Arc::clone(&secrets))
         .project_health(std::sync::Arc::clone(&project_health))
-        .api_keys(api_keys)
-        .cors_allowed_origins(cfg.server.cors_allowed_origins)
-        .readyz_require_all_sources(cfg.server.readyz_require_all_sources)
-        .metrics_require_auth(cfg.server.metrics_require_auth)
-        .on_demand_refresh(
-            cfg.server.refresh_timeout_seconds,
-            cfg.server.refresh_max_concurrent,
-        )
-        .build_with_state();
+        .api_keys(api_keys);
+
+    if let Some(store) = config_store {
+        builder = builder.config_api(store, live_settings);
+    }
+
+    let (app, state) = builder.build_with_state();
 
     // One switch for every background task. Flipped after the HTTP server has
     // drained; each task returns at its next wait point (a running sync is
@@ -266,18 +251,6 @@ async fn main() {
                         }
                     }
                 }
-
-                let project_tasks =
-                    unified_api::adapters::r#in::scheduler::start_project_sync_tasks(
-                        git,
-                        secrets,
-                        venv,
-                        project_health,
-                        projects,
-                        projects_dir,
-                        shutdown_rx.clone(),
-                    );
-                tasks.lock().expect("handle registry").extend(project_tasks);
             }
 
             if *boot_shutdown.borrow() {
@@ -286,9 +259,16 @@ async fn main() {
             // After the boot clones had their chance (bounded by their
             // timeouts), so a source's first sync does not race its own
             // script's clone and fail for no reason but start order.
-            let sync_tasks =
-                unified_api::adapters::r#in::scheduler::start_sync_tasks(state, shutdown_rx);
-            tasks.lock().expect("handle registry").extend(sync_tasks);
+            //
+            // One supervisor rather than the task handles directly: it owns
+            // every periodic task (syncs, enrichers, project pulls) and
+            // replaces the whole set when a configuration reload lands. It
+            // drains its tasks — the outgoing generations included — before
+            // it returns, so main's final cache snapshot still runs after the
+            // last writer has stopped.
+            let supervisor =
+                unified_api::adapters::r#in::scheduler::start_supervisor(state, shutdown_rx);
+            tasks.lock().expect("handle registry").push(supervisor);
         });
         background_tasks
             .lock()
@@ -339,66 +319,6 @@ async fn main() {
     }
 
     info!("Shutdown complete");
-}
-
-// Turn the api_keys.yaml definitions into runtime keys by reading each
-// declared env var. A declared-but-missing env var is a hard startup error:
-// the alternative (skip the key with a warn) means a typo silently locks a
-// consumer out. The legacy UNIFIED_API_KEY, if set, joins as an admin key —
-// existing deployments keep working unchanged.
-fn resolve_api_keys(
-    cfg: &unified_api::config::AppConfig,
-) -> Result<Vec<unified_api::adapters::r#in::http::auth::ResolvedApiKey>, String> {
-    use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
-    use unified_api::domain::api_key::ApiKeyRole;
-
-    let mut keys = Vec::new();
-
-    // BTreeMap-like deterministic order helps tests and logs
-    let mut ids: Vec<&String> = cfg.api_keys.keys().collect();
-    ids.sort();
-
-    for id in ids {
-        let def = &cfg.api_keys[id];
-        let secret = std::env::var(&def.env).map_err(|_| {
-            format!(
-                "API key '{}' expects the secret in env var '{}', which is not set",
-                id, def.env
-            )
-        })?;
-        if secret.is_empty() {
-            return Err(format!(
-                "API key '{}': env var '{}' is set but empty",
-                id, def.env
-            ));
-        }
-
-        let permissions = match def.role {
-            ApiKeyRole::Admin => Permissions::Admin,
-            ApiKeyRole::Restricted => Permissions::Scoped {
-                sources: def.sources.iter().cloned().collect(),
-                endpoints: def.endpoints.iter().cloned().collect(),
-            },
-        };
-
-        keys.push(ResolvedApiKey {
-            name: def.name.clone(),
-            secret,
-            permissions,
-        });
-    }
-
-    if let Ok(secret) = std::env::var("UNIFIED_API_KEY")
-        && !secret.is_empty()
-    {
-        keys.push(ResolvedApiKey {
-            name: "default".to_string(),
-            secret,
-            permissions: Permissions::Admin,
-        });
-    }
-
-    Ok(keys)
 }
 
 async fn shutdown_signal() {

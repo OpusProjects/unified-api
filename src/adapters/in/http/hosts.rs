@@ -35,7 +35,7 @@ pub async fn put_host(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
-    if let Some(view) = state.views.get(&id) {
+    if let Some(view) = state.config().views.get(&id) {
         return Err(crate::adapters::r#in::http::views::write_refused(
             &id,
             view,
@@ -84,7 +84,7 @@ pub async fn delete_host(
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
-    if let Some(view) = state.views.get(&id) {
+    if let Some(view) = state.config().views.get(&id) {
         return Err(crate::adapters::r#in::http::views::write_refused(
             &id,
             view,

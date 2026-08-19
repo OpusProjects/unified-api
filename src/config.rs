@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     pub projects_config: ProjectsConfig,
     pub secrets_config: SecretsConfig,
+    pub config_api: ConfigApiConfig,
     pub credentials: HashMap<String, Credential>,
     pub sources: HashMap<String, Source>,
     pub views: HashMap<String, View>,
@@ -122,7 +123,7 @@ fn default_persistence_interval() -> u64 {
 }
 
 // Secrets behavior — config.yaml, `secrets:` section (optional)
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SecretsConfig {
     // How long a resolved credential may be reused before the backend is asked
@@ -176,6 +177,135 @@ fn default_projects_dir() -> String {
     "projects".to_string()
 }
 
+// Writing this directory over the API — config.yaml, `config_api:` section
+// (optional)
+#[derive(Deserialize, Default, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigApiConfig {
+    // OFF by default, and deliberately not a thing that can be turned on from
+    // the API itself: a running instance whose configuration directory is
+    // read-only is the pre-existing behavior, and it stays the behavior for
+    // every deployment that does not opt in. Turning it on means an admin key
+    // can rewrite every file the loader reads — api_keys.yaml included, which
+    // is the same authority as editing the directory the container mounts.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+// Every file `load_config` reads, in the order --check-config reports them.
+// One list, so the config API cannot drift from the loader: a file added here
+// becomes readable and writable over HTTP the moment the loader knows it.
+pub const CONFIG_FILES: [&str; 8] = [
+    "config.yaml",
+    "credentials.yaml",
+    "sources.yaml",
+    "views.yaml",
+    "enrichers.yaml",
+    "projects.yaml",
+    "endpoints.yaml",
+    "api_keys.yaml",
+];
+
+// The one file that is not optional: without server config there is nothing
+// to bind. The config API refuses to delete it for the same reason the loader
+// refuses to start without it.
+pub const REQUIRED_CONFIG_FILE: &str = "config.yaml";
+
+pub fn is_config_file(name: &str) -> bool {
+    CONFIG_FILES.contains(&name)
+}
+
+// The settings a running process cannot adopt without being restarted, pulled
+// out of AppConfig as plain comparable values.
+//
+// A reload swaps what it can (sources, views, enrichers, endpoints, projects,
+// credentials, api keys) and has to say something honest about the rest: the
+// listener is already bound, the CORS and metrics-auth layers are already
+// built into the router, the snapshot task already holds its path and
+// interval, and the refresh coordinator already holds its semaphore. Silently
+// ignoring those keys is how a pipeline comes to believe it changed a port it
+// did not change — so they are diffed and NAMED in the reload report instead.
+#[derive(Clone, PartialEq, Debug)]
+pub struct RestartOnlySettings {
+    pub host: String,
+    pub port: u16,
+    pub cors_allowed_origins: Vec<String>,
+    pub metrics_require_auth: bool,
+    pub refresh_timeout_seconds: u64,
+    pub refresh_max_concurrent: usize,
+    pub shutdown_grace_seconds: u64,
+    pub persistence_path: Option<String>,
+    pub persistence_interval_seconds: Option<u64>,
+    pub projects_dir: String,
+    pub config_api_enabled: bool,
+}
+
+impl RestartOnlySettings {
+    pub fn from_config(cfg: &AppConfig) -> Self {
+        Self {
+            host: cfg.server.host.clone(),
+            port: cfg.server.port,
+            cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
+            metrics_require_auth: cfg.server.metrics_require_auth,
+            refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
+            refresh_max_concurrent: cfg.server.refresh_max_concurrent,
+            shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
+            persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
+            persistence_interval_seconds: cfg
+                .cache
+                .persistence
+                .as_ref()
+                .map(|p| p.interval_seconds),
+            projects_dir: cfg.projects_config.dir.clone(),
+            config_api_enabled: cfg.config_api.enabled,
+        }
+    }
+
+    // The config.yaml keys that differ, named as they are written in the file
+    // so the answer can be pasted into a search.
+    pub fn changed_keys(&self, other: &Self) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut check = |differs: bool, key: &str| {
+            if differs {
+                keys.push(key.to_string());
+            }
+        };
+        check(self.host != other.host, "server.host");
+        check(self.port != other.port, "server.port");
+        check(
+            self.cors_allowed_origins != other.cors_allowed_origins,
+            "server.cors_allowed_origins",
+        );
+        check(
+            self.metrics_require_auth != other.metrics_require_auth,
+            "server.metrics_require_auth",
+        );
+        check(
+            self.refresh_timeout_seconds != other.refresh_timeout_seconds,
+            "server.refresh_timeout_seconds",
+        );
+        check(
+            self.refresh_max_concurrent != other.refresh_max_concurrent,
+            "server.refresh_max_concurrent",
+        );
+        check(
+            self.shutdown_grace_seconds != other.shutdown_grace_seconds,
+            "server.shutdown_grace_seconds",
+        );
+        check(
+            self.persistence_path != other.persistence_path
+                || self.persistence_interval_seconds != other.persistence_interval_seconds,
+            "cache.persistence",
+        );
+        check(self.projects_dir != other.projects_dir, "projects.dir");
+        check(
+            self.config_api_enabled != other.config_api_enabled,
+            "config_api.enabled",
+        );
+        keys
+    }
+}
+
 // Intermediate struct to parse config.yaml (server + optional sections)
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,13 +317,31 @@ struct ServerFile {
     projects: ProjectsConfig,
     #[serde(default)]
     secrets: SecretsConfig,
+    #[serde(default)]
+    config_api: ConfigApiConfig,
 }
 
 // Loads all configuration from a directory.
 // Expects to find: config.yaml, credentials.yaml, sources.yaml, etc.
 // Optional files are simply ignored if they do not exist.
 impl AppConfig {
+    // Fails with every problem at once (see validate_errors), so one
+    // --check-config run — or one rejected API write — reports the whole list
+    // instead of the first line of it.
     pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let errors = self.validate_errors();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigErrors::new(errors).into())
+        }
+    }
+
+    // The same checks, as a list rather than as one joined string. The config
+    // API hands this to the caller verbatim — a pipeline that pushed eight
+    // files wants the problems as items it can render, not a blob it has to
+    // split on "\n  - ".
+    pub fn validate_errors(&self) -> Vec<String> {
         let mut errors: Vec<String> = Vec::new();
 
         // Enrichers must reference existing sources
@@ -545,11 +693,7 @@ impl AppConfig {
             }
         }
 
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(format!("Configuration errors:\n  - {}", errors.join("\n  - ")).into())
-        }
+        errors
     }
 
     // Script paths are NOT resolved into project checkouts here. They used to
@@ -558,26 +702,67 @@ impl AppConfig {
     // Resolution now happens per execution — see application::scripts.
 }
 
-pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
-    let dir = Path::new(config_dir);
+// Everything wrong with a configuration directory, as items.
+//
+// Loading fails in two shapes — a file that does not parse (one error, and
+// nothing after it is knowable) and a directory that parses but does not hang
+// together (as many errors as there are broken references). Both arrive here,
+// so a caller that wants the list gets the list and a caller that wants a
+// message gets a message.
+#[derive(Debug)]
+pub struct ConfigErrors {
+    pub errors: Vec<String>,
+}
 
+impl ConfigErrors {
+    pub fn new(errors: Vec<String>) -> Self {
+        Self { errors }
+    }
+
+    fn single(message: String) -> Self {
+        Self {
+            errors: vec![message],
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.errors.as_slice() {
+            [one] => write!(f, "{}", one),
+            many => write!(f, "Configuration errors:\n  - {}", many.join("\n  - ")),
+        }
+    }
+}
+
+impl std::error::Error for ConfigErrors {}
+
+pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
+    Ok(load_config_detailed(Path::new(config_dir))?)
+}
+
+// The same load, keeping the errors as a list. `load_config` is the thin
+// wrapper over it that main and the tests already use.
+pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
     // config.yaml is mandatory — without server config we cannot start
-    let server_file: ServerFile = load_yaml_file(&dir.join("config.yaml"))?;
+    let server_file: ServerFile = load_yaml_file(&dir.join("config.yaml"))
+        .map_err(|e| ConfigErrors::single(format!("config.yaml: {}", e)))?;
 
     // The rest are optional — if they do not exist, empty HashMap
-    let credentials = load_optional_yaml(&dir.join("credentials.yaml"))?;
-    let sources = load_optional_yaml(&dir.join("sources.yaml"))?;
-    let views = load_optional_yaml(&dir.join("views.yaml"))?;
-    let enrichers = load_optional_yaml(&dir.join("enrichers.yaml"))?;
-    let projects = load_optional_yaml(&dir.join("projects.yaml"))?;
-    let endpoints = load_optional_yaml(&dir.join("endpoints.yaml"))?;
-    let api_keys = load_optional_yaml(&dir.join("api_keys.yaml"))?;
+    let credentials = load_named(dir, "credentials.yaml")?;
+    let sources = load_named(dir, "sources.yaml")?;
+    let views = load_named(dir, "views.yaml")?;
+    let enrichers = load_named(dir, "enrichers.yaml")?;
+    let projects = load_named(dir, "projects.yaml")?;
+    let endpoints = load_named(dir, "endpoints.yaml")?;
+    let api_keys = load_named(dir, "api_keys.yaml")?;
 
     let config = AppConfig {
         server: server_file.server,
         cache: server_file.cache,
         projects_config: server_file.projects,
         secrets_config: server_file.secrets,
+        config_api: server_file.config_api,
         credentials,
         sources,
         views,
@@ -587,9 +772,23 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
         api_keys,
     };
 
-    config.validate()?;
+    let errors = config.validate_errors();
+    if errors.is_empty() {
+        Ok(config)
+    } else {
+        Err(ConfigErrors::new(errors))
+    }
+}
 
-    Ok(config)
+// An optional file, with its name in front of whatever went wrong. A YAML
+// parse error carries a line and a column and no filename at all, which in a
+// directory of eight files is half an answer.
+fn load_named<T: serde::de::DeserializeOwned>(
+    dir: &Path,
+    name: &str,
+) -> Result<HashMap<String, T>, ConfigErrors> {
+    load_optional_yaml(&dir.join(name))
+        .map_err(|e| ConfigErrors::single(format!("{}: {}", name, e)))
 }
 
 // Reads and parses a YAML file — fails if it does not exist

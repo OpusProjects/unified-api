@@ -46,6 +46,13 @@ impl Modify for SecurityAddon {
         http::endpoints::list_endpoints,
         http::projects::list_projects,
         http::projects::sync_project_now,
+        http::config::get_config,
+        http::config::get_config_file,
+        http::config::put_config,
+        http::config::put_config_file,
+        http::config::delete_config_file,
+        http::config::validate_config,
+        http::config::reload_config,
     ),
     components(schemas(
         http::error::ErrorBody,
@@ -65,13 +72,23 @@ impl Modify for SecurityAddon {
         http::health::ReadyStatus,
         http::projects::ProjectInfo,
         http::projects::ProjectSyncResult,
+        http::config::ConfigBundle,
+        http::config::ConfigFileInfo,
+        http::config::ConfigInventory,
+        http::config::ConfigRejected,
+        http::config::ConfigSummary,
+        http::config::DeltaInfo,
+        http::config::ReloadInfo,
+        http::config::ValidationResult,
+        http::config::WriteResult,
     )),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),
         (name = "Sources", description = "Inventory source management, sync, and cache status. Views — read-only composites over several sources — answer on the same routes, in the same shapes: a per-host read is served by whichever member owns that host. The write routes (sync, eviction, host PUT/DELETE) refuse a view id"),
         (name = "Enrichers", description = "Post-processing enrichment of cached data"),
         (name = "Endpoints", description = "Output endpoints for consumers (AWX, AnsibleForms)"),
-        (name = "Projects", description = "Git project checkouts (admin-only operational routes)")
+        (name = "Projects", description = "Git project checkouts (admin-only operational routes)"),
+        (name = "Configuration", description = "The configuration directory over HTTP (admin-only): read it, validate a proposed change exactly as --check-config would, write it atomically, and reload it into the running process. Off unless config_api.enabled is set")
     ),
     // No explicit version: utoipa takes it from Cargo.toml (CARGO_PKG_VERSION),
     // so the spec can never disagree with the crate version after a bump

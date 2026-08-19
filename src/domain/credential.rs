@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialType {
     UsernamePassword,
@@ -14,7 +14,7 @@ pub enum CredentialType {
 // The infrastructure (ESO, docker secrets, .env) is responsible for injecting them.
 // Unknown keys are config typos: fail startup naming the key instead of
 // silently applying a default (the policy is explained once, in config.rs).
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Credential {
     pub name: String,

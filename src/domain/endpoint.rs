@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 // Unknown keys are config typos: fail startup naming the key instead of
 // silently applying a default (the policy is explained once, in config.rs).
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OutputEndpoint {
     pub name: String,

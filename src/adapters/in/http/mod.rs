@@ -3,6 +3,7 @@
 pub mod audit;
 pub mod auth;
 pub mod cache;
+pub mod config;
 pub mod endpoints;
 pub mod enrichers;
 pub mod error;

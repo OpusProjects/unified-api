@@ -6,6 +6,52 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Configuration API.** The configuration directory is now readable and
+  writable over HTTP, so a configuration-as-code pipeline can push a change to
+  an instance instead of publishing an artifact the instance has to pull:
+  `GET/PUT /api/v1/config` (the whole directory in one transaction, with
+  `prune` for image-like semantics), `GET/PUT/DELETE /api/v1/config/{file}`,
+  `POST /api/v1/config/validate` (dry run — the same checks as
+  `--check-config`, nothing written) and `POST /api/v1/config/reload`. A
+  proposed change is staged and validated as a whole directory before anything
+  moves, is rejected whole with every error at once, and each file is written
+  atomically. ETags (sha256, per file and per directory) with `If-Match` make
+  a concurrent overwrite a `412` instead of a silent win. Admin-only, reads
+  included. **Off by default** — `config_api.enabled: true` in `config.yaml`
+  opts in, and doing so lets an admin key rewrite every file the loader reads,
+  `api_keys.yaml` included. See `docs/config-api.md`.
+
+- **Live configuration reload.** `POST /api/v1/config/reload` (or `?reload=true`
+  on a write) applies the directory to the running process: sources, views,
+  enrichers, endpoints, projects, credentials, the secrets settings, API keys
+  and `server.readyz_require_all_sources` all take effect with no restart, and
+  the scheduler replaces its task generation — new sources start syncing,
+  removed ones stop, and a project that arrived with the reload is cloned in
+  the background. Settings a running process cannot adopt (`server.host`,
+  `server.port`, `server.cors_allowed_origins`, `server.metrics_require_auth`,
+  the refresh settings, `server.shutdown_grace_seconds`, `cache.persistence`,
+  `projects.dir`, `config_api.enabled`) are reported as `restart_required`
+  rather than silently ignored, and keep being reported by `GET /api/v1/config`
+  until a restart adopts them. A reload that would leave the API with no keys
+  at all is refused (`409`), as is one naming an API key env var that is not
+  set — before anything is committed.
+
+- New counters `unified_api_config_writes_total{outcome}` and
+  `unified_api_config_reloads_total{outcome}`, and audit events
+  (`config_write`, `config_write_reload`, `config_reload`) alongside the
+  existing write-route trail.
+
+### Changed
+
+- **Configuration errors are a list, not a blob.** `AppConfig::validate_errors`
+  and `load_config_detailed` expose every problem as an item, which the
+  configuration API returns as an `errors` array alongside the usual `error`
+  field. A YAML parse error now names the file it came from — a line and a
+  column in a directory of eight files was half an answer. `--check-config`
+  output is unchanged.
+
 ## [0.19.0] - 2026-08-18
 
 ### Added

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 // How data is applied to cache when it arrives
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncMode {
     // Clears everything and puts new data — the script brings the complete inventory

@@ -62,8 +62,9 @@ pub async fn list_projects(
     //
     // An IO error (a permissions problem on the projects directory) reads as
     // "no checkout", which is what an operator would conclude from it anyway.
-    let mut projects: Vec<ProjectInfo> = Vec::with_capacity(state.projects.len());
-    for (id, project) in &state.projects {
+    let config = state.config();
+    let mut projects: Vec<ProjectInfo> = Vec::with_capacity(config.projects.len());
+    for (id, project) in &config.projects {
         let checkout_present = tokio::fs::try_exists(state.projects_dir.join(id).join(".git"))
             .await
             .unwrap_or(false);
@@ -115,7 +116,8 @@ pub async fn sync_project_now(
     if !auth.permissions.is_admin() {
         return Err(ApiError::admin_only());
     }
-    let project = state
+    let config = state.config();
+    let project = config
         .projects
         .get(&id)
         .ok_or_else(|| ApiError::not_found(format!("project '{}' is not configured", id)))?;

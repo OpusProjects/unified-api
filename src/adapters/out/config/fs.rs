@@ -240,3 +240,231 @@ impl ConfigStorePort for FsConfigStore {
         self.dir.display().to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn dir_with_minimal_config() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .expect("write config.yaml");
+        dir
+    }
+
+    fn writing(pairs: &[(&str, &str)]) -> ConfigChange {
+        let files: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(name, contents)| (name.to_string(), contents.to_string()))
+            .collect();
+        ConfigChange::writing(files)
+    }
+
+    #[test]
+    fn a_rejected_change_leaves_the_directory_exactly_as_it_was() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+        let before = std::fs::read_to_string(dir.path().join("config.yaml")).expect("read");
+
+        // A source pointing at a project nobody declared: valid YAML, invalid
+        // configuration — the case that must never reach the disk.
+        let change = writing(&[(
+            "sources.yaml",
+            "src-a:\n  name: \"A\"\n  project_id: \"prj-ghost\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+        )]);
+
+        let errors = store.load(&change).err().expect("must be rejected");
+        assert!(
+            errors.errors.iter().any(|e| e.contains("prj-ghost")),
+            "errors: {:?}",
+            errors.errors
+        );
+        assert!(!dir.path().join("sources.yaml").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.yaml")).expect("read"),
+            before
+        );
+    }
+
+    #[test]
+    fn validating_leaves_no_staging_directory_behind() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+
+        let _ = store.load(&writing(&[("sources.yaml", "not: [valid\n")]));
+        let _ = store.load(&writing(&[("enrichers.yaml", "")]));
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.starts_with(".config-api-stage"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {:?}", leftovers);
+    }
+
+    #[test]
+    fn a_commit_writes_every_file_and_removes_the_temporaries() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+
+        let change = writing(&[(
+            "credentials.yaml",
+            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+        )]);
+        store.load(&change).expect("valid");
+        store.commit(&change).expect("commits");
+
+        assert!(dir.path().join("credentials.yaml").exists());
+        let temporaries: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(temporaries.is_empty(), "left behind: {:?}", temporaries);
+    }
+
+    #[test]
+    fn pruning_removes_the_files_the_push_left_out() {
+        let dir = dir_with_minimal_config();
+        std::fs::write(
+            dir.path().join("credentials.yaml"),
+            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+        )
+        .expect("write");
+        let store = FsConfigStore::new(dir.path());
+
+        // The whole directory, pushed as config.yaml alone: credentials.yaml
+        // is not in the payload, so it must not be in the directory either.
+        let change = ConfigChange {
+            write: [(
+                "config.yaml".to_string(),
+                "server:\n  host: \"127.0.0.1\"\n  port: 9090\n".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            prune: true,
+            ..ConfigChange::default()
+        };
+        store.load(&change).expect("valid");
+        store.commit(&change).expect("commits");
+
+        assert!(dir.path().join("config.yaml").exists());
+        assert!(!dir.path().join("credentials.yaml").exists());
+    }
+
+    #[test]
+    fn pruning_away_config_yaml_is_refused_before_anything_is_written() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+
+        let change = ConfigChange {
+            write: [("enrichers.yaml".to_string(), String::new())]
+                .into_iter()
+                .collect(),
+            prune: true,
+            ..ConfigChange::default()
+        };
+
+        let errors = store.load(&change).err().expect("must be rejected");
+        assert!(
+            errors.errors[0].contains("config.yaml"),
+            "errors: {:?}",
+            errors.errors
+        );
+        assert!(dir.path().join("config.yaml").exists());
+    }
+
+    #[test]
+    fn deleting_a_file_the_rest_depends_on_is_rejected() {
+        let dir = dir_with_minimal_config();
+        std::fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-a:\n  name: \"A\"\n  git_url: \"https://example.invalid/a.git\"\n",
+        )
+        .expect("write");
+        std::fs::write(
+            dir.path().join("sources.yaml"),
+            "src-a:\n  name: \"A\"\n  project_id: \"prj-a\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+        )
+        .expect("write");
+        let store = FsConfigStore::new(dir.path());
+
+        let errors = store
+            .load(&ConfigChange::deleting("projects.yaml"))
+            .err()
+            .expect("must be rejected");
+
+        assert!(
+            errors.errors.iter().any(|e| e.contains("prj-a")),
+            "errors: {:?}",
+            errors.errors
+        );
+        assert!(dir.path().join("projects.yaml").exists());
+    }
+
+    #[test]
+    fn an_unparseable_file_is_reported_with_its_name() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+
+        let errors = store
+            .load(&writing(&[(
+                "sources.yaml",
+                "src-a:\n  ttl_seconds: \"not a number\"\n",
+            )]))
+            .err()
+            .expect("must be rejected");
+
+        assert!(
+            errors.errors[0].starts_with("sources.yaml:"),
+            "a parse error has to say which of eight files it is about: {:?}",
+            errors.errors
+        );
+    }
+
+    #[test]
+    fn the_directory_etag_follows_the_contents() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+        let before = directory_etag(&store.stat_all().expect("stat"));
+
+        let change = writing(&[(
+            "config.yaml",
+            "server:\n  host: \"127.0.0.1\"\n  port: 9091\n",
+        )]);
+        store.commit(&change).expect("commits");
+        let after = directory_etag(&store.stat_all().expect("stat"));
+
+        assert_ne!(before, after, "a changed file must change the ETag");
+
+        // Rewriting identical bytes changes nothing, so it must not change the
+        // ETag either — a pipeline that re-pushes the same files has not
+        // "modified" anything and should not be told it has.
+        store.commit(&change).expect("commits");
+        assert_eq!(after, directory_etag(&store.stat_all().expect("stat")));
+    }
+
+    #[test]
+    fn an_empty_change_validates_what_is_already_on_disk() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+        assert!(store.load(&ConfigChange::default()).is_ok());
+
+        std::fs::write(dir.path().join("config.yaml"), "server:\n  porT: 9090\n").expect("write");
+        let errors = store
+            .load(&ConfigChange::default())
+            .err()
+            .expect("a typo'd key must fail");
+        assert!(
+            errors.errors[0].contains("porT"),
+            "errors: {:?}",
+            errors.errors
+        );
+    }
+}

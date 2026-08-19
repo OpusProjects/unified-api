@@ -365,6 +365,43 @@ mod tests {
         assert_eq!(body_string(resp).await, "forms");
     }
 
+    // A reload rewrites api_keys.yaml under a running process. The middleware
+    // reads the registry per request rather than holding a list, so the new
+    // set is in force on the very next one — without this, rotating a key
+    // would be the one configuration change that still needed a restart.
+    #[tokio::test]
+    async fn replacing_the_registry_changes_who_authenticates() {
+        let registry = Arc::new(ApiKeyRegistry::new(vec![admin_key("before", "secret-a")]));
+        let app = Router::new()
+            .route("/protected", get(whoami))
+            .layer(middleware::from_fn(require_api_key))
+            .layer(axum::Extension(ApiKeys(Arc::clone(&registry))));
+
+        let ask = |secret: &str| {
+            HttpRequest::builder()
+                .uri("/protected")
+                .header("x-api-key", secret)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let resp = app.clone().oneshot(ask("secret-a")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        registry.replace(vec![admin_key("after", "secret-b")]);
+
+        let resp = app.clone().oneshot(ask("secret-b")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_string(resp).await, "after");
+
+        let resp = app.oneshot(ask("secret-a")).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "the replaced key must stop working"
+        );
+    }
+
     #[test]
     fn scoped_permissions_only_allow_listed_ids() {
         let perms = Permissions::Scoped {

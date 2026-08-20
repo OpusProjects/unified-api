@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-20
+
 ### Added
 
 - **Builtin output transformers.** An output endpoint can now render a format

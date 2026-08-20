@@ -284,17 +284,27 @@ enrich-business-unit:
 
 ## endpoints.yaml
 
-Output endpoints combine one or more cached datasets through a transformer script.
+Output endpoints combine one or more cached datasets through a transformer.
+Each endpoint sets **exactly one** of `output` (a builtin, in-process
+transformer) or `script_path` (an external script).
 
 ```yaml
+# Builtin transformer — no script, no process spawn.
 ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
-  script_path: "tests/adapters/out/output/ansible_inventory.py"
+  output: ansible                   # the only builtin today
+  config:
+    filter_datacenter: "section9"   # free-form filters (see docs/endpoints.md)
+
+# Script transformer — for a bespoke format.
+ep-netbox-csv:
+  name: "NetBox CSV"
+  source_ids: ["src-infra"]
+  script_path: "outputs/netbox_csv.py"
+  project_id: "prj-connectors"      # optional: resolve inside a checkout
   script_args: []                   # optional CLI args for the script
   timeout_seconds: 300              # abort a transform that takes longer (default 300)
-  config:
-    filter_datacenter: "section9"   # free-form, script-specific
 ```
 
 ---

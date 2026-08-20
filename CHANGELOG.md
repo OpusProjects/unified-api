@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Builtin output transformers.** An output endpoint can now render a format
+  in-process with `output: ansible` instead of shelling out to a script:
+  `GET/POST /api/v1/endpoints/{id}` merges the configured sources and renders
+  Ansible dynamic inventory (`_meta.hostvars` plus one key per group), with the
+  same `filter_datacenter` / `filter_os` / `filter_group` / `exclude_vars`
+  filters the shipped script offered. No per-request interpreter spawn, no
+  project checkout, and the logic is tested in the binary. The `script_path`
+  form stays for bespoke formats.
+
+### Changed
+
+- **`endpoints.yaml`: `script_path` is now optional.** An endpoint sets exactly
+  one of `output` (a builtin) or `script_path` (a script); setting neither or
+  both is a config error named at load, and `project_id` / `script_args` on a
+  builtin endpoint are rejected rather than silently ignored.
+
 ## [0.20.0] - 2026-08-19
 
 ### Added

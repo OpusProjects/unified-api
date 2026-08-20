@@ -812,7 +812,8 @@ async fn endpoint_combines_sources() {
         OutputEndpoint {
             name: "Full Inventory".to_string(),
             source_ids: vec!["src-inventory".to_string(), "src-infra".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
@@ -861,7 +862,8 @@ async fn endpoint_filters_by_datacenter() {
         OutputEndpoint {
             name: "Section 9 Only".to_string(),
             source_ids: vec!["src-inventory".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: ep_config,
@@ -888,6 +890,47 @@ async fn endpoint_filters_by_datacenter() {
 }
 
 // =========================================================================
+// Test: a builtin `output: ansible` endpoint renders without a script
+// =========================================================================
+#[tokio::test]
+async fn builtin_ansible_output_renders_inventory() {
+    let mut sources = HashMap::new();
+    sources.insert("src-inventory".to_string(), test_source("default"));
+
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-builtin".to_string(),
+        OutputEndpoint {
+            name: "Builtin Ansible".to_string(),
+            source_ids: vec!["src-inventory".to_string()],
+            output: Some(unified_api::domain::endpoint::OutputFormat::Ansible),
+            script_path: None,
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: 300,
+        },
+    );
+
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    let (sync, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
+    assert_eq!(sync, StatusCode::OK);
+
+    let (status, body) = request(app.clone(), "POST", "/api/v1/endpoints/ep-builtin").await;
+    assert_eq!(status, StatusCode::OK);
+    let inventory: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // No script involved, yet the Ansible dynamic-inventory shape is rendered.
+    assert!(inventory["_meta"]["hostvars"].is_object());
+    assert!(inventory["_meta"]["hostvars"]["motoko.section9.net"].is_object());
+    assert!(inventory["section9"].is_object());
+}
+
+// =========================================================================
 // Test: endpoint without synced sources → 503
 // =========================================================================
 #[tokio::test]
@@ -898,7 +941,8 @@ async fn endpoint_without_synced_sources_returns_503() {
         OutputEndpoint {
             name: "Missing Sources".to_string(),
             source_ids: vec!["src-nonexistent".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
@@ -941,7 +985,8 @@ async fn list_endpoints_shows_readiness() {
         OutputEndpoint {
             name: "Test Endpoint".to_string(),
             source_ids: vec!["src-test".to_string(), "src-missing".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
@@ -987,7 +1032,8 @@ async fn endpoint_with_dynamic_params() {
         OutputEndpoint {
             name: "Dynamic Endpoint".to_string(),
             source_ids: vec!["src-test".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
@@ -1042,7 +1088,8 @@ async fn endpoint_get_passes_query_params() {
         OutputEndpoint {
             name: "Dynamic Endpoint".to_string(),
             source_ids: vec!["src-test".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
@@ -1098,7 +1145,8 @@ async fn endpoint_params_override_config() {
         OutputEndpoint {
             name: "Override Test".to_string(),
             source_ids: vec!["src-test".to_string()],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: ep_config,

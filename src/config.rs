@@ -379,6 +379,33 @@ impl AppConfig {
 
         // Endpoints must reference existing sources
         for (id, endpoint) in &self.endpoints {
+            // Exactly one transformer: a builtin `output` or a `script_path`.
+            match (endpoint.output.is_some(), endpoint.script_path.is_some()) {
+                (false, false) => errors.push(format!(
+                    "Endpoint '{}' needs either output (builtin) or script_path (script)",
+                    id
+                )),
+                (true, true) => errors.push(format!(
+                    "Endpoint '{}' sets both output and script_path — choose one",
+                    id
+                )),
+                _ => {}
+            }
+            // Script-only knobs are a mistake with a builtin output, not a no-op.
+            if endpoint.output.is_some() {
+                if endpoint.project_id.is_some() {
+                    errors.push(format!(
+                        "Endpoint '{}' sets project_id, which a builtin output ignores",
+                        id
+                    ));
+                }
+                if !endpoint.script_args.is_empty() {
+                    errors.push(format!(
+                        "Endpoint '{}' sets script_args, which a builtin output ignores",
+                        id
+                    ));
+                }
+            }
             for source_id in &endpoint.source_ids {
                 if self.views.contains_key(source_id) {
                     // Worth its own message: an endpoint script is fed whole
@@ -981,6 +1008,66 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("src-ghost"));
+    }
+
+    #[test]
+    fn validate_catches_endpoint_with_neither_output_nor_script() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-test:\n  name: \"Test\"\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("an endpoint with no output and no script_path must fail")
+            .to_string();
+        assert!(err.contains("either output"), "{}", err);
+    }
+
+    #[test]
+    fn validate_catches_endpoint_with_both_output_and_script() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-test:\n  name: \"Test\"\n  output: ansible\n  script_path: \"x.py\"\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("an endpoint with both output and script_path must fail")
+            .to_string();
+        assert!(err.contains("choose one"), "{}", err);
+    }
+
+    #[test]
+    fn builtin_output_endpoint_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-test:\n  name: \"Test\"\n  output: ansible\n",
+        )
+        .unwrap();
+
+        load_config(dir.path().to_str().unwrap())
+            .expect("a builtin-output endpoint with no sources must validate");
     }
 
     #[test]

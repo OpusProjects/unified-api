@@ -1451,7 +1451,8 @@ async fn endpoint_errors_carry_a_body_like_every_other_route() {
         OutputEndpoint {
             name: "Granted".to_string(),
             source_ids: vec![],
-            script_path: "tests/adapters/out/output/ansible_inventory.py".to_string(),
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),

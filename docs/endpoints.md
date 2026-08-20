@@ -1,9 +1,10 @@
 # Output endpoints
 
 The consumer-facing side of the cache: an **output endpoint** merges one or
-more cached datasets through a transformer script and returns whatever the
-consumer needs — the shipped example renders a merged Ansible inventory for
-AWX and AnsibleForms. Field reference lives in
+more cached datasets through a transformer and returns whatever the consumer
+needs — the builtin `ansible` transformer renders a merged Ansible inventory
+for AWX and AnsibleForms. A transformer is either a **builtin** (`output:`, run
+in-process) or an external **script** (`script_path:`). Field reference lives in
 [configuration → endpoints.yaml](configuration.md#endpointsyaml).
 
 - [What an endpoint is](#what-an-endpoint-is)

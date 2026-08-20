@@ -177,55 +177,76 @@ async fn execute_endpoint(
 
     let start = Instant::now();
 
-    // An endpoint that names a project runs its transformer from the checkout;
-    // resolved per execution like sources and enrichers (application::scripts)
-    let script_path = match &endpoint.project_id {
-        Some(project_id) => crate::application::scripts::resolve_script_path(
-            &state.projects_dir,
-            &id,
-            project_id,
-            &endpoint.script_path,
+    let result = match &endpoint.output {
+        // Builtin transformer: in-process, no script, no spawn, no timeout.
+        Some(crate::domain::endpoint::OutputFormat::Ansible) => Ok(
+            crate::application::output::render_ansible(&datasets, &endpoint.config, &params),
         ),
-        None => endpoint.script_path.clone(),
-    };
+        // Script transformer: resolve the path (+ venv) and run it under its timeout.
+        None => {
+            let script_path = match endpoint.script_path.as_deref() {
+                Some(path) => path,
+                None => {
+                    // Config validation guarantees exactly one of output /
+                    // script_path; handled rather than panicking if it slips through.
+                    let body = serde_json::json!({
+                        "error": format!("endpoint '{}' has neither output nor script_path", id)
+                    });
+                    return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response());
+                }
+            };
 
-    // The project's virtualenv rides the same reserved-config channel as for
-    // connectors and enrichers; the process adapter prepends it to PATH
-    let mut config = endpoint.config.clone();
-    if let Some(project_id) = &endpoint.project_id
-        && let Some(bin) =
-            crate::application::scripts::venv_bin_dir(&state.projects_dir, project_id)
-    {
-        config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
-    }
-    // Who asked, for the transformer's own logs — the request id the id layer
-    // assigned (or the caller sent), inside ENDPOINT_CONFIG as `trigger`
-    if let Some(request_id) = headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-    {
-        config.insert("trigger".to_string(), request_id.to_string());
-    }
+            // An endpoint that names a project runs its transformer from the
+            // checkout; resolved per execution like sources and enrichers.
+            let script_path = match &endpoint.project_id {
+                Some(project_id) => crate::application::scripts::resolve_script_path(
+                    &state.projects_dir,
+                    &id,
+                    project_id,
+                    script_path,
+                ),
+                None => script_path.to_string(),
+            };
 
-    // A hung transformer must not hang the HTTP request forever
-    let result = match tokio::time::timeout(
-        std::time::Duration::from_secs(endpoint.timeout_seconds),
-        state.output.execute(
-            &script_path,
-            &endpoint.script_args,
-            &config,
-            &params,
-            &datasets,
-        ),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_elapsed) => {
-            let body = serde_json::json!({
-                "error": format!("endpoint timed out after {}s", endpoint.timeout_seconds)
-            });
-            return Ok((StatusCode::GATEWAY_TIMEOUT, Json(body)).into_response());
+            // The project's virtualenv rides the same reserved-config channel as
+            // for connectors and enrichers; the process adapter prepends it to PATH.
+            let mut config = endpoint.config.clone();
+            if let Some(project_id) = &endpoint.project_id
+                && let Some(bin) =
+                    crate::application::scripts::venv_bin_dir(&state.projects_dir, project_id)
+            {
+                config.insert(crate::ports::venv::VENV_BIN_CONFIG_KEY.to_string(), bin);
+            }
+            // Who asked, for the transformer's own logs — the request id inside
+            // ENDPOINT_CONFIG as `trigger`.
+            if let Some(request_id) = headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+            {
+                config.insert("trigger".to_string(), request_id.to_string());
+            }
+
+            // A hung transformer must not hang the HTTP request forever.
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(endpoint.timeout_seconds),
+                state.output.execute(
+                    &script_path,
+                    &endpoint.script_args,
+                    &config,
+                    &params,
+                    &datasets,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_elapsed) => {
+                    let body = serde_json::json!({
+                        "error": format!("endpoint timed out after {}s", endpoint.timeout_seconds)
+                    });
+                    return Ok((StatusCode::GATEWAY_TIMEOUT, Json(body)).into_response());
+                }
+            }
         }
     };
 

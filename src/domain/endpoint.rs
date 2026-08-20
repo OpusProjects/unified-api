@@ -12,23 +12,44 @@ pub struct OutputEndpoint {
     #[serde(default)]
     pub source_ids: Vec<String>,
 
-    // Script that transforms the datasets into the final format
-    pub script_path: String,
+    // How the datasets become the response. Exactly one of these is set
+    // (enforced in config validation, like an enricher's source_id/script_path):
+    //   output      — a builtin, in-process transformer, e.g. `output: ansible`
+    //   script_path — an external transformer script (the pluggable path)
+    #[serde(default)]
+    pub output: Option<OutputFormat>,
 
-    // CLI arguments passed to the script (default: none)
+    // Script that transforms the datasets into the final format
+    #[serde(default)]
+    pub script_path: Option<String>,
+
+    // CLI arguments passed to the script (script_path only; default: none)
     #[serde(default)]
     pub script_args: Vec<String>,
 
-    // Project whose checkout contains the script (None = script_path is a
-    // plain filesystem path, absolute or relative to the working directory)
+    // Project whose checkout contains the script (script_path only; None = the
+    // path is a plain filesystem path, absolute or relative to the working dir)
     #[serde(default)]
     pub project_id: Option<String>,
 
-    // Free config for the transformation script
+    // Free config for the transformer (builtin or script)
     #[serde(default)]
     pub config: HashMap<String, String>,
 
-    // Maximum seconds the transformer may take before it is aborted (default 300)
+    // Maximum seconds the script may take before it is aborted (script_path
+    // only — a builtin runs in-process). Default 300.
     #[serde(default = "crate::domain::default_timeout_seconds")]
     pub timeout_seconds: u64,
+}
+
+// A builtin, in-process transformer — no script, no spawned interpreter. The
+// common output formats live in the binary so the hot path (an AWX inventory
+// refresh) need not fork one every request, and so a config typo fails at load
+// naming the field. A bespoke format still uses `script_path`.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputFormat {
+    // `output: ansible` — merge the sources and render Ansible dynamic
+    // inventory (`_meta.hostvars` plus one key per group).
+    Ansible,
 }

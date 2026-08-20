@@ -7,6 +7,7 @@
 pub mod config;
 pub mod credentials;
 pub mod enrich;
+pub mod output;
 pub mod projects;
 pub mod refresh;
 pub mod scripts;

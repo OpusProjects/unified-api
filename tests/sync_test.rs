@@ -817,7 +817,7 @@ async fn endpoint_combines_sources() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -867,7 +867,7 @@ async fn endpoint_filters_by_datacenter() {
             script_args: vec![],
             project_id: None,
             config: ep_config,
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -908,7 +908,7 @@ async fn builtin_ansible_output_renders_inventory() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: None,
         },
     );
 
@@ -931,6 +931,118 @@ async fn builtin_ansible_output_renders_inventory() {
 }
 
 // =========================================================================
+// Test: a builtin `output: json` endpoint filters via GET query parameters
+// =========================================================================
+#[tokio::test]
+async fn builtin_json_output_filters_via_query_params() {
+    let mut sources = HashMap::new();
+    sources.insert("src-inventory".to_string(), test_source("default"));
+
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-json".to_string(),
+        OutputEndpoint {
+            name: "Merged JSON".to_string(),
+            source_ids: vec!["src-inventory".to_string()],
+            output: Some(unified_api::domain::endpoint::OutputFormat::Json),
+            script_path: None,
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: None,
+        },
+    );
+
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    let (sync, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
+    assert_eq!(sync, StatusCode::OK);
+
+    // The query string reaches the builtin as its dynamic parameters.
+    let (status, body) = request(
+        app.clone(),
+        "GET",
+        "/api/v1/endpoints/ep-json?filter_datacenter=section9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let merged: serde_json::Value = serde_json::from_str(&body).unwrap();
+
+    // The raw source shape, filtered: section9 hosts survive, seele's do not.
+    assert!(merged["hostvars"]["motoko.section9.net"].is_object());
+    assert!(merged["hostvars"].get("melchior.seele.net").is_none());
+    // The emptied seele group is pruned along with its hosts.
+    assert!(merged["groups"].get("seele").is_none());
+    assert!(merged["groups"]["section9"].is_object());
+}
+
+// =========================================================================
+// Test: a builtin `output: csv` endpoint renders rows as text/csv
+// =========================================================================
+#[tokio::test]
+async fn builtin_csv_output_renders_rows_with_csv_content_type() {
+    let mut sources = HashMap::new();
+    sources.insert("src-inventory".to_string(), test_source("default"));
+
+    let mut config = HashMap::new();
+    config.insert("columns".to_string(), "os,datacenter".to_string());
+
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-csv".to_string(),
+        OutputEndpoint {
+            name: "Inventory CSV".to_string(),
+            source_ids: vec!["src-inventory".to_string()],
+            output: Some(unified_api::domain::endpoint::OutputFormat::Csv),
+            script_path: None,
+            script_args: vec![],
+            project_id: None,
+            config,
+            timeout_seconds: None,
+        },
+    );
+
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    let (sync, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
+    assert_eq!(sync, StatusCode::OK);
+
+    // Raw oneshot instead of the helper: this test also asserts the header.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/endpoints/ep-csv")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/csv",
+        "a builtin's content type comes from its format, not from sniffing"
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    let lines: Vec<&str> = body.lines().collect();
+
+    // Configured columns in their configured order; one row per host, sorted.
+    assert_eq!(lines[0], "host,os,datacenter");
+    assert_eq!(lines.len(), 7); // header + the default scenario's 6 hosts
+    assert!(lines[1].starts_with("balthasar.seele.net,OracleLinux,seele"));
+}
+
+// =========================================================================
 // Test: endpoint without synced sources → 503
 // =========================================================================
 #[tokio::test]
@@ -946,7 +1058,7 @@ async fn endpoint_without_synced_sources_returns_503() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -990,7 +1102,7 @@ async fn list_endpoints_shows_readiness() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -1037,7 +1149,7 @@ async fn endpoint_with_dynamic_params() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -1093,7 +1205,7 @@ async fn endpoint_get_passes_query_params() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 
@@ -1150,7 +1262,7 @@ async fn endpoint_params_override_config() {
             script_args: vec![],
             project_id: None,
             config: ep_config,
-            timeout_seconds: 300,
+            timeout_seconds: Some(300),
         },
     );
 

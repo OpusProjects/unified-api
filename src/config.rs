@@ -405,6 +405,13 @@ impl AppConfig {
                         id
                     ));
                 }
+                if endpoint.timeout_seconds.is_some() {
+                    errors.push(format!(
+                        "Endpoint '{}' sets timeout_seconds, which a builtin output ignores \
+                         — a builtin runs in-process, not under a script timeout",
+                        id
+                    ));
+                }
             }
             for source_id in &endpoint.source_ids {
                 if self.views.contains_key(source_id) {
@@ -1068,6 +1075,29 @@ mod tests {
 
         load_config(dir.path().to_str().unwrap())
             .expect("a builtin-output endpoint with no sources must validate");
+    }
+
+    #[test]
+    fn validate_catches_builtin_endpoint_with_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        // timeout_seconds bounds a script; a builtin runs in-process, so
+        // setting it is a mistake to name, like project_id and script_args.
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-test:\n  name: \"Test\"\n  output: csv\n  timeout_seconds: 60\n",
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a builtin endpoint setting timeout_seconds must fail")
+            .to_string();
+        assert!(err.contains("timeout_seconds"), "{}", err);
     }
 
     #[test]

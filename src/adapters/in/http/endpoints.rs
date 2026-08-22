@@ -177,11 +177,45 @@ async fn execute_endpoint(
 
     let start = Instant::now();
 
-    let result = match &endpoint.output {
-        // Builtin transformer: in-process, no script, no spawn, no timeout.
-        Some(crate::domain::endpoint::OutputFormat::Ansible) => Ok(
-            crate::application::output::render_ansible(&datasets, &endpoint.config, &params),
-        ),
+    // A builtin's format is known, so its content type is too; a script's
+    // output is sniffed below instead.
+    let builtin_content_type = endpoint.output.map(|format| match format {
+        crate::domain::endpoint::OutputFormat::Ansible
+        | crate::domain::endpoint::OutputFormat::Json => "application/json",
+        crate::domain::endpoint::OutputFormat::Csv => "text/csv",
+    });
+
+    let result = match endpoint.output {
+        // Builtin transformer: in-process, no script. The render is pure CPU
+        // over the whole inventory, so it runs on the blocking pool — an async
+        // worker stalled for the length of a big merge would stall every other
+        // request scheduled on it too.
+        Some(format) => {
+            let config = endpoint.config.clone();
+            let rendered = tokio::task::spawn_blocking(move || match format {
+                crate::domain::endpoint::OutputFormat::Ansible => {
+                    crate::application::output::render_ansible(&datasets, &config, &params)
+                }
+                crate::domain::endpoint::OutputFormat::Json => {
+                    crate::application::output::render_json(&datasets, &config, &params)
+                }
+                crate::domain::endpoint::OutputFormat::Csv => {
+                    crate::application::output::render_csv(&datasets, &config, &params)
+                }
+            })
+            .await;
+            match rendered {
+                Ok(output) => Ok(output),
+                // Only a panic in the render lands here; surfaced as a plain
+                // 500 rather than taking the worker down with it.
+                Err(join_error) => {
+                    let body = serde_json::json!({
+                        "error": format!("builtin transformer failed: {}", join_error)
+                    });
+                    return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response());
+                }
+            }
+        }
         // Script transformer: resolve the path (+ venv) and run it under its timeout.
         None => {
             let script_path = match endpoint.script_path.as_deref() {
@@ -227,8 +261,11 @@ async fn execute_endpoint(
             }
 
             // A hung transformer must not hang the HTTP request forever.
+            let timeout_seconds = endpoint
+                .timeout_seconds
+                .unwrap_or_else(crate::domain::default_timeout_seconds);
             match tokio::time::timeout(
-                std::time::Duration::from_secs(endpoint.timeout_seconds),
+                std::time::Duration::from_secs(timeout_seconds),
                 state.output.execute(
                     &script_path,
                     &endpoint.script_args,
@@ -242,7 +279,7 @@ async fn execute_endpoint(
                 Ok(result) => result,
                 Err(_elapsed) => {
                     let body = serde_json::json!({
-                        "error": format!("endpoint timed out after {}s", endpoint.timeout_seconds)
+                        "error": format!("endpoint timed out after {}s", timeout_seconds)
                     });
                     return Ok((StatusCode::GATEWAY_TIMEOUT, Json(body)).into_response());
                 }
@@ -267,8 +304,13 @@ async fn execute_endpoint(
 
     match result {
         Ok(output) => {
-            // The script decides the format — we return the string as-is.
-            // We try to detect if it's JSON to set the correct content-type.
+            // A builtin's content type is known from its format; a script
+            // decides its own format, so its output is sniffed for JSON.
+            if let Some(content_type) = builtin_content_type {
+                return Ok(
+                    (StatusCode::OK, [("content-type", content_type)], output).into_response()
+                );
+            }
             if output.trim_start().starts_with('{') || output.trim_start().starts_with('[') {
                 Ok((
                     StatusCode::OK,

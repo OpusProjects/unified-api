@@ -108,6 +108,11 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
 
     let mut report = diff(&previous, &next, cfg, state.live_settings());
 
+    // Remember what this reload could NOT adopt, so the scrape-time gauge
+    // (unified_api_config_restart_required) answers for the whole fleet what
+    // GET /api/v1/config answers for one pod.
+    state.set_restart_pending(report.restart_required.clone());
+
     // Last, so the tasks restart against a state that is already fully
     // swapped — config and secrets both.
     report.generation = state.reload.bump();

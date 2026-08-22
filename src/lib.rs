@@ -264,6 +264,7 @@ impl AppBuilder {
             })),
             config_store: self.config_store,
             live_settings: std::sync::RwLock::new(self.live_settings),
+            restart_pending: std::sync::RwLock::new(Vec::new()),
             reload: ReloadNotifier::new(),
             projects_dir: self.projects_dir,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),

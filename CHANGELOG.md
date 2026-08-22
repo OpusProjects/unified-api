@@ -18,6 +18,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   name seen, sorted). Renders are deterministic — identical inventory renders
   byte-for-byte identically.
 
+- **Reload and build observability on `/metrics`.** Three gauges, computed on
+  each scrape: `unified_api_config_restart_required` counts the restart-only
+  keys the last applied reload changed — non-zero means the pod runs on a
+  configuration it could only partially adopt, a state that until now was
+  visible only via `GET /api/v1/config` on each pod;
+  `unified_api_config_generation` is the number of applied reloads since the
+  process started, so a pod lagging a fleet-wide configuration push is one
+  query away; and `unified_api_build_info{version}` is the classic constant-1
+  info metric carrying the running version as a label.
+
 ### Changed
 
 - **`endpoints.yaml`: `timeout_seconds` on a builtin endpoint is now a config

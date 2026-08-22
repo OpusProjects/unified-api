@@ -95,7 +95,8 @@ routes and on an API running open, where absence means nobody authenticated.
 **Mutating operations additionally emit an audit event** under the dedicated
 `audit` tracing target — one line per operation that actually ran, with
 `actor` (the key name, or `open` on an unauthenticated deployment), `action`
-(`sync`, `evict`, `host_put`, `host_delete`, `enricher_run`, `project_sync`),
+(`sync`, `evict`, `host_put`, `host_delete`, `enricher_run`, `project_sync`,
+`config_write`, `config_write_reload`, `config_reload`),
 `resource`, `request_id` and `outcome` (`success`/`error` — a sync answers
 HTTP 200 either way, so the status alone cannot say). Denied attempts (401/403)
 are deliberately absent: they return before anything happens, and the access
@@ -114,11 +115,15 @@ probes — scrapers don't carry the API key):
 | `unified_api_sync_total` | `source`, `result` | Sync runs: `success`, `error`, or `coalesced` (answered by a concurrent full sync's result — no gather ran) |
 | `unified_api_remote_not_modified_total` | `url`, `source` | Federation pulls answered `304 Not Modified` — the transfer and re-parse were skipped, the sync still succeeded (see [connectors → remote](connectors.md#remote-sources--federation-connector_type-remote)) |
 | `unified_api_sync_duration_seconds` | `source` | Sync duration histogram |
+| `unified_api_refresh_total` | `source`, `result` | On-demand refreshes triggered by reads (`?refresh=true`): `fresh` (the cache answered, no gather ran), `coalesced`, `refreshed`, `failed` or `timeout` — how much gathering load comes from consumers rather than the scheduler (see [on-demand refresh](on-demand-refresh.md)) |
 | `unified_api_enrich_total` | `source`, `result` | Enricher runs |
 | `unified_api_enrich_duration_seconds` | `source` | Enricher duration histogram |
 | `unified_api_endpoint_total` | `endpoint`, `result` | Output endpoint runs |
 | `unified_api_config_writes_total` | `outcome` | Configuration writes over the API: `success`, `rejected` (did not validate — nothing was written) or `error` (could not be written). See [Configuration API](config-api.md) |
 | `unified_api_config_reloads_total` | `outcome` | Configuration reloads: `success` or `invalid` |
+| `unified_api_config_generation` | — | Applied configuration reloads since this process started, 0 at boot — the pod whose generation lags a fleet-wide push is one query away |
+| `unified_api_config_restart_required` | — | Restart-only `config.yaml` keys the last applied reload changed. Non-zero = this pod runs on a configuration it could only partially adopt, and only a restart clears it; `GET /api/v1/config` names the keys |
+| `unified_api_build_info` | `version` | Always 1; the label carries the running version, so any series can be joined onto it |
 | `unified_api_endpoint_duration_seconds` | `endpoint` | Endpoint duration histogram |
 | `unified_api_source_cached` | `source` | 1 if the configured source has a cache entry, 0 if it has never synced |
 | `unified_api_source_age_seconds` | `source` | Seconds since the dataset was last fetched |
@@ -136,6 +141,7 @@ probes — scrapers don't carry the API key):
 | `unified_api_view_members_total` | `view` | Members declared |
 | `unified_api_view_members_cached` | `view` | Members that have data. Short of `_total` = the view is serving part of its inventory |
 | `unified_api_view_members_routable` | `view` | Members whose *ownership* source is cached. Short of `_total` = those members claim nothing beyond literally named hosts, so the view 404s hosts that plainly exist |
+| `unified_api_view_unclaimed_hosts_total` | `view` | Hosts requested through a view that no member claimed — the request was refused naming them. Non-zero = ownership is not declared where consumers think it is |
 | `unified_api_enricher_consecutive_failures` | `enricher` | Failed runs since this enricher last succeeded — 0 while healthy. A target that is not in the cache counts as a failure: the enricher is not doing its job either way |
 | `unified_api_enricher_last_success_age_seconds` | `enricher` | Seconds since this enricher last ran successfully |
 | `unified_api_project_sync_consecutive_failures` | `project` | Failed git pulls since this project's checkout last updated |

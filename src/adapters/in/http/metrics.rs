@@ -76,7 +76,28 @@ pub async fn track_requests(
 pub async fn metrics(State(state): State<Arc<AppState>>) -> String {
     record_source_gauges(&state);
     record_task_health_gauges(&state);
+    record_config_gauges(&state);
     handle().render()
+}
+
+// Which build and which configuration this process is running — the first
+// questions a fleet dashboard asks now that a pod's configuration can change
+// without a restart. Scrape-time like everything here.
+fn record_config_gauges(state: &AppState) {
+    // The classic build-info idiom: a constant 1 whose label carries the
+    // value, so any other series can be joined onto the version.
+    metrics::gauge!("unified_api_build_info", "version" => env!("CARGO_PKG_VERSION")).set(1.0);
+
+    // 0 at boot, bumped by every applied reload — one query shows the pod
+    // whose generation lags a fleet-wide configuration push.
+    metrics::gauge!("unified_api_config_generation").set(state.reload.generation() as f64);
+
+    // How many restart-only keys the last applied reload changed. Non-zero =
+    // this pod runs on a configuration it could only partially adopt, and
+    // only a restart clears it. A count, not per-key labels: the count is
+    // what an alert needs, and GET /api/v1/config already answers "which".
+    metrics::gauge!("unified_api_config_restart_required")
+        .set(state.restart_pending().len() as f64);
 }
 
 // Freshness gauges, refreshed on every scrape.

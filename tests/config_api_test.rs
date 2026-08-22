@@ -642,6 +642,73 @@ async fn a_setting_a_running_process_cannot_adopt_is_reported_not_dropped() {
     assert_eq!(json(&body)["restart_required"][0], "server.port");
 }
 
+// The only test in this binary that scrapes /metrics: the recorder is a
+// process-wide global, so a second scraping test would race this one's
+// unlabeled gauges.
+#[tokio::test]
+async fn restart_required_and_generation_are_exported_as_gauges() {
+    let dir = config_dir("UNIFIED_API_TEST_KEY_GAUGES");
+    let (app, _) = app_at(dir.path());
+
+    let scrape = || {
+        Request::builder()
+            .uri("/metrics")
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+
+    // At boot nothing is pending and no reload has been applied.
+    let (status, body) = send(&app, scrape()).await;
+    assert_eq!(status, StatusCode::OK, "metrics are public");
+    assert!(
+        body.contains("unified_api_config_restart_required 0"),
+        "body: {}",
+        body
+    );
+    assert!(body.contains("unified_api_config_generation 0"), "{}", body);
+    assert!(
+        body.contains(&format!(
+            "unified_api_build_info{{version=\"{}\"}} 1",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "body: {}",
+        body
+    );
+
+    // A reload that moves the port cannot adopt it — the gauge must say so.
+    let moved_port = "server:\n  host: \"127.0.0.1\"\n  port: 9999\n";
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", moved_port),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = send(&app, scrape()).await;
+    assert!(
+        body.contains("unified_api_config_restart_required 1"),
+        "one restart-only key is pending, and Prometheus can see it: {}",
+        body
+    );
+    assert!(body.contains("unified_api_config_generation 1"), "{}", body);
+
+    // A follow-up reload that reverts the change clears the pending state.
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", MINIMAL_SERVER),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = send(&app, scrape()).await;
+    assert!(
+        body.contains("unified_api_config_restart_required 0"),
+        "body: {}",
+        body
+    );
+    assert!(body.contains("unified_api_config_generation 2"), "{}", body);
+}
+
 #[tokio::test]
 async fn a_hand_edited_directory_that_no_longer_loads_is_visible_and_refuses_to_reload() {
     let dir = config_dir("UNIFIED_API_TEST_KEY_HANDEDIT");

@@ -119,6 +119,13 @@ pub struct AppState {
     // disk, and which of its keys this process cannot adopt without a restart.
     pub config_store: Option<Arc<dyn ports::config_store::ConfigStorePort>>,
     pub(crate) live_settings: RwLock<Option<crate::config::RestartOnlySettings>>,
+    // The restart-only keys the last APPLIED reload changed, kept so /metrics
+    // can export the count at scrape time: a pod running on a configuration
+    // it could only partially adopt is otherwise visible only to whoever
+    // queries GET /api/v1/config on that one pod. Empty at boot (the process
+    // was just built from the directory) and replaced whole on every reload,
+    // so a follow-up reload that reverts the change clears it.
+    pub(crate) restart_pending: RwLock<Vec<String>>,
     pub reload: ReloadNotifier,
     // The checkout root. Restart-only: the boot clones, the snapshot of script
     // paths every execution resolves, and the project tasks all take it from
@@ -182,6 +189,19 @@ impl AppState {
 
     pub fn set_live_settings(&self, settings: crate::config::RestartOnlySettings) {
         *self.live_settings.write().expect("live settings lock") = Some(settings);
+    }
+
+    // The restart-only keys still awaiting a restart, as of the last applied
+    // reload. GET /api/v1/config reports them by name; /metrics as a count.
+    pub fn restart_pending(&self) -> Vec<String> {
+        self.restart_pending
+            .read()
+            .expect("restart pending lock")
+            .clone()
+    }
+
+    pub fn set_restart_pending(&self, keys: Vec<String>) {
+        *self.restart_pending.write().expect("restart pending lock") = keys;
     }
 
     // The enrichment dependencies a sync needs, borrowed from the state that

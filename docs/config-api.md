@@ -170,7 +170,10 @@ A write that touches one of them still lands on disk; the response names it:
 
 `GET /api/v1/config` keeps reporting `restart_required` until a restart
 actually adopts it, so the state is visible to anything that looks, not only
-to whoever made the write.
+to whoever made the write — and `/metrics` exports the count as the
+`unified_api_config_restart_required` gauge, so a fleet where some pods took
+a push they could only partially adopt is one alert away, not one `GET` per
+pod (see [observability](observability.md)).
 
 ### What happens to the running work
 

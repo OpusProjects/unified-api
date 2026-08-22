@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use axum::extract::Request;
-use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::Response;
 use subtle::ConstantTimeEq;
@@ -164,7 +163,13 @@ pub struct AuthContext {
 #[derive(Clone)]
 pub struct ApiKeys(pub Arc<ApiKeyRegistry>);
 
-pub async fn require_api_key(mut request: Request, next: Next) -> Result<Response, StatusCode> {
+// Errors as ApiError rather than a bare StatusCode: a middleware rejection
+// renders through the same IntoResponse as a handler's, so a 401 carries the
+// {"error": ...} body every other failure in the API carries.
+pub async fn require_api_key(
+    mut request: Request,
+    next: Next,
+) -> Result<Response, crate::adapters::r#in::http::error::ApiError> {
     let keys = request
         .extensions()
         .get::<ApiKeys>()
@@ -195,7 +200,7 @@ pub async fn require_api_key(mut request: Request, next: Next) -> Result<Respons
         });
 
     let Some(token) = token else {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(crate::adapters::r#in::http::error::ApiError::missing_api_key());
     };
 
     // Constant-time comparison per key (see the ct_eq note below), and no
@@ -224,7 +229,7 @@ pub async fn require_api_key(mut request: Request, next: Next) -> Result<Respons
             });
             Ok(next.run(request).await)
         }
-        None => Err(StatusCode::UNAUTHORIZED),
+        None => Err(crate::adapters::r#in::http::error::ApiError::invalid_api_key()),
     }
 }
 
@@ -234,6 +239,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
+    use axum::http::StatusCode;
     use axum::middleware;
     use axum::routing::get;
     use tower::ServiceExt;
@@ -303,6 +309,9 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        // A rejection carries the standard error body, never an empty one.
+        let body = body_string(resp).await;
+        assert!(body.contains("invalid API key"), "body: {}", body);
     }
 
     #[tokio::test]
@@ -314,6 +323,10 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        // "Missing" names its fix — where to put the key — unlike "invalid".
+        let body = body_string(resp).await;
+        assert!(body.contains("missing API key"), "body: {}", body);
+        assert!(body.contains("X-API-Key"), "body: {}", body);
     }
 
     #[tokio::test]

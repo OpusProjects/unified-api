@@ -34,6 +34,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   error named at load**, like `project_id` and `script_args` since 0.21.0 —
   a builtin runs in-process, so the script timeout it names never applied.
 
+### Fixed
+
+- **`401` responses now carry the standard `{"error": ...}` body.** The auth
+  middleware answered a missing or invalid API key with an empty body — the
+  one error every new consumer hits first, and the last one in the API that
+  said nothing. The message also distinguishes the two states, because their
+  fixes differ: `missing API key` names the `X-API-Key` header to pass,
+  `invalid API key` means one arrived and matched no configured key.
+
 ## [0.21.0] - 2026-08-20
 
 ### Added

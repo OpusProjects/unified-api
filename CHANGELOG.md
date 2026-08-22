@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-22
+
 ### Added
 
 - **`output: json` and `output: csv` builtin transformers.** Two more formats
@@ -1493,7 +1495,9 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/OpusProjects/unified-api/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/OpusProjects/unified-api/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/OpusProjects/unified-api/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/OpusProjects/unified-api/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/OpusProjects/unified-api/compare/v0.17.0...v0.18.0

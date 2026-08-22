@@ -204,12 +204,13 @@ merged, so a host in either one belongs to the group.
 
 ## Everything answers 401 or 403
 
-The two are different failures, and they are told apart by whether there is a response body.
+The two are different failures, and the message in the body tells them apart.
 
-- **401** — no key, or an unrecognised one. This comes from the middleware
-  before any handler runs, so it is the one error with no JSON body.
-- **403 with a body** — the key is valid but not scoped to that id. The message
-  names the source, view or endpoint it refused.
+- **401** — authentication failed, before any handler ran. `missing API key`
+  means no credential arrived (the message names the `X-API-Key` header);
+  `invalid API key` means one arrived and matched no configured key.
+- **403** — the key is valid but not scoped to that id. The message names the
+  source, view or endpoint it refused.
 
 A key granted a **view** needs no grant on the members: the members are internal
 topology, the view is the contract. A key granted an **endpoint** likewise needs

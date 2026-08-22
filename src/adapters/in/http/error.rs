@@ -77,6 +77,21 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, message)
     }
 
+    // The 401s come from the auth middleware rather than a handler, and were
+    // the last bare StatusCodes left — an empty body on the one error every
+    // new consumer hits first. Two messages, because the two states have
+    // different fixes: no credential offered versus the wrong one.
+    pub fn missing_api_key() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "missing API key: pass it in the X-API-Key header or as a Bearer token",
+        )
+    }
+
+    pub fn invalid_api_key() -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "invalid API key")
+    }
+
     // Refusing a refresh is worth its own wording, because the two ways it can
     // be refused have completely different fixes and both used to be one bland
     // 403 or nothing at all.

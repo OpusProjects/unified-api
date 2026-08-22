@@ -77,8 +77,9 @@ The message distinguishes cases that share a status code — `404` from
 of the two is missing. Treat the text as loggable, not matchable: branch on the
 status code, read the message.
 
-The one exception is `401`: the API-key middleware rejects a request before any
-handler runs, so an unauthenticated call gets the status alone.
+That includes `401`: the API-key middleware rejects a request before any
+handler runs, but it renders the same shape — `missing API key` names the
+header to pass, `invalid API key` means one was passed and matched nothing.
 
 ---
 

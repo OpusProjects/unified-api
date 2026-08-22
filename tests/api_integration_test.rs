@@ -1456,7 +1456,7 @@ async fn endpoint_errors_carry_a_body_like_every_other_route() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
-            timeout_seconds: 30,
+            timeout_seconds: Some(30),
         },
     )]);
 

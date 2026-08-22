@@ -293,18 +293,18 @@ transformer) or `script_path` (an external script).
 ep-ansible-full:
   name: "Full Ansible Inventory"
   source_ids: ["src-section9", "src-infra"]
-  output: ansible                   # the only builtin today
+  output: ansible                   # builtins: ansible, json, csv
   config:
-    filter_datacenter: "section9"   # free-form filters (see docs/endpoints.md)
+    filter_datacenter: "section9"   # filters and csv columns (see docs/endpoints.md)
 
 # Script transformer — for a bespoke format.
-ep-netbox-csv:
-  name: "NetBox CSV"
+ep-dns-zone:
+  name: "DNS zone file"
   source_ids: ["src-infra"]
-  script_path: "outputs/netbox_csv.py"
+  script_path: "outputs/dns_zone.py"
   project_id: "prj-connectors"      # optional: resolve inside a checkout
   script_args: []                   # optional CLI args for the script
-  timeout_seconds: 300              # abort a transform that takes longer (default 300)
+  timeout_seconds: 300              # script only: abort a transform that takes longer (default 300)
 ```
 
 ---

@@ -28,18 +28,20 @@ fn comma_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
-// Render the merged datasets as Ansible dynamic inventory JSON.
+// Merge every source's dataset and apply the endpoint's filters. Shared by
+// every builtin: the formats differ only in how the surviving hosts and
+// groups are written out, so the merge-and-filter half lives once.
 //
 // Filters (from `config`, each overridable per request via `params`):
 //   filter_datacenter — keep hosts whose `datacenter` hostvar equals this
 //   filter_os         — keep hosts whose `os` hostvar equals this
 //   filter_group      — keep hosts in any of these (comma-separated) groups
 //   exclude_vars      — drop these (comma-separated) hostvars from every host
-pub fn render_ansible(
+fn merge_and_filter(
     datasets: &HashMap<String, Arc<Dataset>>,
     config: &HashMap<String, String>,
     params: &serde_json::Value,
-) -> String {
+) -> (HashMap<String, HostVars>, HashMap<String, Group>) {
     let filter_datacenter = setting(params, config, "filter_datacenter");
     let filter_os = setting(params, config, "filter_os");
     let filter_group = setting(params, config, "filter_group");
@@ -122,6 +124,18 @@ pub fn render_ansible(
         !(group.hosts.is_empty() && group.children.is_empty())
     });
 
+    (hostvars, groups)
+}
+
+// Render the merged datasets as Ansible dynamic inventory JSON
+// (`_meta.hostvars` plus one key per group). Filters: see merge_and_filter.
+pub fn render_ansible(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    config: &HashMap<String, String>,
+    params: &serde_json::Value,
+) -> String {
+    let (hostvars, groups) = merge_and_filter(datasets, config, params);
+
     // Emit the Ansible dynamic-inventory shape deterministically (sorted keys
     // and lists) so identical inventory renders byte-for-byte identically.
     let mut inventory = serde_json::Map::new();
@@ -156,6 +170,98 @@ pub fn render_ansible(
     // Pretty, like the script it replaces; the handler sniffs `{`/`[` for JSON.
     serde_json::to_string_pretty(&serde_json::Value::Object(inventory))
         .expect("inventory is plain JSON values and cannot fail to serialize")
+}
+
+// Render the merged datasets in the raw source shape (`hostvars` + `groups`),
+// like `GET /sources/{id}/dataset` but merged across sources and filtered —
+// for consumers that want the inventory as data rather than in a tool's
+// format. Filters: see merge_and_filter.
+pub fn render_json(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    config: &HashMap<String, String>,
+    params: &serde_json::Value,
+) -> String {
+    let (hostvars, groups) = merge_and_filter(datasets, config, params);
+
+    // `json!` moves the maps into serde_json::Value, whose object type keeps
+    // its keys sorted (a BTreeMap underneath), so identical inventory renders
+    // byte-for-byte identically — same guarantee as the other builtins.
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hostvars": hostvars,
+        "groups": groups,
+    }))
+    .expect("the dataset is plain JSON values and cannot fail to serialize")
+}
+
+// Quote a CSV field per RFC 4180: only when it contains a comma, a quote or a
+// line break, doubling any embedded quotes.
+fn csv_field(raw: &str) -> String {
+    if raw.contains(',') || raw.contains('"') || raw.contains('\n') || raw.contains('\r') {
+        format!("\"{}\"", raw.replace('"', "\"\""))
+    } else {
+        raw.to_string()
+    }
+}
+
+// A hostvar as one CSV cell: strings verbatim (no JSON quotes), a missing or
+// null var as an empty cell, and anything structured as compact JSON so no
+// information is silently dropped.
+fn csv_value(value: Option<&serde_json::Value>) -> String {
+    match value {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => serde_json::to_string(other)
+            .expect("a hostvar is a plain JSON value and cannot fail to serialize"),
+    }
+}
+
+// Render the surviving hosts as CSV: a header row, then one row per host,
+// sorted by hostname. The first column is `host`; the rest default to every
+// hostvar name seen (sorted), and `columns` (comma-separated, in `config` or
+// per request via `params`) picks and orders them instead. Groups do not
+// appear — a row per host is the point; use `filter_group` to select by one.
+// Filters: see merge_and_filter.
+pub fn render_csv(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    config: &HashMap<String, String>,
+    params: &serde_json::Value,
+) -> String {
+    let columns = comma_list(&setting(params, config, "columns"));
+    let (hostvars, _groups) = merge_and_filter(datasets, config, params);
+
+    let columns = if columns.is_empty() {
+        let mut seen: Vec<String> = hostvars
+            .values()
+            .flat_map(|vars| vars.keys().cloned())
+            .collect::<HashSet<String>>()
+            .into_iter()
+            .collect();
+        seen.sort();
+        seen
+    } else {
+        columns
+    };
+
+    let mut hosts: Vec<&String> = hostvars.keys().collect();
+    hosts.sort();
+
+    let mut out = String::new();
+    out.push_str("host");
+    for column in &columns {
+        out.push(',');
+        out.push_str(&csv_field(column));
+    }
+    out.push('\n');
+    for host in hosts {
+        let vars = &hostvars[host];
+        out.push_str(&csv_field(host));
+        for column in &columns {
+            out.push(',');
+            out.push_str(&csv_field(&csv_value(vars.get(column))));
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -274,6 +380,147 @@ mod tests {
         let inv: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(inv["_meta"]["hostvars"].get("b").is_some());
         assert!(inv["_meta"]["hostvars"].get("a").is_none());
+    }
+
+    #[test]
+    fn json_renders_the_merged_dataset_in_the_raw_shape() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src-a".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux"}}),
+                serde_json::json!({"web": {"hosts": ["h1"]}}),
+            ),
+        );
+        datasets.insert(
+            "src-b".to_string(),
+            dataset(
+                serde_json::json!({"h2": {"os": "windows"}}),
+                serde_json::json!({"web": {"hosts": ["h2"]}}),
+            ),
+        );
+        let config: HashMap<String, String> = HashMap::new();
+
+        let out = render_json(&datasets, &config, &serde_json::json!({}));
+        let merged: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        // The raw source shape — hostvars + groups, no _meta wrapper.
+        assert!(merged.get("_meta").is_none());
+        assert_eq!(merged["hostvars"]["h1"]["os"], "linux");
+        assert_eq!(merged["hostvars"]["h2"]["os"], "windows");
+        assert_eq!(
+            merged["groups"]["web"]["hosts"],
+            serde_json::json!(["h1", "h2"])
+        );
+    }
+
+    #[test]
+    fn json_applies_the_shared_filters() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({
+                    "linux1": {"os": "linux", "secret": "x"},
+                    "win1": {"os": "windows"}
+                }),
+                serde_json::json!({"all-hosts": {"hosts": ["linux1", "win1"]}}),
+            ),
+        );
+        let config: HashMap<String, String> = serde_json::from_value(
+            serde_json::json!({"filter_os": "linux", "exclude_vars": "secret"}),
+        )
+        .unwrap();
+
+        let out = render_json(&datasets, &config, &serde_json::json!({}));
+        let merged: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        assert!(merged["hostvars"].get("win1").is_none());
+        assert!(merged["hostvars"]["linux1"].get("secret").is_none());
+        // The filtered host is gone from the group too.
+        assert_eq!(
+            merged["groups"]["all-hosts"]["hosts"],
+            serde_json::json!(["linux1"])
+        );
+    }
+
+    #[test]
+    fn csv_defaults_to_every_hostvar_seen_sorted() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({
+                    "b-host": {"os": "linux", "ram_gb": 64},
+                    "a-host": {"os": "windows", "datacenter": "dc1"}
+                }),
+                serde_json::json!({}),
+            ),
+        );
+        let config: HashMap<String, String> = HashMap::new();
+
+        let out = render_csv(&datasets, &config, &serde_json::json!({}));
+        let lines: Vec<&str> = out.lines().collect();
+
+        // Columns are the union of names, sorted; rows sorted by hostname.
+        // A missing var is an empty cell, a number is rendered bare.
+        assert_eq!(lines[0], "host,datacenter,os,ram_gb");
+        assert_eq!(lines[1], "a-host,dc1,windows,");
+        assert_eq!(lines[2], "b-host,,linux,64");
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn csv_columns_setting_picks_and_orders_and_params_override() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux", "ram_gb": 64, "role": "web"}}),
+                serde_json::json!({}),
+            ),
+        );
+        let config: HashMap<String, String> =
+            serde_json::from_value(serde_json::json!({"columns": "role, os"})).unwrap();
+
+        let out = render_csv(&datasets, &config, &serde_json::json!({}));
+        assert_eq!(out, "host,role,os\nh1,web,linux\n");
+
+        // A request parameter replaces the configured column list entirely.
+        let out = render_csv(
+            &datasets,
+            &config,
+            &serde_json::json!({"columns": "ram_gb"}),
+        );
+        assert_eq!(out, "host,ram_gb\nh1,64\n");
+    }
+
+    #[test]
+    fn csv_quotes_and_serializes_structured_values() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {
+                    "comment": "a, \"quoted\" note",
+                    "tags": ["x", "y"],
+                    "gone": null
+                }}),
+                serde_json::json!({}),
+            ),
+        );
+        let config: HashMap<String, String> = HashMap::new();
+
+        let out = render_csv(&datasets, &config, &serde_json::json!({}));
+        let lines: Vec<&str> = out.lines().collect();
+
+        assert_eq!(lines[0], "host,comment,gone,tags");
+        // Embedded commas and quotes get RFC 4180 quoting; null is an empty
+        // cell; a list survives as compact JSON (itself quoted for its comma).
+        assert_eq!(
+            lines[1],
+            "h1,\"a, \"\"quoted\"\" note\",,\"[\"\"x\"\",\"\"y\"\"]\""
+        );
     }
 
     #[test]

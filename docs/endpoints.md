@@ -8,6 +8,7 @@ in-process) or an external **script** (`script_path:`). Field reference lives in
 [configuration → endpoints.yaml](configuration.md#endpointsyaml).
 
 - [What an endpoint is](#what-an-endpoint-is)
+- [Builtin transformers](#builtin-transformers)
 - [The script contract](#the-script-contract)
 - [GET versus POST](#get-versus-post)
 - [Failure shapes](#failure-shapes)
@@ -26,16 +27,50 @@ every time.
 ep-awx-full:
   name: "Full AWX inventory"
   source_ids: ["src-d42", "src-fleet-facts", "src-inventory"]
-  script_path: "outputs/ansible_inventory.py"
-  project_id: "prj-connectors"     # optional: resolve the script (and its
-                                   # virtualenv) inside this checkout
-  timeout_seconds: 300
-  config:                          # static, script-specific
+  output: ansible                  # a builtin — or script_path: for a script
+  config:                          # static transformer settings
     filter_os: "OracleLinux"
 ```
 
 Endpoints read cached **sources**, never views — a view has no cache entry of
 its own, so config validation tells you to list the members instead.
+
+---
+
+## Builtin transformers
+
+A builtin renders in-process — no script, no interpreter spawn, no project
+checkout — and every builtin shares one pipeline: merge the configured sources
+(sorted by id, later ids win on overlap), apply the filters below, then write
+the survivors in the builtin's format.
+
+| Builtin | Renders | Served as |
+|---|---|---|
+| `output: ansible` | Ansible dynamic inventory — `_meta.hostvars` plus one key per group | `application/json` |
+| `output: json` | The merged, filtered inventory in the raw source shape (`hostvars` + `groups`) | `application/json` |
+| `output: csv` | One row per host, sorted by hostname — columns picked by `columns` | `text/csv` |
+
+Every setting lives in the endpoint's free-form `config:` map, and a request
+overrides any of them dynamically — a query parameter on GET, a body field on
+POST:
+
+| Setting | Effect |
+|---|---|
+| `filter_datacenter` | Keep hosts whose `datacenter` hostvar equals this |
+| `filter_os` | Keep hosts whose `os` hostvar equals this |
+| `filter_group` | Keep hosts in any of these groups (comma-separated) |
+| `exclude_vars` | Drop these hostvars (comma-separated) from every host |
+| `columns` (csv only) | Hostvar names (comma-separated) to emit as columns, in order, after the leading `host` column. Default: every hostvar name seen, sorted |
+
+A group that loses every host to a filter is dropped. A CSV cell renders a
+string verbatim, a missing or null var as an empty cell, and anything
+structured as compact JSON, quoted per RFC 4180. Renders are deterministic —
+identical inventory renders byte-for-byte identically, so responses diff
+cleanly across instances and across time.
+
+The script-only knobs (`script_path`, `script_args`, `project_id`,
+`timeout_seconds`) are config errors on a builtin endpoint, named at load —
+a builtin runs in-process, so none of them can mean anything.
 
 ---
 
@@ -83,7 +118,7 @@ body naming the problem.
 | Status | Meaning |
 |---|---|
 | `503` | One or more sources not yet synced — the body lists `missing_sources`, so the caller knows what to wait for |
-| `504` | The transformer exceeded `timeout_seconds` and was killed |
+| `504` | The script exceeded `timeout_seconds` and was killed (scripts only — a builtin runs in-process, with no timeout) |
 | `500` | The script exited non-zero; the body carries its error |
 | `404` | The endpoint id is not configured |
 | `403` | The API key is not granted this endpoint |

@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`output: json` and `output: csv` builtin transformers.** Two more formats
+  render in-process alongside `output: ansible`, sharing its merge pipeline and
+  its `filter_datacenter` / `filter_os` / `filter_group` / `exclude_vars`
+  filters (each overridable per request): `json` serves the merged, filtered
+  inventory in the raw source shape (`hostvars` + `groups`) as
+  `application/json`, and `csv` serves one row per host as `text/csv`, with
+  columns picked and ordered by a `columns` setting (default: every hostvar
+  name seen, sorted). Renders are deterministic — identical inventory renders
+  byte-for-byte identically.
+
+### Changed
+
+- **`endpoints.yaml`: `timeout_seconds` on a builtin endpoint is now a config
+  error named at load**, like `project_id` and `script_args` since 0.21.0 —
+  a builtin runs in-process, so the script timeout it names never applied.
+
 ## [0.21.0] - 2026-08-20
 
 ### Added

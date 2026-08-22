@@ -37,9 +37,11 @@ pub struct OutputEndpoint {
     pub config: HashMap<String, String>,
 
     // Maximum seconds the script may take before it is aborted (script_path
-    // only — a builtin runs in-process). Default 300.
-    #[serde(default = "crate::domain::default_timeout_seconds")]
-    pub timeout_seconds: u64,
+    // only — a builtin runs in-process, so setting this on one is a config
+    // error like project_id, not a silent no-op). Unset = the shared default
+    // (300), applied where the timeout is armed.
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
 }
 
 // A builtin, in-process transformer — no script, no spawned interpreter. The
@@ -52,4 +54,12 @@ pub enum OutputFormat {
     // `output: ansible` — merge the sources and render Ansible dynamic
     // inventory (`_meta.hostvars` plus one key per group).
     Ansible,
+    // `output: json` — the merged, filtered inventory in the raw source shape
+    // (`hostvars` + `groups`), for consumers that want the data itself rather
+    // than a tool's format.
+    Json,
+    // `output: csv` — one row per host, sorted; columns from the `columns`
+    // config (default: every hostvar name seen). For spreadsheets and
+    // importers that speak tables, not JSON.
+    Csv,
 }

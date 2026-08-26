@@ -1088,6 +1088,52 @@ async fn builtin_csv_output_renders_rows_with_csv_content_type() {
 }
 
 // =========================================================================
+// Test: a timed-out endpoint answers 504 with the standard error shape
+// =========================================================================
+#[tokio::test]
+async fn a_timed_out_endpoint_answers_504_with_the_standard_error_shape() {
+    let mut sources = HashMap::new();
+    sources.insert("src-inventory".to_string(), test_source("default"));
+
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-slow".to_string(),
+        OutputEndpoint {
+            name: "Slow transformer".to_string(),
+            source_ids: vec!["src-inventory".to_string()],
+            output: None,
+            script_path: Some("tests/adapters/out/output/slow.py".to_string()),
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: Some(1),
+        },
+    );
+
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    let (sync, _) = request(app.clone(), "POST", "/api/v1/sources/src-inventory/sync").await;
+    assert_eq!(sync, StatusCode::OK);
+
+    let (status, body) = request(app.clone(), "POST", "/api/v1/endpoints/ep-slow").await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+    // The refusal is the standard {"error": ...} shape naming the limit it
+    // hit, not a hand-built body.
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error body");
+    assert!(
+        parsed["error"]
+            .as_str()
+            .expect("an error field")
+            .contains("timed out after 1s"),
+        "body: {}",
+        body
+    );
+}
+
+// =========================================================================
 // Test: endpoint without synced sources → 503
 // =========================================================================
 #[tokio::test]

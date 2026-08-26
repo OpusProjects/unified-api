@@ -25,6 +25,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `413` with the standard `{"error": ...}` body naming the key and the
   configured limit.
 
+### Fixed
+
+- **Endpoint failures render through the standard error shape, and timed-out
+  runs are counted.** The output endpoint's 500 and 504 bodies were hand-built
+  JSON; they now come from the same `ApiError` as every other failure, the 503
+  keeps its `missing_sources` list under a declared schema, and all three plus
+  the 504 appear in the OpenAPI spec. A timed-out run also used to return
+  before the counters, so `unified_api_endpoint_total` never saw it — despite
+  the docs saying timed-out runs count as `result="error"`. They do now.
+- **`GET /metrics` appears in the OpenAPI spec**, including that
+  `server.metrics_require_auth: true` moves it behind the API key.
+
 ## [0.22.0] - 2026-08-22
 
 ### Added

@@ -29,6 +29,7 @@ impl Modify for SecurityAddon {
     paths(
         http::health::healthz,
         http::health::readyz,
+        http::metrics::metrics,
         http::sources::list_cached_sources,
         http::sources::get_source_dataset,
         http::sources::list_source_groups,
@@ -68,6 +69,7 @@ impl Modify for SecurityAddon {
         http::sync::SyncResult,
         http::enrichers::EnrichResult,
         http::endpoints::EndpointInfo,
+        http::endpoints::EndpointUnavailableBody,
         http::enrichers::EnricherInfo,
         http::health::ReadyStatus,
         http::projects::ProjectInfo,

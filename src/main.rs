@@ -293,7 +293,11 @@ async fn main() {
     let _ = shutdown_tx.send(true);
     let handles: Vec<tokio::task::JoinHandle<()>> =
         std::mem::take(background_tasks.lock().expect("handle registry").as_mut());
-    let grace = std::time::Duration::from_secs(cfg.server.shutdown_grace_seconds);
+    // From the CURRENT snapshot, not the boot config: the grace is read at
+    // this single moment, which is what makes it reloadable — whatever a
+    // reload set last is what governs this drain.
+    let grace_seconds = state.config().shutdown_grace_seconds;
+    let grace = std::time::Duration::from_secs(grace_seconds);
     let drain = async {
         for handle in handles {
             let _ = handle.await;
@@ -301,7 +305,7 @@ async fn main() {
     };
     if tokio::time::timeout(grace, drain).await.is_err() {
         warn!(
-            grace_seconds = cfg.server.shutdown_grace_seconds,
+            grace_seconds,
             "Background tasks still running after the grace period — snapshotting anyway"
         );
     } else {

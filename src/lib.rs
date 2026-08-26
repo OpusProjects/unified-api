@@ -59,6 +59,7 @@ pub struct AppBuilder {
     metrics_require_auth: bool,
     refresh_timeout_seconds: u64,
     refresh_max_concurrent: usize,
+    shutdown_grace_seconds: u64,
 }
 
 impl AppBuilder {
@@ -86,6 +87,7 @@ impl AppBuilder {
             // per host in the inventory.
             refresh_timeout_seconds: 15,
             refresh_max_concurrent: 8,
+            shutdown_grace_seconds: 20,
         }
     }
 
@@ -158,6 +160,7 @@ impl AppBuilder {
         self.metrics_require_auth = cfg.server.metrics_require_auth;
         self.refresh_timeout_seconds = cfg.server.refresh_timeout_seconds;
         self.refresh_max_concurrent = cfg.server.refresh_max_concurrent;
+        self.shutdown_grace_seconds = cfg.server.shutdown_grace_seconds;
         self
     }
 
@@ -261,6 +264,9 @@ impl AppBuilder {
                 projects: self.projects,
                 secrets: self.secrets_settings,
                 readyz_require_all_sources: self.readyz_require_all_sources,
+                shutdown_grace_seconds: self.shutdown_grace_seconds,
+                refresh_timeout_seconds: self.refresh_timeout_seconds,
+                refresh_max_concurrent: self.refresh_max_concurrent,
             })),
             config_store: self.config_store,
             live_settings: std::sync::RwLock::new(self.live_settings),

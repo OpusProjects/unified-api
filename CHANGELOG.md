@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Live reload now covers the refresh limits and the shutdown grace.**
+  `server.refresh_timeout_seconds`, `server.refresh_max_concurrent` and
+  `server.shutdown_grace_seconds` apply on a configuration reload instead of
+  being reported as `restart_required`. The refresh budget and a grown
+  concurrency cap take effect on the next refresh; a shrunk cap lets in-flight
+  refreshes finish under the old limit and reclaims their permits as they
+  land; the shutdown grace is read when the drain starts, so the last reloaded
+  value governs it.
+
 ## [0.22.0] - 2026-08-22
 
 ### Added

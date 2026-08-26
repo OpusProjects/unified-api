@@ -219,21 +219,18 @@ pub fn is_config_file(name: &str) -> bool {
 // out of AppConfig as plain comparable values.
 //
 // A reload swaps what it can (sources, views, enrichers, endpoints, projects,
-// credentials, api keys) and has to say something honest about the rest: the
-// listener is already bound, the CORS and metrics-auth layers are already
-// built into the router, the snapshot task already holds its path and
-// interval, and the refresh coordinator already holds its semaphore. Silently
-// ignoring those keys is how a pipeline comes to believe it changed a port it
-// did not change — so they are diffed and NAMED in the reload report instead.
+// credentials, api keys, the refresh limits, the shutdown grace) and has to
+// say something honest about the rest: the listener is already bound, the
+// CORS and metrics-auth layers are already built into the router, and the
+// snapshot task already holds its path and interval. Silently ignoring those
+// keys is how a pipeline comes to believe it changed a port it did not
+// change — so they are diffed and NAMED in the reload report instead.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RestartOnlySettings {
     pub host: String,
     pub port: u16,
     pub cors_allowed_origins: Vec<String>,
     pub metrics_require_auth: bool,
-    pub refresh_timeout_seconds: u64,
-    pub refresh_max_concurrent: usize,
-    pub shutdown_grace_seconds: u64,
     pub persistence_path: Option<String>,
     pub persistence_interval_seconds: Option<u64>,
     pub projects_dir: String,
@@ -247,9 +244,6 @@ impl RestartOnlySettings {
             port: cfg.server.port,
             cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
             metrics_require_auth: cfg.server.metrics_require_auth,
-            refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
-            refresh_max_concurrent: cfg.server.refresh_max_concurrent,
-            shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
             persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
             persistence_interval_seconds: cfg
                 .cache
@@ -279,18 +273,6 @@ impl RestartOnlySettings {
         check(
             self.metrics_require_auth != other.metrics_require_auth,
             "server.metrics_require_auth",
-        );
-        check(
-            self.refresh_timeout_seconds != other.refresh_timeout_seconds,
-            "server.refresh_timeout_seconds",
-        );
-        check(
-            self.refresh_max_concurrent != other.refresh_max_concurrent,
-            "server.refresh_max_concurrent",
-        );
-        check(
-            self.shutdown_grace_seconds != other.shutdown_grace_seconds,
-            "server.shutdown_grace_seconds",
         );
         check(
             self.persistence_path != other.persistence_path

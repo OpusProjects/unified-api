@@ -106,6 +106,17 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
     let next = Arc::new(runtime_config(cfg));
     let previous = state.swap_config(Arc::clone(&next));
 
+    // The refresh coordinator holds a live semaphore and budget rather than
+    // reading the snapshot, so a change is pushed onto it. In-flight refreshes
+    // finish under the limits they started with (see RefreshCoordinator::resize).
+    if previous.refresh_max_concurrent != next.refresh_max_concurrent
+        || previous.refresh_timeout_seconds != next.refresh_timeout_seconds
+    {
+        state
+            .refresh
+            .resize(next.refresh_max_concurrent, next.refresh_timeout_seconds);
+    }
+
     let mut report = diff(&previous, &next, cfg, state.live_settings());
 
     // Remember what this reload could NOT adopt, so the scrape-time gauge
@@ -139,6 +150,9 @@ fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
         projects: cfg.projects.clone(),
         secrets: cfg.secrets_config.clone(),
         readyz_require_all_sources: cfg.server.readyz_require_all_sources,
+        shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
+        refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
+        refresh_max_concurrent: cfg.server.refresh_max_concurrent,
     }
 }
 
@@ -178,6 +192,15 @@ fn diff(
     }
     if previous.readyz_require_all_sources != next.readyz_require_all_sources {
         applied.push("server.readyz_require_all_sources".to_string());
+    }
+    if previous.shutdown_grace_seconds != next.shutdown_grace_seconds {
+        applied.push("server.shutdown_grace_seconds".to_string());
+    }
+    if previous.refresh_timeout_seconds != next.refresh_timeout_seconds {
+        applied.push("server.refresh_timeout_seconds".to_string());
+    }
+    if previous.refresh_max_concurrent != next.refresh_max_concurrent {
+        applied.push("server.refresh_max_concurrent".to_string());
     }
     applied.sort();
     report.applied = applied;

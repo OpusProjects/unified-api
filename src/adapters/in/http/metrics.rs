@@ -73,6 +73,17 @@ pub async fn track_requests(
 
 // GET /metrics — Prometheus text exposition format. Public like the health
 // probes: scrapers don't carry the API key.
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "Health",
+    responses(
+        (status = 200, description = "Prometheus text exposition — counters, histograms and \
+         scrape-time gauges (see docs/observability.md). Public by default; \
+         `server.metrics_require_auth: true` moves the route behind the API key, since the \
+         exposition labels every source id and host count", content_type = "text/plain")
+    )
+)]
 pub async fn metrics(State(state): State<Arc<AppState>>) -> String {
     record_source_gauges(&state);
     record_task_health_gauges(&state);

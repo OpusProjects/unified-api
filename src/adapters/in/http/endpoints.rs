@@ -13,6 +13,16 @@ use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::domain::dataset::Dataset;
 
+// The 503's wire shape: ErrorBody plus the sources still missing, so the
+// caller knows what to wait for instead of polling blind.
+#[derive(Serialize, ToSchema)]
+pub struct EndpointUnavailableBody {
+    /// Human-readable explanation, same contract as ErrorBody's field.
+    pub error: String,
+    /// The configured sources that have no cache entry yet.
+    pub missing_sources: Vec<String>,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct EndpointInfo {
     pub endpoint_id: String,
@@ -75,7 +85,9 @@ pub async fn list_endpoints(
         (status = 200, description = "Transformed output from the endpoint script"),
         (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
         (status = 404, description = "Endpoint not configured", body = ErrorBody),
-        (status = 503, description = "Required sources not yet synced")
+        (status = 500, description = "The transformer failed; the body carries its error", body = ErrorBody),
+        (status = 503, description = "Required sources not yet synced — the body lists them", body = EndpointUnavailableBody),
+        (status = 504, description = "A script transformer exceeded timeout_seconds and was killed", body = ErrorBody)
     )
 )]
 pub async fn run_endpoint(
@@ -100,7 +112,9 @@ pub async fn run_endpoint(
         (status = 200, description = "Transformed output from the endpoint script. Query parameters become the endpoint's dynamic parameters, all as strings"),
         (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
         (status = 404, description = "Endpoint not configured", body = ErrorBody),
-        (status = 503, description = "Required sources not yet synced")
+        (status = 500, description = "The transformer failed; the body carries its error", body = ErrorBody),
+        (status = 503, description = "Required sources not yet synced — the body lists them", body = EndpointUnavailableBody),
+        (status = 504, description = "A script transformer exceeded timeout_seconds and was killed", body = ErrorBody)
     )
 )]
 pub async fn run_endpoint_get(
@@ -168,10 +182,15 @@ async fn execute_endpoint(
     }
 
     if !missing.is_empty() {
-        let body = serde_json::json!({
-            "error": "Sources not yet synced",
-            "missing_sources": missing
-        });
+        // The one failure whose body carries more than the message: naming
+        // the sources still missing is what tells the caller what to wait
+        // for. A typed struct rather than an ad-hoc json! so the OpenAPI
+        // spec can declare the shape.
+        missing.sort();
+        let body = EndpointUnavailableBody {
+            error: "Sources not yet synced".to_string(),
+            missing_sources: missing,
+        };
         return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response());
     }
 
@@ -204,17 +223,12 @@ async fn execute_endpoint(
                 }
             })
             .await;
-            match rendered {
-                Ok(output) => Ok(output),
-                // Only a panic in the render lands here; surfaced as a plain
-                // 500 rather than taking the worker down with it.
-                Err(join_error) => {
-                    let body = serde_json::json!({
-                        "error": format!("builtin transformer failed: {}", join_error)
-                    });
-                    return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response());
-                }
-            }
+            // Only a panic in the render lands in the error arm; it flows
+            // through the metrics below like any other failed run rather
+            // than returning early.
+            rendered.map_err(|join_error| {
+                ApiError::internal(format!("builtin transformer failed: {}", join_error))
+            })
         }
         // Script transformer: resolve the path (+ venv) and run it under its timeout.
         None => {
@@ -223,10 +237,10 @@ async fn execute_endpoint(
                 None => {
                     // Config validation guarantees exactly one of output /
                     // script_path; handled rather than panicking if it slips through.
-                    let body = serde_json::json!({
-                        "error": format!("endpoint '{}' has neither output nor script_path", id)
-                    });
-                    return Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response());
+                    return Err(ApiError::internal(format!(
+                        "endpoint '{}' has neither output nor script_path",
+                        id
+                    )));
                 }
             };
 
@@ -276,13 +290,16 @@ async fn execute_endpoint(
             )
             .await
             {
-                Ok(result) => result,
-                Err(_elapsed) => {
-                    let body = serde_json::json!({
-                        "error": format!("endpoint timed out after {}s", timeout_seconds)
-                    });
-                    return Ok((StatusCode::GATEWAY_TIMEOUT, Json(body)).into_response());
-                }
+                // The script's own failure and the timeout both flow into the
+                // shared result: a timed-out run used to return before the
+                // metrics below, so `unified_api_endpoint_total` never
+                // counted it — despite being exactly the run alerting cares
+                // about most.
+                Ok(result) => result.map_err(|e| ApiError::internal(e.message)),
+                Err(_elapsed) => Err(ApiError::new(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    format!("endpoint timed out after {}s", timeout_seconds),
+                )),
             }
         }
     };
@@ -302,31 +319,23 @@ async fn execute_endpoint(
     )
     .record(duration_ms as f64 / 1000.0);
 
-    match result {
-        Ok(output) => {
-            // A builtin's content type is known from its format; a script
-            // decides its own format, so its output is sniffed for JSON.
-            if let Some(content_type) = builtin_content_type {
-                return Ok(
-                    (StatusCode::OK, [("content-type", content_type)], output).into_response()
-                );
-            }
-            if output.trim_start().starts_with('{') || output.trim_start().starts_with('[') {
-                Ok((
-                    StatusCode::OK,
-                    [("content-type", "application/json")],
-                    output,
-                )
-                    .into_response())
-            } else {
-                Ok((StatusCode::OK, [("content-type", "text/plain")], output).into_response())
-            }
-        }
-        Err(e) => {
-            let body = serde_json::json!({
-                "error": e.message
-            });
-            Ok((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response())
-        }
+    // A failed run renders through ApiError like every other failure in the
+    // API — the counters above have already recorded it.
+    let output = result?;
+
+    // A builtin's content type is known from its format; a script decides its
+    // own format, so its output is sniffed for JSON.
+    if let Some(content_type) = builtin_content_type {
+        return Ok((StatusCode::OK, [("content-type", content_type)], output).into_response());
+    }
+    if output.trim_start().starts_with('{') || output.trim_start().starts_with('[') {
+        Ok((
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            output,
+        )
+            .into_response())
+    } else {
+        Ok((StatusCode::OK, [("content-type", "text/plain")], output).into_response())
     }
 }

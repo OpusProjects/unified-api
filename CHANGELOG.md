@@ -17,6 +17,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   land; the shutdown grace is read when the drain starts, so the last reloaded
   value governs it.
 
+- **`server.max_body_bytes` makes the request body limit explicit.** The limit
+  was always enforced — axum ships a 2 MB default — but silently: nothing
+  declared it, and an oversized push (a whole-directory config `PUT` is one
+  body) got a bare 413 with no explanation. The limit is now a named
+  `config.yaml` setting with the same 2 MiB default, and exceeding it answers
+  `413` with the standard `{"error": ...}` body naming the key and the
+  configured limit.
+
 ## [0.22.0] - 2026-08-22
 
 ### Added

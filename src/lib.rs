@@ -60,6 +60,7 @@ pub struct AppBuilder {
     refresh_timeout_seconds: u64,
     refresh_max_concurrent: usize,
     shutdown_grace_seconds: u64,
+    max_body_bytes: usize,
 }
 
 impl AppBuilder {
@@ -88,6 +89,8 @@ impl AppBuilder {
             refresh_timeout_seconds: 15,
             refresh_max_concurrent: 8,
             shutdown_grace_seconds: 20,
+            // axum's own default, mirrored like the three above
+            max_body_bytes: 2 * 1024 * 1024,
         }
     }
 
@@ -161,6 +164,7 @@ impl AppBuilder {
         self.refresh_timeout_seconds = cfg.server.refresh_timeout_seconds;
         self.refresh_max_concurrent = cfg.server.refresh_max_concurrent;
         self.shutdown_grace_seconds = cfg.server.shutdown_grace_seconds;
+        self.max_body_bytes = cfg.server.max_body_bytes;
         self
     }
 
@@ -224,6 +228,11 @@ impl AppBuilder {
 
     pub fn metrics_require_auth(mut self, require_auth: bool) -> Self {
         self.metrics_require_auth = require_auth;
+        self
+    }
+
+    pub fn max_body_bytes(mut self, bytes: usize) -> Self {
+        self.max_body_bytes = bytes;
         self
     }
 
@@ -292,6 +301,7 @@ impl AppBuilder {
             )),
             self.cors_allowed_origins,
             self.metrics_require_auth,
+            self.max_body_bytes,
         );
         (router, state)
     }

@@ -83,6 +83,15 @@ pub struct ServerConfig {
     // behavior — the snapshot is best-effort — rather than blocking exit.
     #[serde(default = "default_shutdown_grace_seconds")]
     pub shutdown_grace_seconds: u64,
+
+    // Largest request body accepted, in bytes, on every route. This was
+    // always enforced — axum ships a 2 MB default — but silently: nothing
+    // declared it and an oversized push got a bare 413. Now the limit is a
+    // named setting, and the 413 carries the standard error body naming it.
+    // Size it for the biggest config file a pipeline pushes (a whole-directory
+    // PUT is one body) or the largest host-vars document a consumer writes.
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
 }
 
 fn default_refresh_timeout_seconds() -> u64 {
@@ -95,6 +104,12 @@ fn default_refresh_max_concurrent() -> usize {
 
 fn default_shutdown_grace_seconds() -> u64 {
     20
+}
+
+fn default_max_body_bytes() -> usize {
+    // axum's own default, kept so making the limit explicit changes nothing
+    // for existing deployments.
+    2 * 1024 * 1024
 }
 
 // Cache behavior — config.yaml, `cache:` section (optional)
@@ -231,6 +246,7 @@ pub struct RestartOnlySettings {
     pub port: u16,
     pub cors_allowed_origins: Vec<String>,
     pub metrics_require_auth: bool,
+    pub max_body_bytes: usize,
     pub persistence_path: Option<String>,
     pub persistence_interval_seconds: Option<u64>,
     pub projects_dir: String,
@@ -244,6 +260,7 @@ impl RestartOnlySettings {
             port: cfg.server.port,
             cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
             metrics_require_auth: cfg.server.metrics_require_auth,
+            max_body_bytes: cfg.server.max_body_bytes,
             persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
             persistence_interval_seconds: cfg
                 .cache
@@ -273,6 +290,10 @@ impl RestartOnlySettings {
         check(
             self.metrics_require_auth != other.metrics_require_auth,
             "server.metrics_require_auth",
+        );
+        check(
+            self.max_body_bytes != other.max_body_bytes,
+            "server.max_body_bytes",
         );
         check(
             self.persistence_path != other.persistence_path

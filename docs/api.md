@@ -80,6 +80,8 @@ status code, read the message.
 That includes `401`: the API-key middleware rejects a request before any
 handler runs, but it renders the same shape — `missing API key` names the
 header to pass, `invalid API key` means one was passed and matched nothing.
+It also includes `413`: a request body larger than `server.max_body_bytes`
+(default 2 MiB) is refused with a body naming that key and the limit.
 
 ---
 

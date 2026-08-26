@@ -134,6 +134,10 @@ Every problem at once, the same list `--check-config` prints — because it is
 the same code, run against a staged copy of the directory the push would
 produce.
 
+A whole-directory push is one request body, so it lives under
+`server.max_body_bytes` (default 2 MiB) like every other route; a directory
+that outgrows it answers `413` naming the key to raise.
+
 ---
 
 ## What a reload can and cannot apply
@@ -159,7 +163,7 @@ is already running.
 **Needs a restart** — reported, never silently ignored:
 
 `server.host`, `server.port`, `server.cors_allowed_origins`,
-`server.metrics_require_auth`,
+`server.metrics_require_auth`, `server.max_body_bytes`,
 `cache.persistence`, `projects.dir`, `config_api.enabled`.
 
 A write that touches one of them still lands on disk; the response names it:

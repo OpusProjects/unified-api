@@ -531,6 +531,51 @@ async fn put_host_adds_to_cache() {
 }
 
 // =========================================================================
+// Test: a body over server.max_body_bytes answers 413 with the standard shape
+// =========================================================================
+#[tokio::test]
+async fn an_oversized_body_answers_413_with_a_json_error() {
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let app = unified_api::AppBuilder::new()
+        .sources(sources)
+        .max_body_bytes(64)
+        .build();
+
+    let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
+
+    // Comfortably over the 64-byte limit.
+    let (status, body) = request_with_json(
+        app.clone(),
+        "PUT",
+        "/api/v1/sources/src-test/hosts/togusa.section9.net",
+        serde_json::json!({"notes": "x".repeat(200)}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    // The refusal names the setting to raise, in the standard error shape —
+    // not axum's plain-text rejection.
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("a JSON error body");
+    let message = parsed["error"].as_str().expect("an error field");
+    assert!(
+        message.contains("server.max_body_bytes") && message.contains("64"),
+        "message: {}",
+        message
+    );
+
+    // An in-limit write on the same app still lands.
+    let (status, _) = request_with_json(
+        app.clone(),
+        "PUT",
+        "/api/v1/sources/src-test/hosts/togusa.section9.net",
+        serde_json::json!({"role": "detective"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+// =========================================================================
 // Test: DELETE host — immediate removal
 // =========================================================================
 #[tokio::test]

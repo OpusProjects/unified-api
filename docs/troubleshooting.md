@@ -22,6 +22,7 @@ look like a dataset slowly getting older. Only the second pair tells them apart.
 - [A sync times out](#a-sync-times-out)
 - [Hosts vanish from a group after a sync](#hosts-vanish-from-a-group-after-a-sync)
 - [Everything answers 401 or 403](#everything-answers-401-or-403)
+- [A configuration push is refused or does not take effect](#a-configuration-push-is-refused-or-does-not-take-effect)
 - [Useful one-liners](#useful-one-liners)
 
 ---
@@ -218,6 +219,29 @@ no grant on the sources behind it.
 
 If nothing requires a key at all, no keys are configured — the startup log says
 so loudly, and every caller is treated as admin.
+
+---
+
+## A configuration push is refused or does not take effect
+
+Every refusal from the [configuration API](config-api.md) is deliberate and
+names its cause; this maps the common ones to their fix. The API is
+transactional — a rejected push touched nothing.
+
+| Response | Cause and fix |
+|---|---|
+| `403` naming `config_api.enabled` | The API is off (the default). Set `config_api.enabled: true` in the mounted `config.yaml` and restart — it cannot be enabled over the API itself, on purpose |
+| `400` with an `errors` list | The staged directory did not validate — the same list `--check-config` prints, every problem at once. Nothing was written; fix and re-push |
+| `412` | Your `If-Match` no longer matches: someone else wrote the file (or the directory) first. `GET` it again for a fresh `ETag`, merge, retry |
+| `409` about API keys | The change would leave the API with **no keys at all** (silent auth removal), or names a key env var that is not set on the instance. Both are refused before anything commits |
+| `413` | The push exceeds `server.max_body_bytes` (default 2 MiB) — a whole-directory `PUT` is one body. Raise the key (restart-only) |
+| `200`, but nothing changed | The write landed on disk and was never applied: no `?reload=true` on the write, and nobody called `POST /config/reload`. `GET /api/v1/config` shows `reload_pending: true` for exactly this state |
+| `restart_required` will not clear | The change touches a restart-only key (`server.port`, `cache.persistence`, …). It keeps being reported — by `GET /api/v1/config` and the `unified_api_config_restart_required` gauge — until a restart adopts it. That persistence is the design: restart the instance |
+
+The audit log records every write and reload (`action: config_write`,
+`config_write_reload`, `config_reload`) with the key name and outcome, so "who
+pushed this and when" is a log search away — see
+[observability](observability.md).
 
 ---
 

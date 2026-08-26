@@ -58,6 +58,11 @@ server:
   # before writing the final cache snapshot anyway. Size it to fit inside the
   # pod's terminationGracePeriodSeconds with room for the snapshot write.
   shutdown_grace_seconds: 20
+  # Optional, default 2097152 (2 MiB — what was always enforced, implicitly).
+  # Largest request body accepted on any route; an oversized one answers 413
+  # naming this key. Size it for the biggest configuration push (a whole
+  # directory is one body) or host-vars write you expect.
+  max_body_bytes: 2097152
 
 # Optional. Absent = purely in-memory cache (restarts start empty).
 # With the block, the cache is snapshotted to `path` every `interval_seconds`

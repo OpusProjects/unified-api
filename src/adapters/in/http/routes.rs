@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::HeaderValue;
 use axum::{
     Router, middleware,
-    response::Redirect,
+    response::{IntoResponse, Redirect},
     routing::{delete, get, post, put},
 };
 use tower_http::compression::CompressionLayer;
@@ -28,6 +28,7 @@ pub fn create_router(
     api_keys: Arc<ApiKeyRegistry>,
     cors_allowed_origins: Vec<String>,
     metrics_require_auth: bool,
+    max_body_bytes: usize,
 ) -> Router<()> {
     let mut api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
@@ -119,6 +120,30 @@ pub fn create_router(
                 .config(swagger_config()),
         )
         .with_state(state);
+
+    // The body limit was always enforced — axum ships a 2 MB default — but
+    // silently: nothing declared it, and the extractor's rejection is plain
+    // text, unlike every other failure (see error.rs). The layer makes the
+    // limit the configured value; the response mapper below gives its 413 the
+    // standard {"error": ...} body naming the setting to raise. Rewriting is
+    // safe unconditionally because no handler answers 413 itself.
+    let router = router
+        .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+        .layer(middleware::map_response(
+            move |response: axum::response::Response| async move {
+                if response.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+                    return http::error::ApiError::new(
+                        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                        format!(
+                            "request body exceeds server.max_body_bytes ({} bytes)",
+                            max_body_bytes
+                        ),
+                    )
+                    .into_response();
+                }
+                response
+            },
+        ));
 
     // No configured origins = no CORS layer: the browser same-origin policy
     // applies and server-to-server consumers are unaffected. This replaces

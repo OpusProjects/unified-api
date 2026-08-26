@@ -642,6 +642,46 @@ async fn a_setting_a_running_process_cannot_adopt_is_reported_not_dropped() {
     assert_eq!(json(&body)["restart_required"][0], "server.port");
 }
 
+#[tokio::test]
+async fn refresh_limits_and_shutdown_grace_reload_without_a_restart() {
+    let dir = config_dir("UNIFIED_API_TEST_KEY_RELOADABLE");
+    let (app, state) = app_at(dir.path());
+
+    let tuned = "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  \
+                 refresh_timeout_seconds: 30\n  refresh_max_concurrent: 2\n  \
+                 shutdown_grace_seconds: 5\n";
+    let (status, body) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", tuned),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {}", body);
+
+    // Applied, and NOT reported as needing a restart — these keys used to be
+    // on the restart-only list.
+    let reloaded = json(&body)["reloaded"].clone();
+    let applied = reloaded["applied"].to_string();
+    for key in [
+        "server.refresh_timeout_seconds",
+        "server.refresh_max_concurrent",
+        "server.shutdown_grace_seconds",
+    ] {
+        assert!(applied.contains(key), "missing {} in {}", key, applied);
+    }
+    assert!(
+        reloaded["restart_required"]
+            .as_array()
+            .is_none_or(|keys| keys.is_empty()),
+        "restart_required: {}",
+        reloaded["restart_required"]
+    );
+
+    // The running process adopted the values, not just the report.
+    assert_eq!(state.config().refresh_timeout_seconds, 30);
+    assert_eq!(state.config().refresh_max_concurrent, 2);
+    assert_eq!(state.config().shutdown_grace_seconds, 5);
+}
+
 // The only test in this binary that scrapes /metrics: the recorder is a
 // process-wide global, so a second scraping test would race this one's
 // unlabeled gauges.

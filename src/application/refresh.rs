@@ -49,19 +49,86 @@ pub struct RefreshCoordinator {
     // tens of bytes) — cheaper than the bookkeeping to prune it safely.
     in_flight: DashMap<(String, String), Arc<Mutex<()>>>,
     limiter: Arc<Semaphore>,
-    budget: Duration,
+    // What the semaphore's capacity is meant to be, plus the permits a shrink
+    // could not reclaim yet because refreshes were holding them (see resize).
+    // A std Mutex, never held across an await.
+    limits: std::sync::Mutex<Limits>,
+    // Seconds rather than a Duration so a reload can swap it atomically while
+    // refreshes are reading it.
+    budget_seconds: std::sync::atomic::AtomicU64,
+}
+
+struct Limits {
+    capacity: usize,
+    shrink_debt: usize,
 }
 
 impl RefreshCoordinator {
     pub fn new(max_concurrent: usize, timeout_seconds: u64) -> Self {
+        // A zero would deadlock every refresh forever, which is a
+        // misconfiguration answering as a hang. One at a time is the
+        // slowest thing that still works.
+        let capacity = max_concurrent.max(1);
         Self {
             in_flight: DashMap::new(),
-            // A zero would deadlock every refresh forever, which is a
-            // misconfiguration answering as a hang. One at a time is the
-            // slowest thing that still works.
-            limiter: Arc::new(Semaphore::new(max_concurrent.max(1))),
-            budget: Duration::from_secs(timeout_seconds),
+            limiter: Arc::new(Semaphore::new(capacity)),
+            limits: std::sync::Mutex::new(Limits {
+                capacity,
+                shrink_debt: 0,
+            }),
+            budget_seconds: std::sync::atomic::AtomicU64::new(timeout_seconds),
         }
+    }
+
+    fn budget(&self) -> Duration {
+        Duration::from_secs(
+            self.budget_seconds
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    // Adopt new limits under a running process — what makes these settings
+    // reloadable rather than restart-only.
+    //
+    // The budget is a plain swap. The semaphore grows immediately; a shrink
+    // reclaims whatever permits are free right now and records the rest as
+    // debt, settled in acquire() as in-flight refreshes hand their permits
+    // back. Until it settles, concurrency is bounded by the OLD capacity —
+    // the same overlap rule every other reload follows (in-flight work
+    // finishes under the configuration it started with).
+    pub fn resize(&self, max_concurrent: usize, timeout_seconds: u64) {
+        self.budget_seconds
+            .store(timeout_seconds, std::sync::atomic::Ordering::Relaxed);
+
+        let target = max_concurrent.max(1);
+        let mut limits = self.limits.lock().expect("refresh limits lock");
+        if target >= limits.capacity {
+            // Growing first pays off any pending shrink, so shrink-then-grow
+            // nets out instead of forgetting permits it just added.
+            let mut grow = target - limits.capacity;
+            let cancelled = grow.min(limits.shrink_debt);
+            limits.shrink_debt -= cancelled;
+            grow -= cancelled;
+            self.limiter.add_permits(grow);
+        } else {
+            let shrink = limits.capacity - target;
+            limits.shrink_debt += shrink - self.limiter.forget_permits(shrink);
+        }
+        limits.capacity = target;
+    }
+
+    // Acquire a concurrency permit, settling any shrink debt first: permits
+    // released since the shrink are reclaimed here, before this request can
+    // take one, so the pool converges on the declared capacity as traffic
+    // arrives rather than needing a background task to watch it.
+    async fn acquire(&self) -> Result<tokio::sync::OwnedSemaphorePermit, ()> {
+        {
+            let mut limits = self.limits.lock().expect("refresh limits lock");
+            if limits.shrink_debt > 0 {
+                limits.shrink_debt -= self.limiter.forget_permits(limits.shrink_debt);
+            }
+        }
+        self.limiter.clone().acquire_owned().await.map_err(|_| ())
     }
 
     fn lock_for(&self, source_id: &str, hostname: &str) -> Arc<Mutex<()>> {
@@ -170,11 +237,15 @@ pub async fn refresh_hosts(
         };
     }
 
-    let Ok(_permit) = coordinator.limiter.clone().acquire_owned().await else {
+    let Ok(_permit) = coordinator.acquire().await else {
         // The semaphore is never closed; treat it as a failed refresh rather
         // than a panic if that ever changes.
         return RefreshOutcome::failed("refresh limiter unavailable".to_string());
     };
+
+    // Read once, so the gather and the error message it may produce agree on
+    // the number even if a reload swaps the budget mid-request.
+    let budget = coordinator.budget();
 
     // A budget of its own, independent of the source's `timeout_seconds`: that
     // one bounds a scheduled sync, which may reasonably take minutes. A consumer
@@ -199,7 +270,7 @@ pub async fn refresh_hosts(
         enrichment,
     );
 
-    match timeout(coordinator.budget, sync).await {
+    match timeout(budget, sync).await {
         Ok(outcome) if outcome.success() => {
             debug!(
                 source = %source_id,
@@ -228,10 +299,7 @@ pub async fn refresh_hosts(
             RefreshOutcome::failed(error)
         }
         Err(_elapsed) => {
-            let error = format!(
-                "refresh did not finish within {}s",
-                coordinator.budget.as_secs()
-            );
+            let error = format!("refresh did not finish within {}s", budget.as_secs());
             warn!(
                 source = %source_id,
                 hosts = ?still_stale,
@@ -312,6 +380,71 @@ mod tests {
     fn a_zero_concurrency_limit_is_clamped_rather_than_deadlocking() {
         let coordinator = RefreshCoordinator::new(0, 10);
         assert_eq!(coordinator.limiter.available_permits(), 1);
+    }
+
+    #[test]
+    fn resize_grows_and_shrinks_an_idle_pool_immediately() {
+        let coordinator = RefreshCoordinator::new(4, 10);
+
+        coordinator.resize(8, 30);
+        assert_eq!(coordinator.limiter.available_permits(), 8);
+        assert_eq!(coordinator.budget(), Duration::from_secs(30));
+
+        // Nothing is in flight, so a shrink reclaims the permits on the spot.
+        coordinator.resize(2, 30);
+        assert_eq!(coordinator.limiter.available_permits(), 2);
+
+        // The zero clamp holds on resize like it does at construction.
+        coordinator.resize(0, 30);
+        assert_eq!(coordinator.limiter.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_shrink_under_load_settles_as_permits_come_back() {
+        let coordinator = RefreshCoordinator::new(3, 10);
+
+        // Three refreshes in flight: every permit is checked out.
+        let p1 = coordinator.acquire().await.expect("permit");
+        let p2 = coordinator.acquire().await.expect("permit");
+        let p3 = coordinator.acquire().await.expect("permit");
+
+        // Nothing is free to reclaim, so the whole shrink becomes debt …
+        coordinator.resize(1, 10);
+        assert_eq!(coordinator.limiter.available_permits(), 0);
+
+        // … and the permits the in-flight refreshes hand back are eaten by the
+        // next acquire before it takes one for itself: two releases pay the
+        // debt, the third frees the single permit the new capacity allows.
+        drop(p1);
+        drop(p2);
+        drop(p3);
+        let p4 = coordinator.acquire().await.expect("permit");
+        assert_eq!(coordinator.limiter.available_permits(), 0);
+        drop(p4);
+        assert_eq!(coordinator.limiter.available_permits(), 1);
+    }
+
+    #[test]
+    fn a_grow_cancels_a_pending_shrink_first() {
+        let coordinator = RefreshCoordinator::new(2, 10);
+
+        // Both permits checked out, then a shrink to 1: one permit of debt.
+        let sem = coordinator.limiter.clone();
+        let p1 = sem.clone().try_acquire_owned().expect("permit");
+        let p2 = sem.clone().try_acquire_owned().expect("permit");
+        coordinator.resize(1, 10);
+
+        // Growing back to 2 must cancel the debt, not stack a fresh permit on
+        // top of it — releases then restore exactly the declared capacity.
+        coordinator.resize(2, 10);
+        drop(p1);
+        drop(p2);
+        {
+            let mut limits = coordinator.limits.lock().expect("limits");
+            limits.shrink_debt -= coordinator.limiter.forget_permits(limits.shrink_debt);
+            assert_eq!(limits.shrink_debt, 0, "the grow should have paid the debt");
+        }
+        assert_eq!(coordinator.limiter.available_permits(), 2);
     }
 
     #[test]

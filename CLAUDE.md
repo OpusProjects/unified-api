@@ -133,8 +133,10 @@ The reloadable part of it lives in `RuntimeConfig` behind one pointer on
 clone, safe to hold across awaits) rather than reading fields directly, which
 is what lets a reload be a single swap. Whether a setting can reload is decided
 by where it is READ — per request/tick = reloadable; consumed once at
-construction (the bound socket, router layers, the snapshot task, the refresh
-semaphore) = restart-only, and named in `config::RestartOnlySettings`.
+construction (the bound socket, router layers, the snapshot task) =
+restart-only, and named in `config::RestartOnlySettings`. The refresh
+limits sit in between: the coordinator holds a live semaphore and budget, and
+a reload pushes new values onto it (`RefreshCoordinator::resize`).
 Secrets resolved via `SecretsPort`: env vars / JSON files by default, native
 Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
 `secrets.vault:`, all behind a short resolution cache

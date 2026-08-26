@@ -1411,6 +1411,9 @@ mod tests {
             projects: previous.projects.clone(),
             secrets: previous.secrets.clone(),
             readyz_require_all_sources: previous.readyz_require_all_sources,
+            shutdown_grace_seconds: previous.shutdown_grace_seconds,
+            refresh_timeout_seconds: previous.refresh_timeout_seconds,
+            refresh_max_concurrent: previous.refresh_max_concurrent,
         }));
         state.reload.bump();
 

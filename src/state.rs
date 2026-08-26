@@ -43,6 +43,14 @@ pub struct RuntimeConfig {
     // /readyz turns green only when every configured source has synced, rather
     // than when at least one has (see config::ServerConfig)
     pub readyz_require_all_sources: bool,
+    // Read at a single moment — shutdown — so it reloads trivially: main takes
+    // it from whatever snapshot is current when the drain starts.
+    pub shutdown_grace_seconds: u64,
+    // The on-demand refresh limits. The RefreshCoordinator holds the live
+    // budget and semaphore; these are the declared values a reload diffs and
+    // then re-applies onto it (application::config::apply calls resize).
+    pub refresh_timeout_seconds: u64,
+    pub refresh_max_concurrent: usize,
 }
 
 // Bumped on every reload, and watched by the scheduler: the tasks of the

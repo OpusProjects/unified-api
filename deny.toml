@@ -12,8 +12,9 @@ all-features = true
 ignore = [
     # RUSTSEC-2023-0071 — Marvin Attack timing sidechannel in the `rsa` crate.
     # Transitive via russh; not reachable in our usage (SSH client public-key
-    # auth, no RSA decryption of attacker-influenced ciphertext). See
-    # .cargo/audit.toml for the full rationale.
+    # auth, no RSA decryption of attacker-influenced ciphertext), and the
+    # advisory declares no patched version, so every release matches. See
+    # .cargo/audit.toml for the full rationale and the condition for removal.
     "RUSTSEC-2023-0071",
 ]
 

@@ -33,6 +33,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `server.port`, `cache.persistence`, `projects.dir` and
   `config_api.enabled`.
 
+### Changed
+
+- **SSH host certificates are refused when `ssh_known_hosts` verification is
+  on.** The SSH library (russh 0.63) can now present an OpenSSH *certificate*
+  as a server's host key. `known_hosts` verification is defined over plain
+  host keys — trusting a certificate needs a CA model the connector does not
+  have — so with verification enabled such a server is refused whole, with a
+  warning naming the host, rather than half-checked. The accept-any default
+  (no `ssh_known_hosts` configured) is unchanged.
+
 ## [0.23.0] - 2026-08-26
 
 ### Added

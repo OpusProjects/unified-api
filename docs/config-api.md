@@ -159,11 +159,12 @@ is already running.
 | `server.readyz_require_all_sources` | Next probe |
 | `server.refresh_timeout_seconds`, `server.refresh_max_concurrent` | Next refresh. A shrunk concurrency cap lets in-flight refreshes finish under the old limit and reclaims their permits as they land |
 | `server.shutdown_grace_seconds` | The next shutdown — the drain reads whatever a reload set last |
+| `server.metrics_require_auth` | The next scrape — the `/metrics` handler checks the flag per request |
 
 **Needs a restart** — reported, never silently ignored:
 
 `server.host`, `server.port`, `server.cors_allowed_origins`,
-`server.metrics_require_auth`, `server.max_body_bytes`,
+`server.max_body_bytes`,
 `cache.persistence`, `projects.dir`, `config_api.enabled`.
 
 A write that touches one of them still lands on disk; the response names it:

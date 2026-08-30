@@ -150,6 +150,7 @@ fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
         projects: cfg.projects.clone(),
         secrets: cfg.secrets_config.clone(),
         readyz_require_all_sources: cfg.server.readyz_require_all_sources,
+        metrics_require_auth: cfg.server.metrics_require_auth,
         shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
         refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
         refresh_max_concurrent: cfg.server.refresh_max_concurrent,
@@ -192,6 +193,9 @@ fn diff(
     }
     if previous.readyz_require_all_sources != next.readyz_require_all_sources {
         applied.push("server.readyz_require_all_sources".to_string());
+    }
+    if previous.metrics_require_auth != next.metrics_require_auth {
+        applied.push("server.metrics_require_auth".to_string());
     }
     if previous.shutdown_grace_seconds != next.shutdown_grace_seconds {
         applied.push("server.shutdown_grace_seconds".to_string());

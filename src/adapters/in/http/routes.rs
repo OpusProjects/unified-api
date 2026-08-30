@@ -27,10 +27,9 @@ pub fn create_router(
     state: Arc<AppState>,
     api_keys: Arc<ApiKeyRegistry>,
     cors_allowed_origins: Vec<String>,
-    metrics_require_auth: bool,
     max_body_bytes: usize,
 ) -> Router<()> {
-    let mut api_routes = Router::new()
+    let api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
         .route(
             "/api/v1/sources/{id}/dataset",
@@ -90,29 +89,26 @@ pub fn create_router(
                 .delete(http::config::delete_config_file),
         );
 
-    // The exposition labels every source id and host count, which describes
-    // the inventory topology to anyone who can reach the port. Public is right
-    // for a scrape config on a trusted network (Prometheus sends no API key),
-    // so it stays the default — but on a shared network the route can move
-    // inside the authenticated group instead.
-    if metrics_require_auth {
-        api_routes = api_routes.route("/metrics", get(http::metrics::metrics));
-    }
-
     let api_routes = api_routes
         .layer(middleware::from_fn(http::auth::require_api_key))
+        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))));
+
+    // /metrics is always registered on the PUBLIC router; whether it needs a
+    // key is the handler's per-scrape decision (server.metrics_require_auth,
+    // read from the current snapshot), which is what lets a reload flip it.
+    // It carries the key registry itself, since the auth middleware only
+    // wraps the group above.
+    let metrics_route = Router::new()
+        .route("/metrics", get(http::metrics::metrics))
         .layer(axum::Extension(ApiKeys(api_keys)));
 
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz));
 
-    if !metrics_require_auth {
-        router = router.route("/metrics", get(http::metrics::metrics));
-    }
-
     let router = router
+        .merge(metrics_route)
         .merge(api_routes)
         .merge(
             SwaggerUi::new("/swagger-ui")

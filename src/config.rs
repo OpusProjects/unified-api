@@ -234,9 +234,9 @@ pub fn is_config_file(name: &str) -> bool {
 // out of AppConfig as plain comparable values.
 //
 // A reload swaps what it can (sources, views, enrichers, endpoints, projects,
-// credentials, api keys, the refresh limits, the shutdown grace) and has to
-// say something honest about the rest: the listener is already bound, the
-// CORS and metrics-auth layers are already built into the router, and the
+// credentials, api keys, the refresh limits, the shutdown grace, the metrics
+// auth flag) and has to say something honest about the rest: the listener is
+// already bound, the CORS layer is already built into the router, and the
 // snapshot task already holds its path and interval. Silently ignoring those
 // keys is how a pipeline comes to believe it changed a port it did not
 // change — so they are diffed and NAMED in the reload report instead.
@@ -245,7 +245,6 @@ pub struct RestartOnlySettings {
     pub host: String,
     pub port: u16,
     pub cors_allowed_origins: Vec<String>,
-    pub metrics_require_auth: bool,
     pub max_body_bytes: usize,
     pub persistence_path: Option<String>,
     pub persistence_interval_seconds: Option<u64>,
@@ -259,7 +258,6 @@ impl RestartOnlySettings {
             host: cfg.server.host.clone(),
             port: cfg.server.port,
             cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
-            metrics_require_auth: cfg.server.metrics_require_auth,
             max_body_bytes: cfg.server.max_body_bytes,
             persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
             persistence_interval_seconds: cfg
@@ -286,10 +284,6 @@ impl RestartOnlySettings {
         check(
             self.cors_allowed_origins != other.cors_allowed_origins,
             "server.cors_allowed_origins",
-        );
-        check(
-            self.metrics_require_auth != other.metrics_require_auth,
-            "server.metrics_require_auth",
         );
         check(
             self.max_body_bytes != other.max_body_bytes,

@@ -2,9 +2,12 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
 use crate::AppState;
+use crate::adapters::r#in::http::auth::{ApiKeys, match_token, presented_token};
+use crate::adapters::r#in::http::error::ApiError;
 
 // The metrics recorder is a process-wide global (like the tracing subscriber),
 // so it can only be installed once. OnceLock makes repeated AppBuilder::build()
@@ -71,8 +74,15 @@ pub async fn track_requests(
     response
 }
 
-// GET /metrics — Prometheus text exposition format. Public like the health
-// probes: scrapers don't carry the API key.
+// GET /metrics — Prometheus text exposition format. Public by default like
+// the health probes (scrapers don't carry the API key); with
+// `server.metrics_require_auth: true` the handler requires one itself.
+//
+// Enforced HERE rather than by router placement, which is what lets the flag
+// reload: the route is always registered public and consults the current
+// snapshot on every scrape, so a flip takes effect on the next one. With no
+// keys configured, authentication is off API-wide and the flag keeps having
+// no effect — the same rule the middleware applies.
 #[utoipa::path(
     get,
     path = "/metrics",
@@ -80,15 +90,29 @@ pub async fn track_requests(
     responses(
         (status = 200, description = "Prometheus text exposition — counters, histograms and \
          scrape-time gauges (see docs/observability.md). Public by default; \
-         `server.metrics_require_auth: true` moves the route behind the API key, since the \
-         exposition labels every source id and host count", content_type = "text/plain")
+         `server.metrics_require_auth: true` requires the API key, since the \
+         exposition labels every source id and host count", content_type = "text/plain"),
+        (status = 401, description = "server.metrics_require_auth is on and no valid API key \
+         was presented", body = crate::adapters::r#in::http::error::ErrorBody)
     )
 )]
-pub async fn metrics(State(state): State<Arc<AppState>>) -> String {
+pub async fn metrics(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(registry): axum::Extension<ApiKeys>,
+    headers: HeaderMap,
+) -> Result<String, ApiError> {
+    if state.config().metrics_require_auth {
+        let keys = registry.0.load();
+        if !keys.is_empty() {
+            let token = presented_token(&headers).ok_or_else(ApiError::missing_api_key)?;
+            match_token(token, &keys).ok_or_else(ApiError::invalid_api_key)?;
+        }
+    }
+
     record_source_gauges(&state);
     record_task_health_gauges(&state);
     record_config_gauges(&state);
-    handle().render()
+    Ok(handle().render())
 }
 
 // Which build and which configuration this process is running — the first

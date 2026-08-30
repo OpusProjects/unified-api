@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-30
+
 ### Added
 
 - **`server.metrics_require_auth` now applies on a configuration reload.**
@@ -1565,7 +1567,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/OpusProjects/unified-api/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/OpusProjects/unified-api/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/OpusProjects/unified-api/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/OpusProjects/unified-api/compare/v0.20.0...v0.21.0

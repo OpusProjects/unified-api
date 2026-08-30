@@ -235,16 +235,15 @@ pub fn is_config_file(name: &str) -> bool {
 //
 // A reload swaps what it can (sources, views, enrichers, endpoints, projects,
 // credentials, api keys, the refresh limits, the shutdown grace, the metrics
-// auth flag) and has to say something honest about the rest: the listener is
-// already bound, the CORS layer is already built into the router, and the
-// snapshot task already holds its path and interval. Silently ignoring those
+// auth flag, CORS, the body limit) and has to say something honest about the
+// rest: the listener is already bound and the snapshot task already holds its
+// path and interval. Silently ignoring those
 // keys is how a pipeline comes to believe it changed a port it did not
 // change — so they are diffed and NAMED in the reload report instead.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RestartOnlySettings {
     pub host: String,
     pub port: u16,
-    pub max_body_bytes: usize,
     pub persistence_path: Option<String>,
     pub persistence_interval_seconds: Option<u64>,
     pub projects_dir: String,
@@ -256,7 +255,6 @@ impl RestartOnlySettings {
         Self {
             host: cfg.server.host.clone(),
             port: cfg.server.port,
-            max_body_bytes: cfg.server.max_body_bytes,
             persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
             persistence_interval_seconds: cfg
                 .cache
@@ -279,10 +277,6 @@ impl RestartOnlySettings {
         };
         check(self.host != other.host, "server.host");
         check(self.port != other.port, "server.port");
-        check(
-            self.max_body_bytes != other.max_body_bytes,
-            "server.max_body_bytes",
-        );
         check(
             self.persistence_path != other.persistence_path
                 || self.persistence_interval_seconds != other.persistence_interval_seconds,

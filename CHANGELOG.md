@@ -24,6 +24,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
   restart. Behavior is otherwise unchanged — an empty list still means no
   CORS headers at all, and preflight handling is identical.
 
+- **`server.max_body_bytes` now applies on a configuration reload.** The
+  body-limit middleware reads the limit from the current snapshot per
+  request, so raising it for a configuration push that outgrew the old value
+  is itself just a push — the awkward case where fixing the limit used to
+  require the restart the limit was blocking you into. With this, the
+  restart-only list is down to the genuinely structural: `server.host`,
+  `server.port`, `cache.persistence`, `projects.dir` and
+  `config_api.enabled`.
+
 ## [0.23.0] - 2026-08-26
 
 ### Added

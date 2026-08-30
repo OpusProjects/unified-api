@@ -23,11 +23,7 @@ use crate::adapters::r#in::http::openapi::ApiDoc;
 
 // Build the complete router: API routes (protected by API keys if
 // configured), public health probes, and Swagger UI.
-pub fn create_router(
-    state: Arc<AppState>,
-    api_keys: Arc<ApiKeyRegistry>,
-    max_body_bytes: usize,
-) -> Router<()> {
+pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Router<()> {
     let api_routes = Router::new()
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
         .route(
@@ -106,9 +102,11 @@ pub fn create_router(
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz));
 
-    // The CORS middleware below reads the reloadable origin list from the
-    // state; kept as its own clone because with_state consumes the other.
+    // The CORS and body-limit middlewares below read their reloadable
+    // settings from the state; kept as clones because with_state consumes
+    // the original.
     let cors_state = Arc::clone(&state);
+    let body_limit_state = Arc::clone(&state);
     let router = router
         .merge(metrics_route)
         .merge(api_routes)
@@ -119,29 +117,12 @@ pub fn create_router(
         )
         .with_state(state);
 
-    // The body limit was always enforced — axum ships a 2 MB default — but
-    // silently: nothing declared it, and the extractor's rejection is plain
-    // text, unlike every other failure (see error.rs). The layer makes the
-    // limit the configured value; the response mapper below gives its 413 the
-    // standard {"error": ...} body naming the setting to raise. Rewriting is
-    // safe unconditionally because no handler answers 413 itself.
-    let router = router
-        .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
-        .layer(middleware::map_response(
-            move |response: axum::response::Response| async move {
-                if response.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
-                    return http::error::ApiError::new(
-                        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                        format!(
-                            "request body exceeds server.max_body_bytes ({} bytes)",
-                            max_body_bytes
-                        ),
-                    )
-                    .into_response();
-                }
-                response
-            },
-        ));
+    // The request body limit, from the current snapshot per request — which
+    // is what makes server.max_body_bytes reloadable (a DefaultBodyLimit
+    // layer would freeze the boot value into the router). The middleware
+    // also gives the 413 the standard {"error": ...} body naming the setting
+    // and the limit that actually refused the body.
+    let router = router.layer(middleware::from_fn_with_state(body_limit_state, body_limit));
 
     // CORS as a per-request middleware reading the CURRENT snapshot, which is
     // what makes server.cors_allowed_origins reloadable — the old CorsLayer
@@ -237,6 +218,48 @@ fn swagger_config() -> Config<'static> {
     // Urls are left empty on purpose: the axum adapter fills them in from
     // SwaggerUi::url(), so the spec URL stays declared in one place above.
     Config::default().with_syntax_highlight(false)
+}
+
+// Enforce the request body limit from the current configuration snapshot —
+// the same per-request layer technique as `cors` below. axum's
+// DefaultBodyLimit is wrapped around the rest of the stack via oneshot, so
+// the extractors see exactly the limit mechanism they always did; only the
+// value now comes from the snapshot. The 413 rewrite is safe unconditionally
+// because no handler answers 413 itself.
+async fn body_limit(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let limit = state.config().max_body_bytes;
+
+    let mut next = Some(next);
+    let service = tower::service_fn(move |request: axum::extract::Request| {
+        let next = next.take().expect("oneshot calls the service exactly once");
+        async move { Ok::<_, std::convert::Infallible>(next.run(request).await) }
+    });
+    use tower::Layer as _;
+    use tower::ServiceExt as _;
+    let response = match axum::extract::DefaultBodyLimit::max(limit)
+        .layer(service)
+        .oneshot(request)
+        .await
+    {
+        Ok(response) => response,
+        Err(never) => match never {},
+    };
+
+    if response.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        return http::error::ApiError::new(
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "request body exceeds server.max_body_bytes ({} bytes)",
+                limit
+            ),
+        )
+        .into_response();
+    }
+    response
 }
 
 // Apply CORS from the current configuration snapshot. Reuses tower-http's

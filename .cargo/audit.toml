@@ -3,9 +3,12 @@
 [advisories]
 ignore = [
     # RUSTSEC-2023-0071 — Marvin Attack timing sidechannel in the `rsa` crate.
-    # Transitive via russh (RSA SSH key support); no fixed release exists yet.
-    # We use it only as an SSH client for public-key auth, not for RSA
-    # decryption of attacker-influenced ciphertext, so the sidechannel is not
-    # reachable in our usage. Revisit when an rsa fix ships.
+    # Transitive via russh (RSA SSH key support). The tree already resolves
+    # the 0.10 pre-release line where the constant-time rework landed, but the
+    # advisory declares NO patched version, so every release matches it and
+    # the ignore stays required regardless. Not reachable in our usage either
+    # way: we are an SSH client doing public-key auth, never RSA decryption of
+    # attacker-influenced ciphertext. Drop this entry when the advisory gains
+    # a patched-version bound that our resolved `rsa` satisfies.
     "RUSTSEC-2023-0071",
 ]

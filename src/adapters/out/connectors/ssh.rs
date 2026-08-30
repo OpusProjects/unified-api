@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client;
-use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -51,11 +51,27 @@ impl client::Handler for SshClientHandler {
     // key. The refusal reaches execute_on_host as russh::Error::UnknownKey.
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         let Some(v) = &self.verification else {
             // No known_hosts configured: accept any key, as before.
             return Ok(true);
+        };
+        // russh 0.63 hands the handler either a plain host key or an OpenSSH
+        // certificate. known_hosts verification is defined over plain keys —
+        // trusting a certificate needs a CA model this connector does not
+        // have — so with verification ON, a certificate is refused whole
+        // rather than half-checked.
+        let server_public_key = match server_public_key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            PublicKeyOrCertificate::Certificate(_) => {
+                warn!(
+                    host = %v.address,
+                    "server offered an OpenSSH certificate; ssh_known_hosts \
+                     verification covers plain host keys only — refusing to connect"
+                );
+                return Ok(false);
+            }
         };
         match v.known_hosts.check(&v.address, v.port, server_public_key) {
             HostKeyCheck::Known => Ok(true),

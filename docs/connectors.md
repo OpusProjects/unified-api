@@ -151,7 +151,7 @@ in parallel and builds the Dataset from what it finds.
 | `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs `script_path` remotely |
 | `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
 | `ssh_legacy_algorithms` | `false` | `"true"` additionally offers SHA-1 KEX/MACs (appended last, modern servers still pick modern ones) for OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` |
-| `ssh_known_hosts` | — | Path to an OpenSSH `known_hosts` file. When set, every server key is checked against it **before authentication**: an unknown or mismatched host is refused (it lands in `unreachable`, so its last known data is kept), and the refusal logs both fingerprints. Unset = any server key is accepted, and every sync warns about it |
+| `ssh_known_hosts` | — | Path to an OpenSSH `known_hosts` file. When set, every server key is checked against it **before authentication**: an unknown or mismatched host is refused (it lands in `unreachable`, so its last known data is kept), and the refusal logs both fingerprints. A server presenting an OpenSSH host *certificate* is refused too — verification is defined over plain host keys. Unset = any server key is accepted, and every sync warns about it |
 
 **Host key verification:** collect the fleet's keys with `ssh-keyscan` (append
 `-p` entries for non-22 ports) and point `ssh_known_hosts` at the file. Plain,

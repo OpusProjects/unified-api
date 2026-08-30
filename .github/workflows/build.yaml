@@ -74,6 +74,17 @@ jobs:
 
       - run: cargo clippy --all-targets -- -D warnings
 
+      # Cargo.toml's rust-version promises that a language feature newer than
+      # the Dockerfile's pinned compiler fails loudly at `cargo build` — but
+      # everything above runs on stable, so until now a break only surfaced as
+      # a build-image failure. Check under the pin itself, read from
+      # Cargo.toml so the workflow cannot drift from the declared MSRV.
+      - name: cargo check under the MSRV toolchain
+        run: |
+          MSRV="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
+          rustup toolchain install "$MSRV" --profile minimal
+          cargo "+$MSRV" check --all-targets
+
       # One instrumented run does both jobs: cargo-llvm-cov executes the whole
       # suite while measuring, so tests run ONCE per PR instead of once here
       # and once in a separate coverage workflow — and the floor is enforced

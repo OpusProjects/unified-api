@@ -682,6 +682,56 @@ async fn refresh_limits_and_shutdown_grace_reload_without_a_restart() {
     assert_eq!(state.config().shutdown_grace_seconds, 5);
 }
 
+#[tokio::test]
+async fn cors_origins_apply_on_a_reload_in_both_directions() {
+    let dir = config_dir("UNIFIED_API_TEST_KEY_CORS");
+    let (app, _) = app_at(dir.path());
+
+    let with_origin = |app: &Router| {
+        let request = Request::builder()
+            .uri("/healthz")
+            .header("origin", "https://dash.example")
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let app = app.clone();
+        async move {
+            let response = app.oneshot(request).await.expect("response");
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        }
+    };
+
+    // The default: no origins configured, no CORS headers at all.
+    assert_eq!(with_origin(&app).await, None);
+
+    // Somebody stands up a dashboard: its origin arrives by push, and the
+    // very next browser request is welcomed — no restart anywhere.
+    let dashboard = "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  \
+                     cors_allowed_origins: [\"https://dash.example\"]\n";
+    let (status, body) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", dashboard),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {}", body);
+    assert_eq!(
+        with_origin(&app).await.as_deref(),
+        Some("https://dash.example")
+    );
+
+    // And revoking it works the same way — back to no headers.
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", MINIMAL_SERVER),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(with_origin(&app).await, None);
+}
+
 // The only test in this binary that scrapes /metrics: the recorder is a
 // process-wide global, so a second scraping test would race this one's
 // unlabeled gauges.

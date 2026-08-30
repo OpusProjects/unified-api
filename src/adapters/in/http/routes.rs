@@ -26,7 +26,6 @@ use crate::adapters::r#in::http::openapi::ApiDoc;
 pub fn create_router(
     state: Arc<AppState>,
     api_keys: Arc<ApiKeyRegistry>,
-    cors_allowed_origins: Vec<String>,
     max_body_bytes: usize,
 ) -> Router<()> {
     let api_routes = Router::new()
@@ -107,6 +106,9 @@ pub fn create_router(
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz));
 
+    // The CORS middleware below reads the reloadable origin list from the
+    // state; kept as its own clone because with_state consumes the other.
+    let cors_state = Arc::clone(&state);
     let router = router
         .merge(metrics_route)
         .merge(api_routes)
@@ -141,13 +143,15 @@ pub fn create_router(
             },
         ));
 
-    // No configured origins = no CORS layer: the browser same-origin policy
-    // applies and server-to-server consumers are unaffected. This replaces
-    // the old always-on allow-anything layer.
-    let router = match cors_layer(&cors_allowed_origins) {
-        Some(cors) => router.layer(cors),
-        None => router,
-    };
+    // CORS as a per-request middleware reading the CURRENT snapshot, which is
+    // what makes server.cors_allowed_origins reloadable — the old CorsLayer
+    // was built into the router once. No configured origins = a plain
+    // passthrough, no CORS headers at all (the documented default for
+    // server-to-server consumers).
+    let router = router.layer(middleware::from_fn_with_state(
+        Arc::clone(&cors_state),
+        cors,
+    ));
 
     // Request metrics sit inside the compression layer, so the histogram
     // measures handler latency — what the service did — rather than handler
@@ -233,6 +237,37 @@ fn swagger_config() -> Config<'static> {
     // Urls are left empty on purpose: the axum adapter fills them in from
     // SwaggerUi::url(), so the spec URL stays declared in one place above.
     Config::default().with_syntax_highlight(false)
+}
+
+// Apply CORS from the current configuration snapshot. Reuses tower-http's
+// CorsLayer per request instead of reimplementing the protocol: the layer is
+// built from the snapshot and wrapped around the rest of the stack via
+// oneshot, so preflight handling, the allow-* headers and vary behave exactly
+// as the build-time layer did. Building it per request costs parsing a
+// handful of origin strings — nothing next to the request itself.
+async fn cors(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let Some(layer) = cors_layer(&state.config().cors_allowed_origins) else {
+        return next.run(request).await;
+    };
+
+    // `next.run` consumes `next`, but service_fn wants an FnMut; Option::take
+    // bridges the two, and oneshot guarantees the single call that makes the
+    // expect unreachable.
+    let mut next = Some(next);
+    let service = tower::service_fn(move |request: axum::extract::Request| {
+        let next = next.take().expect("oneshot calls the service exactly once");
+        async move { Ok::<_, std::convert::Infallible>(next.run(request).await) }
+    });
+    use tower::Layer as _;
+    use tower::ServiceExt as _;
+    match layer.layer(service).oneshot(request).await {
+        Ok(response) => response,
+        Err(never) => match never {},
+    }
 }
 
 fn cors_layer(origins: &[String]) -> Option<CorsLayer> {

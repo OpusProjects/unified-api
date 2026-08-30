@@ -150,3 +150,185 @@ async fn a_denied_write_emits_no_audit_event() {
         captured
     );
 }
+
+// =========================================================================
+// The configuration API's audit events — the highest-privilege actions the
+// service records, and the ones a compliance review asks about first. These
+// pin the action strings (config_write / config_write_reload / config_reload)
+// and outcomes so a log pipeline built on them cannot break silently.
+// =========================================================================
+
+// An app whose configuration API is on, built from a real directory the way
+// main builds it — a reload re-resolves api_keys.yaml from that directory, so
+// the key must be declared there (env-resolved), not only handed to the
+// builder. One env var name per test: set_var is process-wide.
+fn config_app(key_env: &str) -> (axum::Router, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        dir.path().join("config.yaml"),
+        "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+    )
+    .expect("fixture");
+    std::fs::write(
+        dir.path().join("api_keys.yaml"),
+        format!(
+            "key-audit:\n  name: \"auditor\"\n  env: \"{}\"\n  role: \"admin\"\n",
+            key_env
+        ),
+    )
+    .expect("fixture");
+    // SAFETY: the name is unique to the calling test and the value never
+    // changes, so no other test can observe a different one.
+    unsafe { std::env::set_var(key_env, "sekrit") };
+
+    let cfg =
+        unified_api::config::load_config(dir.path().to_str().expect("utf-8 path")).expect("load");
+    let live = unified_api::config::RestartOnlySettings::from_config(&cfg);
+    let keys =
+        unified_api::adapters::r#in::http::auth::resolve_api_keys(&cfg).expect("keys resolve");
+    let (app, _) = unified_api::AppBuilder::new()
+        .from_config(&cfg)
+        .api_keys(keys)
+        .config_api(
+            std::sync::Arc::new(unified_api::adapters::out::config::fs::FsConfigStore::new(
+                dir.path(),
+            )),
+            live,
+        )
+        .build_with_state();
+    (app, dir)
+}
+
+// One request under a capturing audit subscriber; returns status + log text.
+fn send_captured(app: &axum::Router, request: Request<axum::body::Body>) -> (StatusCode, String) {
+    let log = CapturedLog::default();
+    let writer = log.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_env_filter("audit=info")
+        .finish();
+    let response = tracing::subscriber::with_default(subscriber, || {
+        futures::executor::block_on(async { app.clone().oneshot(request).await.unwrap() })
+    });
+    let status = response.status();
+    let captured = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    (status, captured)
+}
+
+fn put_config_yaml(uri: &str, body: &str) -> Request<axum::body::Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("x-api-key", "sekrit")
+        .header("content-type", "application/yaml")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+const TUNED_SERVER: &str =
+    "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  readyz_require_all_sources: true\n";
+
+#[tokio::test]
+async fn a_config_write_without_reload_audits_config_write() {
+    let (app, _dir) = config_app("UNIFIED_API_TEST_KEY_AUDIT_WRITE");
+
+    let (status, captured) = send_captured(
+        &app,
+        put_config_yaml("/api/v1/config/config.yaml", TUNED_SERVER),
+    );
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(captured.contains("auditor"), "actor missing: {}", captured);
+    assert!(
+        captured.contains("config_write") && !captured.contains("config_write_reload"),
+        "a plain write audits config_write, not the reload variant: {}",
+        captured
+    );
+    assert!(
+        captured.contains("config.yaml"),
+        "resource missing: {}",
+        captured
+    );
+    assert!(
+        captured.contains("success"),
+        "outcome missing: {}",
+        captured
+    );
+}
+
+#[tokio::test]
+async fn a_config_write_with_reload_audits_config_write_reload() {
+    let (app, _dir) = config_app("UNIFIED_API_TEST_KEY_AUDIT_WRITE_RELOAD");
+
+    let (status, captured) = send_captured(
+        &app,
+        put_config_yaml("/api/v1/config/config.yaml?reload=true", TUNED_SERVER),
+    );
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        captured.contains("config_write_reload"),
+        "action missing: {}",
+        captured
+    );
+    assert!(
+        captured.contains("success"),
+        "outcome missing: {}",
+        captured
+    );
+}
+
+#[tokio::test]
+async fn a_standalone_reload_audits_config_reload() {
+    let (app, _dir) = config_app("UNIFIED_API_TEST_KEY_AUDIT_RELOAD");
+
+    let (status, captured) = send_captured(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/config/reload")
+            .header("x-api-key", "sekrit")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    );
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(captured.contains("auditor"), "actor missing: {}", captured);
+    assert!(
+        captured.contains("config_reload") && !captured.contains("config_write"),
+        "action missing or wrong: {}",
+        captured
+    );
+    assert!(
+        captured.contains("success"),
+        "outcome missing: {}",
+        captured
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_config_write_audits_the_rejection() {
+    let (app, _dir) = config_app("UNIFIED_API_TEST_KEY_AUDIT_REJECT");
+
+    // An unknown key fails validation on the staged copy; nothing lands, and
+    // the audit trail still records that a write was ATTEMPTED and refused.
+    let (status, captured) = send_captured(
+        &app,
+        put_config_yaml(
+            "/api/v1/config/config.yaml",
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  bogus_key: true\n",
+        ),
+    );
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        captured.contains("config_write"),
+        "action missing: {}",
+        captured
+    );
+    assert!(
+        captured.contains("rejected"),
+        "outcome missing: {}",
+        captured
+    );
+}

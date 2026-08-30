@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`server.metrics_require_auth` now applies on a configuration reload.**
+  The `/metrics` route is always registered public and the handler checks the
+  flag (and the API key, when required) on every scrape, instead of the flag
+  deciding router placement at startup — it was the one *security* setting on
+  the restart-only list, where "we changed it and it didn't take" is the worst
+  failure mode. Behavior is otherwise unchanged: public by default, and with
+  no keys configured the flag keeps having no effect. A 401 from `/metrics`
+  carries the standard error body.
+
 ## [0.23.0] - 2026-08-26
 
 ### Added

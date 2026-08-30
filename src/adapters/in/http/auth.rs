@@ -163,6 +163,37 @@ pub struct AuthContext {
 #[derive(Clone)]
 pub struct ApiKeys(pub Arc<ApiKeyRegistry>);
 
+// The credential a request offers, from either accepted header. Shared by the
+// middleware and the /metrics handler, which enforces auth itself (its route
+// is always public in the router so the flag can reload — see http::metrics).
+pub fn presented_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        })
+}
+
+// Constant-time comparison per key, and no early break: the scan always
+// visits every key so the response time does not reveal WHICH key matched,
+// only that one did.
+pub fn match_token<'k>(token: &str, keys: &'k [ResolvedApiKey]) -> Option<&'k ResolvedApiKey> {
+    let mut matched: Option<&ResolvedApiKey> = None;
+    for key in keys.iter() {
+        // ct_eq always compares all bytes (if lengths match) — a normal ==
+        // short-circuits on the first different byte and that time delta
+        // leaks info to guess the secret byte-by-byte.
+        if bool::from(token.as_bytes().ct_eq(key.secret.as_bytes())) {
+            matched = Some(key);
+        }
+    }
+    matched
+}
+
 // Errors as ApiError rather than a bare StatusCode: a middleware rejection
 // renders through the same IntoResponse as a handler's, so a 401 carries the
 // {"error": ...} body every other failure in the API carries.
@@ -187,36 +218,11 @@ pub async fn require_api_key(
         return Ok(next.run(request).await);
     }
 
-    let token = request
-        .headers()
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            request
-                .headers()
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-        });
-
-    let Some(token) = token else {
+    let Some(token) = presented_token(request.headers()) else {
         return Err(crate::adapters::r#in::http::error::ApiError::missing_api_key());
     };
 
-    // Constant-time comparison per key (see the ct_eq note below), and no
-    // early break: the scan always visits every key so the response time does
-    // not reveal WHICH key matched, only that one did.
-    let mut matched: Option<&ResolvedApiKey> = None;
-    for key in keys.iter() {
-        // ct_eq always compares all bytes (if lengths match) — a normal ==
-        // short-circuits on the first different byte and that time delta
-        // leaks info to guess the secret byte-by-byte.
-        if bool::from(token.as_bytes().ct_eq(key.secret.as_bytes())) {
-            matched = Some(key);
-        }
-    }
-
-    match matched {
+    match match_token(token, &keys) {
         Some(key) => {
             // The trace layer declared this span field Empty; filling it here
             // puts the authenticated key on the request's access-log line.

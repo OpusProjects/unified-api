@@ -273,6 +273,7 @@ impl AppBuilder {
                 projects: self.projects,
                 secrets: self.secrets_settings,
                 readyz_require_all_sources: self.readyz_require_all_sources,
+                metrics_require_auth: self.metrics_require_auth,
                 shutdown_grace_seconds: self.shutdown_grace_seconds,
                 refresh_timeout_seconds: self.refresh_timeout_seconds,
                 refresh_max_concurrent: self.refresh_max_concurrent,
@@ -300,7 +301,6 @@ impl AppBuilder {
                 self.api_keys,
             )),
             self.cors_allowed_origins,
-            self.metrics_require_auth,
             self.max_body_bytes,
         );
         (router, state)

@@ -43,6 +43,10 @@ pub struct RuntimeConfig {
     // /readyz turns green only when every configured source has synced, rather
     // than when at least one has (see config::ServerConfig)
     pub readyz_require_all_sources: bool,
+    // Whether /metrics needs an API key. Read by the metrics HANDLER on every
+    // scrape (the route itself is always registered public), which is what
+    // makes the flag reloadable — router placement could not be.
+    pub metrics_require_auth: bool,
     // Read at a single moment — shutdown — so it reloads trivially: main takes
     // it from whatever snapshot is current when the drain starts.
     pub shutdown_grace_seconds: u64,

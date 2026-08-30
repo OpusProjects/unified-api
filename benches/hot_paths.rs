@@ -113,10 +113,41 @@ fn view_snapshot_union(c: &mut Criterion) {
     });
 }
 
+// The builtin output transformer: merge two sources, filter, render Ansible
+// dynamic inventory — the whole request body of GET /endpoints/{id} for a
+// builtin endpoint. The 0.21.0 pitch was "no per-request interpreter spawn";
+// this is the number behind it (a process spawn alone is ~milliseconds).
+fn render_ansible_builtin(c: &mut Criterion) {
+    let mut datasets = HashMap::new();
+    datasets.insert(
+        "src-dc1".to_string(),
+        std::sync::Arc::new(dataset(500, "dc1")),
+    );
+    datasets.insert(
+        "src-dc2".to_string(),
+        std::sync::Arc::new(dataset(500, "dc2")),
+    );
+    let config: HashMap<String, String> =
+        [("filter_os".to_string(), "OracleLinux".to_string())].into();
+    let params = serde_json::json!({});
+
+    c.bench_function("render_ansible_1000_hosts_filtered", |b| {
+        b.iter(|| {
+            unified_api::application::output::render_ansible(
+                black_box(&datasets),
+                black_box(&config),
+                black_box(&params),
+            )
+            .len()
+        })
+    });
+}
+
 criterion_group!(
     benches,
     serialize_dataset,
     cached_dataset_read,
-    view_snapshot_union
+    view_snapshot_union,
+    render_ansible_builtin
 );
 criterion_main!(benches);

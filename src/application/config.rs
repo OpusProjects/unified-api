@@ -152,6 +152,7 @@ fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
         readyz_require_all_sources: cfg.server.readyz_require_all_sources,
         metrics_require_auth: cfg.server.metrics_require_auth,
         cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
+        max_body_bytes: cfg.server.max_body_bytes,
         shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
         refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
         refresh_max_concurrent: cfg.server.refresh_max_concurrent,
@@ -200,6 +201,9 @@ fn diff(
     }
     if previous.cors_allowed_origins != next.cors_allowed_origins {
         applied.push("server.cors_allowed_origins".to_string());
+    }
+    if previous.max_body_bytes != next.max_body_bytes {
+        applied.push("server.max_body_bytes".to_string());
     }
     if previous.shutdown_grace_seconds != next.shutdown_grace_seconds {
         applied.push("server.shutdown_grace_seconds".to_string());

@@ -161,10 +161,11 @@ is already running.
 | `server.shutdown_grace_seconds` | The next shutdown — the drain reads whatever a reload set last |
 | `server.metrics_require_auth` | The next scrape — the `/metrics` handler checks the flag per request |
 | `server.cors_allowed_origins` | The next request — the CORS middleware reads the list per request, so adding a dashboard's origin is a push, not a fleet restart |
+| `server.max_body_bytes` | The next request — raising the limit for a growing configuration push needs no restart |
 
 **Needs a restart** — reported, never silently ignored:
 
-`server.host`, `server.port`, `server.max_body_bytes`,
+`server.host`, `server.port`,
 `cache.persistence`, `projects.dir`, `config_api.enabled`.
 
 A write that touches one of them still lands on disk; the response names it:

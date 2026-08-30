@@ -275,6 +275,7 @@ impl AppBuilder {
                 readyz_require_all_sources: self.readyz_require_all_sources,
                 metrics_require_auth: self.metrics_require_auth,
                 cors_allowed_origins: self.cors_allowed_origins,
+                max_body_bytes: self.max_body_bytes,
                 shutdown_grace_seconds: self.shutdown_grace_seconds,
                 refresh_timeout_seconds: self.refresh_timeout_seconds,
                 refresh_max_concurrent: self.refresh_max_concurrent,
@@ -301,7 +302,6 @@ impl AppBuilder {
             Arc::new(adapters::r#in::http::auth::ApiKeyRegistry::new(
                 self.api_keys,
             )),
-            self.max_body_bytes,
         );
         (router, state)
     }

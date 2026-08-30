@@ -234,7 +234,7 @@ transactional — a rejected push touched nothing.
 | `400` with an `errors` list | The staged directory did not validate — the same list `--check-config` prints, every problem at once. Nothing was written; fix and re-push |
 | `412` | Your `If-Match` no longer matches: someone else wrote the file (or the directory) first. `GET` it again for a fresh `ETag`, merge, retry |
 | `409` about API keys | The change would leave the API with **no keys at all** (silent auth removal), or names a key env var that is not set on the instance. Both are refused before anything commits |
-| `413` | The push exceeds `server.max_body_bytes` (default 2 MiB) — a whole-directory `PUT` is one body. Raise the key (restart-only) |
+| `413` | The push exceeds `server.max_body_bytes` (default 2 MiB) — a whole-directory `PUT` is one body. Raise the key; it applies on a reload |
 | `200`, but nothing changed | The write landed on disk and was never applied: no `?reload=true` on the write, and nobody called `POST /config/reload`. `GET /api/v1/config` shows `reload_pending: true` for exactly this state |
 | `restart_required` will not clear | The change touches a restart-only key (`server.port`, `cache.persistence`, …). It keeps being reported — by `GET /api/v1/config` and the `unified_api_config_restart_required` gauge — until a restart adopts it. That persistence is the design: restart the instance |
 

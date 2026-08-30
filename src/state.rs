@@ -47,6 +47,10 @@ pub struct RuntimeConfig {
     // scrape (the route itself is always registered public), which is what
     // makes the flag reloadable — router placement could not be.
     pub metrics_require_auth: bool,
+    // Largest request body accepted, in bytes. Read per request by the
+    // body-limit middleware, so raising it for a growing config push is a
+    // reload, not a restart.
+    pub max_body_bytes: usize,
     // Browser origins allowed by CORS. Read per request by the CORS
     // middleware (empty = no CORS headers at all), so adding a dashboard's
     // origin is a reload, not a fleet restart.

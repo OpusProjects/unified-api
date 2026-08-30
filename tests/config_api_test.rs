@@ -683,6 +683,53 @@ async fn refresh_limits_and_shutdown_grace_reload_without_a_restart() {
 }
 
 #[tokio::test]
+async fn the_body_limit_applies_on_a_reload() {
+    let dir = config_dir("UNIFIED_API_TEST_KEY_BODY_LIMIT");
+    let (app, _) = app_at(dir.path());
+
+    // Shrink the limit to something a padded config file will exceed.
+    let tiny = "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  max_body_bytes: 300\n";
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", tiny),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A padded (but valid) push is now refused, naming the live limit.
+    let padded = format!(
+        "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  max_body_bytes: 300\n# {}\n",
+        "x".repeat(400)
+    );
+    let (status, body) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", &padded),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(
+        body.contains("server.max_body_bytes") && body.contains("300"),
+        "body: {}",
+        body
+    );
+
+    // The way out is another push: restoring the default limit is itself a
+    // small body, so the shrunken limit cannot lock the config API shut.
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", MINIMAL_SERVER),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &app,
+        put_yaml("/api/v1/config/config.yaml?reload=true", &padded),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the default limit admits it again");
+}
+
+#[tokio::test]
 async fn cors_origins_apply_on_a_reload_in_both_directions() {
     let dir = config_dir("UNIFIED_API_TEST_KEY_CORS");
     let (app, _) = app_at(dir.path());

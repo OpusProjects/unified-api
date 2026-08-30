@@ -244,7 +244,6 @@ pub fn is_config_file(name: &str) -> bool {
 pub struct RestartOnlySettings {
     pub host: String,
     pub port: u16,
-    pub cors_allowed_origins: Vec<String>,
     pub max_body_bytes: usize,
     pub persistence_path: Option<String>,
     pub persistence_interval_seconds: Option<u64>,
@@ -257,7 +256,6 @@ impl RestartOnlySettings {
         Self {
             host: cfg.server.host.clone(),
             port: cfg.server.port,
-            cors_allowed_origins: cfg.server.cors_allowed_origins.clone(),
             max_body_bytes: cfg.server.max_body_bytes,
             persistence_path: cfg.cache.persistence.as_ref().map(|p| p.path.clone()),
             persistence_interval_seconds: cfg
@@ -281,10 +279,6 @@ impl RestartOnlySettings {
         };
         check(self.host != other.host, "server.host");
         check(self.port != other.port, "server.port");
-        check(
-            self.cors_allowed_origins != other.cors_allowed_origins,
-            "server.cors_allowed_origins",
-        );
         check(
             self.max_body_bytes != other.max_body_bytes,
             "server.max_body_bytes",

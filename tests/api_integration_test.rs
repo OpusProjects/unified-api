@@ -820,6 +820,41 @@ async fn cors_wildcard_allows_any_origin() {
 }
 
 #[tokio::test]
+async fn cors_preflight_is_answered_for_an_allowed_origin() {
+    // Pins the per-request layer wiring: a preflight OPTIONS must be
+    // intercepted and answered by the CORS machinery, not routed (an OPTIONS
+    // on /healthz has no handler and would 405).
+    let app = unified_api::AppBuilder::new()
+        .cors_allowed_origins(vec!["https://forms.example".to_string()])
+        .build();
+
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/healthz")
+        .header("origin", "https://forms.example")
+        .header("access-control-request-method", "GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://forms.example")
+    );
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-methods")
+            .is_some(),
+        "a preflight answer names the allowed methods"
+    );
+}
+
+#[tokio::test]
 async fn cors_skips_invalid_origin_keeps_valid() {
     // A bad origin is warned-and-dropped, not fatal; the valid one still works
     let app = unified_api::AppBuilder::new()

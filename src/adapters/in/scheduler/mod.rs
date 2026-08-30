@@ -1412,6 +1412,7 @@ mod tests {
             secrets: previous.secrets.clone(),
             readyz_require_all_sources: previous.readyz_require_all_sources,
             metrics_require_auth: previous.metrics_require_auth,
+            cors_allowed_origins: previous.cors_allowed_origins.clone(),
             shutdown_grace_seconds: previous.shutdown_grace_seconds,
             refresh_timeout_seconds: previous.refresh_timeout_seconds,
             refresh_max_concurrent: previous.refresh_max_concurrent,

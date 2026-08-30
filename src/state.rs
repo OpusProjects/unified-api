@@ -47,6 +47,10 @@ pub struct RuntimeConfig {
     // scrape (the route itself is always registered public), which is what
     // makes the flag reloadable — router placement could not be.
     pub metrics_require_auth: bool,
+    // Browser origins allowed by CORS. Read per request by the CORS
+    // middleware (empty = no CORS headers at all), so adding a dashboard's
+    // origin is a reload, not a fleet restart.
+    pub cors_allowed_origins: Vec<String>,
     // Read at a single moment — shutdown — so it reloads trivially: main takes
     // it from whatever snapshot is current when the drain starts.
     pub shutdown_grace_seconds: u64,

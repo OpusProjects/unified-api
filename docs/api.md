@@ -60,7 +60,9 @@ Rotation is external by design: swap the secret in the env var (Secret, Vault,
 
 **CORS** is off by default (no CORS headers; server-to-server consumers are
 unaffected). Browser-based consumers need their origins listed in
-`server.cors_allowed_origins` — see [configuration](configuration.md).
+`server.cors_allowed_origins` — see [configuration](configuration.md). The
+list applies on a [configuration reload](config-api.md), so adding a new
+dashboard's origin needs no restart.
 
 ---
 

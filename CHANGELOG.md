@@ -17,6 +17,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   no keys configured the flag keeps having no effect. A 401 from `/metrics`
   carries the standard error body.
 
+- **`server.cors_allowed_origins` now applies on a configuration reload.**
+  The CORS middleware reads the origin list from the current snapshot on
+  every request instead of baking it into the router at startup, so adding a
+  new dashboard's origin (or revoking one) is a config push, not a fleet
+  restart. Behavior is otherwise unchanged — an empty list still means no
+  CORS headers at all, and preflight handling is identical.
+
 ## [0.23.0] - 2026-08-26
 
 ### Added

@@ -1649,7 +1649,10 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/OpusProjects/unified-api/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/OpusProjects/unified-api/compare/v0.24.1...v0.25.0
+[0.24.1]: https://github.com/OpusProjects/unified-api/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/OpusProjects/unified-api/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/OpusProjects/unified-api/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/OpusProjects/unified-api/compare/v0.21.0...v0.22.0

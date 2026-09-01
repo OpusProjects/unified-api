@@ -2000,3 +2000,149 @@ async fn scope_advertises_config_derived_ownership() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body.contains("not configured"), "body was: {}", body);
 }
+
+// =========================================================================
+// A declarative enricher's group vars have to survive all the way out of an
+// endpoint, and the endpoint prunes a group with neither hosts nor children.
+// Asserting on the cache alone would pass while the rendered inventory --
+// the only thing a consumer ever sees -- carried nothing at all.
+// =========================================================================
+
+fn app_for_group_var_enrichment() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
+    use std::collections::HashMap;
+    use unified_api::domain::dataset::Dataset;
+    use unified_api::domain::endpoint::{OutputEndpoint, OutputFormat};
+    use unified_api::domain::enricher::Enricher;
+
+    let enrichers = HashMap::from([(
+        "en-vars".to_string(),
+        serde_yaml_ng::from_str::<Enricher>(
+            "name: vars\ntarget_id: src-target\nsource_id: src-vars\nfields: [\"cmdb_role\"]\n",
+        )
+        .expect("enricher fixture"),
+    )]);
+
+    let endpoints = HashMap::from([(
+        "ep-target".to_string(),
+        OutputEndpoint {
+            name: "Target".to_string(),
+            source_ids: vec!["src-target".to_string()],
+            output: Some(OutputFormat::Ansible),
+            script_path: None,
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            timeout_seconds: Some(30),
+        },
+    )]);
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .enrichers(enrichers)
+        .endpoints(endpoints)
+        .build_with_state();
+
+    // The target: hosts and their own groups, no `all`, like a Device42 source.
+    let target: Dataset = serde_json::from_str(
+        r#"{"hostvars": {"motoko.section9.net": {"os": "OracleLinux"}},
+            "groups": {"section9": {"hosts": ["motoko.section9.net"]}}}"#,
+    )
+    .expect("target fixture");
+
+    // The source: says what `all` means, and holds no hosts of its own.
+    let vars: Dataset = serde_json::from_str(
+        r#"{"hostvars": {},
+            "groups": {"all": {"vars": {"cmdb_role": "device42", "secret": "no"}}}}"#,
+    )
+    .expect("vars fixture");
+
+    state.cache.set(
+        "src-target",
+        unified_api::domain::cache_entry::CacheEntry::new(target, 3600),
+    );
+    state.cache.set(
+        "src-vars",
+        unified_api::domain::cache_entry::CacheEntry::new(vars, 3600),
+    );
+
+    (app, state)
+}
+
+async fn post(app: axum::Router, path: &str) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(body.to_vec()).unwrap())
+}
+
+#[tokio::test]
+async fn enriched_group_vars_reach_the_rendered_inventory() {
+    let (app, _state) = app_for_group_var_enrichment();
+
+    let (status, _) = post(app.clone(), "/api/v1/enrichers/en-vars/run").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = get(app, "/api/v1/endpoints/ep-target").await;
+    assert_eq!(status, StatusCode::OK);
+    let inventory: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
+
+    // The whole point: `all` is rendered, carrying the value, with the hosts
+    // that keep it from being pruned on the way out.
+    assert_eq!(
+        inventory["all"]["vars"]["cmdb_role"], "device42",
+        "the endpoint must carry the group var; body was: {}",
+        body
+    );
+    assert_eq!(
+        inventory["all"]["hosts"],
+        serde_json::json!(["motoko.section9.net"])
+    );
+    // The allow-list still holds on the way through.
+    assert!(inventory["all"]["vars"].get("secret").is_none());
+    // And nothing was copied onto the host.
+    assert!(
+        inventory["_meta"]["hostvars"]["motoko.section9.net"]
+            .get("cmdb_role")
+            .is_none(),
+        "a group var must not be duplicated onto every member"
+    );
+}
+
+// The dataset is served from a cached serialization with an ETag. Enrichment
+// that forgets to invalidate it answers the next request with the old body
+// under the old validator -- stale, and cacheable.
+#[tokio::test]
+async fn enriching_group_vars_invalidates_the_cached_serialization() {
+    let (app, _state) = app_for_group_var_enrichment();
+
+    let before = Request::builder()
+        .uri("/api/v1/sources/src-target/dataset")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(before).await.unwrap();
+    let etag_before = response
+        .headers()
+        .get("etag")
+        .map(|v| v.to_str().unwrap().to_string());
+    let body_before = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(!String::from_utf8_lossy(&body_before).contains("cmdb_role"));
+
+    let (status, _) = post(app.clone(), "/api/v1/enrichers/en-vars/run").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, after) = get(app, "/api/v1/sources/src-target/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        after.contains("cmdb_role"),
+        "the dataset must reflect the enrichment, not a cached copy of it: {}",
+        after
+    );
+    assert!(
+        etag_before.is_some(),
+        "the route is expected to send an ETag"
+    );
+}

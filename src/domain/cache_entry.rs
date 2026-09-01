@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
-use super::dataset::{Dataset, HostVars};
+use super::dataset::{Dataset, Group, HostVars};
 
 // The dataset serialized to JSON once, shared by every response that serves
 // it. `Bytes` is a reference-counted byte buffer: cloning it (which every
@@ -348,6 +348,42 @@ impl CacheEntry {
             if let Some(existing) = dataset.hostvars.get_mut(&hostname) {
                 for (key, value) in vars {
                     existing.insert(key, value);
+                }
+            }
+        }
+    }
+
+    // The same contract as merge_hostvar_fields, for a group's vars: key by
+    // key, so two enrichers writing different keys to one group cannot erase
+    // each other, and never touching a key nobody sent.
+    //
+    // Unlike a host, a group IS created when it is missing. `all` is the case
+    // that matters: a source describes what `all` means, the target has no such
+    // group of its own, and without creating it the vars would have nowhere to
+    // land. `hosts` and `children` are taken only for a group being created --
+    // for one that already exists the target's own membership is the authority
+    // and an enricher has no business rewriting it.
+    pub fn merge_group_var_fields(&mut self, partial: Dataset) {
+        self.invalidate_serialized();
+        let dataset = Arc::make_mut(&mut self.dataset);
+
+        for (name, group) in partial.groups {
+            let Some(vars) = group.vars else {
+                continue;
+            };
+            match dataset.groups.get_mut(&name) {
+                Some(existing) => {
+                    existing.vars.get_or_insert_with(HostVars::new).extend(vars);
+                }
+                None => {
+                    dataset.groups.insert(
+                        name,
+                        Group {
+                            hosts: group.hosts,
+                            children: group.children,
+                            vars: Some(vars),
+                        },
+                    );
                 }
             }
         }
@@ -946,6 +982,84 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&entry.serialized_json().unwrap().bytes).unwrap();
         assert!(json["hostvars"]["togusa.section9.net"].is_object());
+    }
+
+    // Isolated on purpose: the enricher happens to call merge_hostvar_fields
+    // straight after, which invalidates anyway — so an integration test cannot
+    // tell whether this method does its own. Reorder those two calls and the
+    // dataset would be served stale under a stale validator, cacheably.
+    #[test]
+    fn merging_group_vars_invalidates_the_serialization_on_its_own() {
+        use crate::domain::dataset::Group;
+
+        let mut entry = CacheEntry::new(dataset_with_hosts(), 3600);
+        let before = entry.serialized_json().unwrap().etag.clone();
+
+        let mut groups = HashMap::new();
+        groups.insert(
+            "all".to_string(),
+            Group {
+                hosts: vec!["motoko.section9.net".to_string()],
+                children: Vec::new(),
+                vars: Some(
+                    [("cmdb_role".to_string(), serde_json::json!("device42"))]
+                        .into_iter()
+                        .collect(),
+                ),
+            },
+        );
+        entry.merge_group_var_fields(Dataset {
+            hostvars: HashMap::new(),
+            groups,
+            remove_hosts: Vec::new(),
+        });
+
+        let after = entry.serialized_json().unwrap().etag.clone();
+        assert_ne!(before, after, "a mutation must produce a new ETag");
+        let json: serde_json::Value =
+            serde_json::from_slice(&entry.serialized_json().unwrap().bytes).unwrap();
+        assert_eq!(json["groups"]["all"]["vars"]["cmdb_role"], "device42");
+    }
+
+    // Two enrichers writing different keys to one group must not erase each
+    // other, and neither may rewrite membership the target owns.
+    #[test]
+    fn merging_group_vars_is_additive_and_leaves_membership_alone() {
+        use crate::domain::dataset::Group;
+
+        let mut entry = CacheEntry::new(dataset_with_groups(), 3600);
+        let existing: Vec<String> = entry.dataset.groups["section9"].hosts.clone();
+
+        for (key, value) in [("first", "a"), ("second", "b")] {
+            let mut groups = HashMap::new();
+            groups.insert(
+                "section9".to_string(),
+                Group {
+                    hosts: vec!["intruder.example.com".to_string()],
+                    children: vec!["intruder-group".to_string()],
+                    vars: Some(
+                        [(key.to_string(), serde_json::json!(value))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                },
+            );
+            entry.merge_group_var_fields(Dataset {
+                hostvars: HashMap::new(),
+                groups,
+                remove_hosts: Vec::new(),
+            });
+        }
+
+        let group = &entry.dataset.groups["section9"];
+        let vars = group.vars.as_ref().expect("vars");
+        assert_eq!(
+            vars["first"], "a",
+            "the first key survived the second write"
+        );
+        assert_eq!(vars["second"], "b");
+        assert_eq!(group.hosts, existing, "membership is the target's own");
+        assert!(group.children.is_empty());
     }
 
     fn dataset_with_groups() -> Dataset {

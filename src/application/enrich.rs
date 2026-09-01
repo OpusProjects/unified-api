@@ -167,7 +167,12 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
         }
     };
 
-    let fields = enricher.fields.as_deref().unwrap_or(&[]);
+    // None means every var the source declares, which is how Ansible itself
+    // treats a group's vars: membership carries all of them, with no per-name
+    // permission. `fields` is the narrowing, not the default. It used to mean
+    // the opposite -- an enricher with no `fields` copied nothing and reported
+    // success, a config that looked active and was not.
+    let fields = enricher.fields.as_deref();
     let mut partial_hostvars = std::collections::HashMap::new();
 
     // A field may be declared on the source as a GROUP var rather than on the
@@ -188,12 +193,9 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
         // back — a clone of the target plus our field — is what made two
         // enrichers on one target race: each carried its own snapshot of
         // the other's keys, and whichever committed last erased the rest.
-        let mut owned = HostVars::new();
-        for field in fields {
-            if let Some(value) = source_vars.get(field) {
-                owned.insert(field.clone(), value.clone());
-            }
-        }
+        // Without `fields` the keys it owns are the source's, all of them,
+        // which is still a subset of the target's map rather than a snapshot.
+        let owned = selected(source_vars, fields);
 
         if !owned.is_empty() {
             partial_hostvars.insert(hostname.clone(), owned);
@@ -251,10 +253,26 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
 // hostnames, because an endpoint drops a group with neither hosts nor children
 // when it renders -- vars alone do not keep a group alive. That list is read
 // only when the group is created; see merge_group_var_fields.
+// The vars an enricher takes from one map: those `fields` names when it has
+// them, and otherwise every one. Absent means everything because that is what a
+// group's vars mean in Ansible -- being in the group carries all of them.
+fn selected(vars: &HostVars, fields: Option<&[String]>) -> HostVars {
+    let Some(fields) = fields else {
+        return vars.clone();
+    };
+    let mut wanted = HostVars::new();
+    for field in fields {
+        if let Some(value) = vars.get(field) {
+            wanted.insert(field.clone(), value.clone());
+        }
+    }
+    wanted
+}
+
 fn group_vars_for_target(
     target: &Dataset,
     source: &Dataset,
-    fields: &[String],
+    fields: Option<&[String]>,
 ) -> HashMap<String, Group> {
     let mut partial: HashMap<String, Group> = HashMap::new();
 
@@ -267,12 +285,7 @@ fn group_vars_for_target(
             continue;
         }
 
-        let mut wanted = HostVars::new();
-        for field in fields {
-            if let Some(value) = vars.get(field) {
-                wanted.insert(field.clone(), value.clone());
-            }
-        }
+        let wanted = selected(vars, fields);
         if wanted.is_empty() {
             continue;
         }
@@ -906,6 +919,129 @@ mod tests {
             entry.dataset.hostvars["motoko.section9.net"]["infinibox"],
             "vol-host"
         );
+    }
+
+    fn enricher_without_fields() -> Enricher {
+        serde_yaml_ng::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\n")
+            .expect("enricher fixture")
+    }
+
+    // No `fields` means every var the source declares -- the way being in a
+    // group carries all of its vars in Ansible. It used to mean the opposite:
+    // an enricher with none copied nothing and still reported success.
+    #[tokio::test]
+    async fn without_fields_every_var_is_taken() {
+        let cache = MemoryCache::new();
+        cache.set(
+            "src-a",
+            CacheEntry::new(
+                Dataset {
+                    groups: [(
+                        "section9".to_string(),
+                        group(&["motoko.section9.net"], &[], &[]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..dataset()
+                },
+                3600,
+            ),
+        );
+        cache.set(
+            "src-b",
+            CacheEntry::new(
+                Dataset {
+                    hostvars: [(
+                        "motoko.section9.net".to_string(),
+                        [("serial".to_string(), serde_json::json!("SN-1"))]
+                            .into_iter()
+                            .collect(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    groups: [(
+                        "section9".to_string(),
+                        group(&[], &[], &[("infinibox", "vol"), ("unrelated", "also")]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    remove_hosts: Vec::new(),
+                },
+                3600,
+            ),
+        );
+
+        run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &enricher_without_fields(),
+            None,
+        )
+        .await
+        .expect("target is cached");
+
+        let entry = cache.get("src-a").expect("entry");
+        let vars = entry.dataset.groups["section9"]
+            .vars
+            .as_ref()
+            .expect("vars");
+        // both, where a fields list would have taken only what it named
+        assert_eq!(vars["infinibox"], "vol");
+        assert_eq!(vars["unrelated"], "also");
+        // and the host's own vars from the source, all of them
+        assert_eq!(
+            entry.dataset.hostvars["motoko.section9.net"]["serial"],
+            "SN-1"
+        );
+        // still only the target's hosts: taking every var is not taking hosts
+        assert_eq!(entry.dataset.hostvars.len(), 1);
+    }
+
+    // An empty list is not an absent one: it names nothing, so nothing travels.
+    #[tokio::test]
+    async fn an_empty_fields_list_still_takes_nothing() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        cache.set(
+            "src-b",
+            CacheEntry::new(
+                Dataset {
+                    hostvars: [(
+                        "motoko.section9.net".to_string(),
+                        [("infinibox".to_string(), serde_json::json!("vol"))]
+                            .into_iter()
+                            .collect(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                },
+                3600,
+            ),
+        );
+
+        let enricher: Enricher =
+            serde_yaml_ng::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\nfields: []\n")
+                .expect("enricher fixture");
+
+        run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &enricher,
+            None,
+        )
+        .await
+        .expect("target is cached");
+
+        let entry = cache.get("src-a").expect("entry");
+        assert!(!entry.dataset.hostvars["motoko.section9.net"].contains_key("infinibox"));
     }
 
     #[tokio::test]

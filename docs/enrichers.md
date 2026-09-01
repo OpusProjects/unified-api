@@ -74,8 +74,19 @@ resolved here, which is also why a group's vars are not flattened onto its
 members — the same trade the static-inventory connector makes.
 
 A group the target does not have is skipped: it describes machines this target
-does not hold. `fields` filters both paths, so a name absent from it travels
-neither way.
+does not hold.
+
+**`fields` narrows; it is not the default.** Given, only those names travel, on
+either path. Omitted, **every** var the source declares travels — which is what
+a group's vars mean in Ansible, where being in a group carries all of them and
+there is no per-name permission. An explicitly empty list is not the same as an
+omitted one: `fields: []` names nothing, so nothing travels.
+
+> Omitting it therefore hands the target everything the matching groups hold,
+> including anything sensitive declared beside the variable you wanted. An
+> endpoint's `exclude_vars` can drop a name on the way out — it covers group
+> vars as well as hostvars — but it does not narrow what the enricher wrote into
+> the target source itself.
 
 Only **variables** cross. A source cannot pull its own hosts into the target
 through a shared group name, so an enricher stays safe where adding the source

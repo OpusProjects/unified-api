@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A declarative enricher with no `fields` now takes every var the source
+  declares, instead of none.** Being in a group carries all of that group's vars
+  in Ansible — there is no per-name permission — so `fields` is the narrowing,
+  and its absence should mean the ordinary thing rather than the empty one. It
+  meant the empty one: an enricher with a `source_id`, a `target_id` and no
+  `fields` ran, copied nothing and reported success, which is a config that
+  looks active and is not.
+
+  `fields: []` is unchanged and still takes nothing: an explicitly empty list
+  names nothing, which is a different statement from not naming any.
+
+  Omitting `fields` hands the target everything the matching groups hold,
+  including whatever sits beside the variable that was wanted. An endpoint's
+  `exclude_vars` can drop a name on the way out, but it does not narrow what was
+  written into the target source itself.
+
 ## [0.26.0] - 2026-09-01
 
 ### Changed

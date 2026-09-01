@@ -195,7 +195,7 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
         // the other's keys, and whichever committed last erased the rest.
         // Without `fields` the keys it owns are the source's, all of them,
         // which is still a subset of the target's map rather than a snapshot.
-        let owned = selected(source_vars, fields);
+        let owned = selected(source_vars, fields, enricher.fields_excluded.as_deref());
 
         if !owned.is_empty() {
             partial_hostvars.insert(hostname.clone(), owned);
@@ -209,7 +209,7 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
     // stored once instead of once per member, and the consumer resolves it --
     // the same trade the static-inventory connector makes.
     let partial_groups =
-        group_vars_for_target(&target_entry.dataset, &source_entry.dataset, fields);
+        group_vars_for_target(&target_entry.dataset, &source_entry.dataset, enricher);
 
     let partial = Dataset {
         hostvars: partial_hostvars,
@@ -253,17 +253,27 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
 // hostnames, because an endpoint drops a group with neither hosts nor children
 // when it renders -- vars alone do not keep a group alive. That list is read
 // only when the group is created; see merge_group_var_fields.
-// The vars an enricher takes from one map: those `fields` names when it has
-// them, and otherwise every one. Absent means everything because that is what a
-// group's vars mean in Ansible -- being in the group carries all of them.
-fn selected(vars: &HostVars, fields: Option<&[String]>) -> HostVars {
-    let Some(fields) = fields else {
+// One rule, applied on both axes: an absent list selects everything, a present
+// one selects only what it names, and an exclusion beats an inclusion.
+//
+// Absent means everything because that is what a group's vars mean in Ansible --
+// being in the group carries all of them, with no per-name permission.
+fn admits(name: &str, allowed: Option<&[String]>, excluded: Option<&[String]>) -> bool {
+    if excluded.is_some_and(|names| names.iter().any(|n| n == name)) {
+        return false;
+    }
+    allowed.is_none_or(|names| names.iter().any(|n| n == name))
+}
+
+// The vars an enricher takes from one map, under that rule.
+fn selected(vars: &HostVars, fields: Option<&[String]>, excluded: Option<&[String]>) -> HostVars {
+    if fields.is_none() && excluded.is_none() {
         return vars.clone();
-    };
+    }
     let mut wanted = HostVars::new();
-    for field in fields {
-        if let Some(value) = vars.get(field) {
-            wanted.insert(field.clone(), value.clone());
+    for (key, value) in vars {
+        if admits(key, fields, excluded) {
+            wanted.insert(key.clone(), value.clone());
         }
     }
     wanted
@@ -272,14 +282,25 @@ fn selected(vars: &HostVars, fields: Option<&[String]>) -> HostVars {
 fn group_vars_for_target(
     target: &Dataset,
     source: &Dataset,
-    fields: Option<&[String]>,
+    enricher: &Enricher,
 ) -> HashMap<String, Group> {
+    let fields = enricher.fields.as_deref();
+    let fields_excluded = enricher.fields_excluded.as_deref();
+    let groups = enricher.groups.as_deref();
+    let groups_excluded = enricher.groups_excluded.as_deref();
     let mut partial: HashMap<String, Group> = HashMap::new();
 
     for (name, group) in &source.groups {
         let Some(vars) = &group.vars else {
             continue;
         };
+        // `all` is exempt from needing a match in the target -- in Ansible it
+        // means every host -- but not from being selected against. An explicit
+        // list is the whole list, `all` included, so what is written is what is
+        // taken.
+        if !admits(name, groups, groups_excluded) {
+            continue;
+        }
         // A group the target does not have yet is CREATED, not skipped. The
         // source declares what a group means; who is in it may be decided later
         // and elsewhere -- by Device42 on the next sync, or by `group_by` at
@@ -288,7 +309,7 @@ fn group_vars_for_target(
         // know, which is most of them.
         let is_all = name == "all";
 
-        let wanted = selected(vars, fields);
+        let wanted = selected(vars, fields, fields_excluded);
         if wanted.is_empty() {
             continue;
         }
@@ -1059,6 +1080,174 @@ mod tests {
 
         let entry = cache.get("src-a").expect("entry");
         assert!(!entry.dataset.hostvars["motoko.section9.net"].contains_key("infinibox"));
+    }
+
+    fn enricher_yaml(extra: &str) -> Enricher {
+        serde_yaml_ng::from_str(&format!(
+            "name: d\ntarget_id: src-a\nsource_id: src-b\n{}",
+            extra
+        ))
+        .expect("enricher fixture")
+    }
+
+    // Two sources of vars, one target, and the real shape of the problem: the
+    // login every play needs sits on a tenancy group beside that tenancy's
+    // password hashes, and another tenancy's group sits beside it. Only the
+    // group name tells them apart -- no list of variable names can.
+    fn cache_with_two_tenancies() -> MemoryCache {
+        let cache = MemoryCache::new();
+        cache.set(
+            "src-a",
+            CacheEntry::new(
+                Dataset {
+                    groups: [(
+                        "tenancy_ours".to_string(),
+                        group(&["motoko.section9.net"], &[], &[]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    ..dataset()
+                },
+                3600,
+            ),
+        );
+        cache.set(
+            "src-b",
+            CacheEntry::new(
+                Dataset {
+                    hostvars: HashMap::new(),
+                    groups: [
+                        (
+                            "all".to_string(),
+                            group(
+                                &[],
+                                &[],
+                                &[("cmdb_role", "device42"), ("bind_password", "s3cret")],
+                            ),
+                        ),
+                        (
+                            "tenancy_ours".to_string(),
+                            group(
+                                &[],
+                                &[],
+                                &[("useransible", "pq_ansible"), ("users_all", "hashes")],
+                            ),
+                        ),
+                        (
+                            "tenancy_theirs".to_string(),
+                            group(
+                                &[],
+                                &[],
+                                &[("useransible", "other"), ("users_all", "their-hashes")],
+                            ),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    remove_hosts: Vec::new(),
+                },
+                3600,
+            ),
+        );
+        cache
+    }
+
+    async fn run_with(cache: &MemoryCache, enricher: &Enricher) {
+        run_enricher(
+            cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            enricher,
+            None,
+        )
+        .await
+        .expect("target is cached");
+    }
+
+    // groups_excluded keeps another tenancy's group out entirely, which is the
+    // cut no `fields` list could make: the name that must travel and the name
+    // that must not are both on a group, and both are called the same thing.
+    #[tokio::test]
+    async fn groups_excluded_keeps_another_tenancys_group_out() {
+        let cache = cache_with_two_tenancies();
+        run_with(
+            &cache,
+            &enricher_yaml("groups_excluded: [\"tenancy_theirs\"]\n"),
+        )
+        .await;
+
+        let entry = cache.get("src-a").expect("entry");
+        assert!(!entry.dataset.groups.contains_key("tenancy_theirs"));
+        assert_eq!(
+            entry.dataset.groups["tenancy_ours"].vars.as_ref().unwrap()["useransible"],
+            "pq_ansible",
+            "our own tenancy still arrives, hashes and all -- that is the repo's intent"
+        );
+    }
+
+    // fields_excluded cuts on the other axis, for something sitting on a group
+    // that must otherwise travel whole: `all`.
+    #[tokio::test]
+    async fn fields_excluded_drops_a_name_from_a_group_that_is_kept() {
+        let cache = cache_with_two_tenancies();
+        run_with(
+            &cache,
+            &enricher_yaml("fields_excluded: [\"bind_password\"]\n"),
+        )
+        .await;
+
+        let all = cache.get("src-a").expect("entry").dataset.groups["all"]
+            .vars
+            .clone()
+            .expect("all carries vars");
+        assert_eq!(all["cmdb_role"], "device42");
+        assert!(!all.contains_key("bind_password"));
+    }
+
+    // An explicit `groups` list is the whole list. `all` is exempt from needing
+    // a match in the target, not from being selected against -- otherwise what
+    // is written would not be what is taken.
+    #[tokio::test]
+    async fn an_explicit_groups_list_does_not_smuggle_all_in() {
+        let cache = cache_with_two_tenancies();
+        run_with(&cache, &enricher_yaml("groups: [\"tenancy_ours\"]\n")).await;
+
+        let groups = &cache.get("src-a").expect("entry").dataset.groups;
+        assert!(groups.contains_key("tenancy_ours"));
+        assert!(
+            !groups.contains_key("all"),
+            "`all` was not named, so it is not taken"
+        );
+    }
+
+    // Deny beats allow, on either axis, so the two can be combined without
+    // wondering which wins.
+    //
+    // Excluding a group stops the source's vars reaching it. It does not delete
+    // a group the TARGET owns -- `tenancy_ours` is src-a's own, with its own
+    // host, and an enricher has no business removing it.
+    #[tokio::test]
+    async fn an_exclusion_beats_an_inclusion() {
+        let cache = cache_with_two_tenancies();
+        run_with(
+            &cache,
+            &enricher_yaml(
+                "groups: [\"all\", \"tenancy_ours\"]\ngroups_excluded: [\"tenancy_ours\"]\n",
+            ),
+        )
+        .await;
+
+        let groups = &cache.get("src-a").expect("entry").dataset.groups;
+        assert!(groups.contains_key("all"), "named and not excluded");
+        assert!(
+            groups["tenancy_ours"]
+                .vars
+                .as_ref()
+                .is_none_or(|v| !v.contains_key("useransible")),
+            "excluded: the target keeps its own group, the source's vars stay out"
+        );
     }
 
     #[tokio::test]

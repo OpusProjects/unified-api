@@ -35,7 +35,10 @@ pub struct Enricher {
     #[serde(default)]
     pub source_id: Option<String>,
 
-    // Declarative merge: which top-level hostvars keys to copy from source
+    // Declarative merge: which keys to take from the source, on a group's vars
+    // as well as a host's. A narrowing, so absent means every var the source
+    // declares -- the way being in a group carries all of its vars in Ansible.
+    // An empty list names nothing and takes nothing, which is not the same.
     #[serde(default)]
     pub fields: Option<Vec<String>>,
 

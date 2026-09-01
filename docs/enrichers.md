@@ -53,19 +53,29 @@ the host's map — so two of them on one target cannot erase each other's keys.
 Config validation requires one mode or the other, and refuses a view as a
 target: a view has no cache entry to write into; enrich the member instead.
 
-**Where a field is looked up.** For each host of the target, in order:
+**Where a field is written.** A field is carried to wherever the source
+declares it, and the consumer resolves it from there:
 
-1. the source's **group vars**, for every group the *target* puts the host in —
-   ancestors included, since a host in a child group inherits from each parent;
-2. the source's **hostvars** for that host, which win, being the more specific
-   statement about it.
+- **on a host** — the source's `hostvars` for a host the target also has, copied
+  onto that host. Genuinely per-host data, so it is stored per host.
+- **on a group** — the source's group vars, merged onto the target's group of
+  the **same name**. The source declares what a group *means*; the target
+  decides who is *in* it. One copy serves every member, so a value shared by 780
+  machines costs one entry rather than 780.
 
-The membership is read from the target and the values from the source, which is
-what lets a source describe a group it holds no members of — the usual shape for
-a variable that describes a whole tenancy rather than a machine. Where two of a
-host's groups declare the same field, the more deeply nested one wins, and ties
-at one depth are broken alphabetically so the answer does not depend on map
-iteration order.
+`all` needs no matching name: in Ansible it means every host, so a source's
+`all` vars are merged onto the target as a whole. That merged group is given the
+target's hostnames, because an endpoint drops a group with neither hosts nor
+children when it renders — vars alone do not keep a group alive.
+
+Precedence is then Ansible's own, applied when the inventory is read: `all`,
+then more specific groups, then host vars, then `extra_vars`. Nothing is
+resolved here, which is also why a group's vars are not flattened onto its
+members — the same trade the static-inventory connector makes.
+
+A group the target does not have is skipped: it describes machines this target
+does not hold. `fields` filters both paths, so a name absent from it travels
+neither way.
 
 Only **variables** cross. A source cannot pull its own hosts into the target
 through a shared group name, so an enricher stays safe where adding the source

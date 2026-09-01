@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A declarative enricher carries the source's group vars onto the target's
+  groups, instead of resolving them onto each host.** 0.25.0 taught the merge to
+  find a field declared on a group; it wrote the result onto every member, so a
+  value shared by 780 machines cost 780 entries — the duplication the same
+  release had just taken out of the static-inventory connector. It is now merged
+  onto the target's group of the same name, one copy, and the consumer resolves
+  it with its own precedence: `all`, then more specific groups, then host vars,
+  then `extra_vars`.
+
+  `all` needs no matching name, because in Ansible it means every host. The
+  merged `all` carries the target's hostnames, since an endpoint drops a group
+  with neither hosts nor children and the variables would otherwise be rendered
+  away without a word.
+
+  A field the source declares **on a host** is still copied onto that host —
+  that data is genuinely per host. `fields` filters both paths, and a group the
+  target does not have is skipped. No host ever crosses between sources.
+
+  Consumers reading `_meta.hostvars` for a value that is declared on a group now
+  find it on the group instead. Through Ansible, or anything that resolves an
+  inventory, the answer per host is unchanged.
+
 ## [0.25.0] - 2026-09-01
 
 ### Added

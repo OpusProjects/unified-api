@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -175,29 +175,23 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
     // only place for one whose group has no members in the source at all. The
     // source cannot say which hosts are in that group; the target can, so the
     // membership is read from the target and the values from the source.
-    let group_vars = resolve_group_vars(&target_entry.dataset, &source_entry.dataset);
-
+    // A host's own vars in the source are the only thing copied per host. What
+    // the source says about a GROUP is carried onto the group instead, below:
+    // resolving it here would write one copy per member, which for a group of
+    // 780 is the duplication 0.25.0 took out of the static-inventory connector.
     for hostname in target_entry.dataset.hostvars.keys() {
+        let Some(source_vars) = source_entry.dataset.hostvars.get(hostname) else {
+            continue;
+        };
+
         // Only the keys this enricher owns. Writing the whole host map
         // back — a clone of the target plus our field — is what made two
         // enrichers on one target race: each carried its own snapshot of
         // the other's keys, and whichever committed last erased the rest.
         let mut owned = HostVars::new();
-
-        // Group vars first: a host's own vars in the source are the more
-        // specific statement about it, so they are applied second and win.
-        if let Some(from_groups) = group_vars.get(hostname) {
-            for field in fields {
-                if let Some(value) = from_groups.get(field) {
-                    owned.insert(field.clone(), value.clone());
-                }
-            }
-        }
-        if let Some(source_vars) = source_entry.dataset.hostvars.get(hostname) {
-            for field in fields {
-                if let Some(value) = source_vars.get(field) {
-                    owned.insert(field.clone(), value.clone());
-                }
+        for field in fields {
+            if let Some(value) = source_vars.get(field) {
+                owned.insert(field.clone(), value.clone());
             }
         }
 
@@ -208,16 +202,32 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
 
     let hosts_updated = partial_hostvars.len();
 
+    // The source's group vars, carried onto the groups the target already has
+    // rather than resolved onto each of its hosts. A group's value is then
+    // stored once instead of once per member, and the consumer resolves it --
+    // the same trade the static-inventory connector makes.
+    let partial_groups =
+        group_vars_for_target(&target_entry.dataset, &source_entry.dataset, fields);
+
     let partial = Dataset {
         hostvars: partial_hostvars,
-        groups: std::collections::HashMap::new(),
+        groups: partial_groups,
         remove_hosts: Vec::new(),
     };
 
     let mut partial = Some(partial);
     cache.update(&enricher.target_id, &mut |entry| {
         if let Some(p) = partial.take() {
-            entry.merge_hostvar_fields(p);
+            entry.merge_group_var_fields(Dataset {
+                hostvars: HashMap::new(),
+                groups: p.groups,
+                remove_hosts: Vec::new(),
+            });
+            entry.merge_hostvar_fields(Dataset {
+                hostvars: p.hostvars,
+                groups: HashMap::new(),
+                remove_hosts: Vec::new(),
+            });
         }
     });
 
@@ -229,116 +239,59 @@ fn execute_declarative_merge(cache: &dyn CachePort, enricher: &Enricher) -> Opti
     })
 }
 
-// How deeply each group sits, so a host's groups can be applied in the order a
-// consumer would apply them: a group nested further down is the more specific
-// statement about its members, and its value should land last.
+// What the source says about the TARGET's groups, ready to merge onto them.
 //
-// Relaxed rather than walked, and bounded by the number of groups: a group tree
-// is really a graph — the same group may be declared under several parents —
-// and the bound terminates even if one ends up naming itself.
-fn group_depths(groups: &HashMap<String, Group>) -> HashMap<String, usize> {
-    let mut depth: HashMap<String, usize> = groups.keys().map(|n| (n.clone(), 0)).collect();
-
-    for _ in 0..groups.len() {
-        let mut changed = false;
-        for (name, group) in groups {
-            let d = depth.get(name).copied().unwrap_or(0);
-            for child in &group.children {
-                let entry = depth.entry(child.clone()).or_insert(0);
-                if *entry < d + 1 {
-                    *entry = d + 1;
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    depth
-}
-
-// The source's group vars, resolved onto the target's hosts by group NAME.
+// Matched by group NAME: the source declares what a group means, the target
+// decides who is in it. Only variables ever cross -- no host moves between
+// sources, which is what makes an enricher safe where widening an endpoint's
+// `source_ids` would not be.
 //
-// Membership comes from the target and values from the source, which is what
-// lets a source describe a group it has no members of. Only variables cross —
-// never hosts — so a source cannot pull its own hosts into the target this way.
-//
-// Ancestry counts: a host in a child group would inherit from every parent when
-// the inventory is resolved, so resolving only direct membership here would give
-// the host a different answer than the inventory it is enriching.
-fn resolve_group_vars(target: &Dataset, source: &Dataset) -> HashMap<String, HostVars> {
-    let mut per_host: HashMap<String, HostVars> = HashMap::new();
-    if source.groups.values().all(|g| g.vars.is_none()) {
-        return per_host;
-    }
+// `all` needs no match, because in Ansible it means every host: a source's
+// `all` vars apply to the whole target. It is emitted carrying the target's
+// hostnames, because an endpoint drops a group with neither hosts nor children
+// when it renders -- vars alone do not keep a group alive. That list is read
+// only when the group is created; see merge_group_var_fields.
+fn group_vars_for_target(
+    target: &Dataset,
+    source: &Dataset,
+    fields: &[String],
+) -> HashMap<String, Group> {
+    let mut partial: HashMap<String, Group> = HashMap::new();
 
-    let depth = group_depths(&target.groups);
-
-    // child -> parents, so a group can be walked up to every ancestor of it.
-    let mut parents: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (name, group) in &target.groups {
-        for child in &group.children {
-            parents
-                .entry(child.as_str())
-                .or_default()
-                .push(name.as_str());
-        }
-    }
-
-    // Each group's effective vars = its own, under every ancestor's. Computed
-    // per group rather than per host: every host in a group gets the same set.
-    let mut effective: HashMap<&str, HostVars> = HashMap::new();
-    for name in target.groups.keys() {
-        let mut chain: Vec<(usize, &str)> = Vec::new();
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut pending: Vec<&str> = vec![name.as_str()];
-        while let Some(group) = pending.pop() {
-            if !seen.insert(group) {
-                continue;
-            }
-            chain.push((depth.get(group).copied().unwrap_or(0), group));
-            if let Some(above) = parents.get(group) {
-                pending.extend(above.iter().copied());
-            }
-        }
-        chain.sort();
-
-        let mut merged = HostVars::new();
-        for (_, group) in &chain {
-            if let Some(vars) = source.groups.get(*group).and_then(|g| g.vars.as_ref()) {
-                merged.extend(vars.clone());
-            }
-        }
-        if !merged.is_empty() {
-            effective.insert(name.as_str(), merged);
-        }
-    }
-
-    // Applied shallowest first, so a host in two groups takes the deeper one's
-    // value — and alphabetically within a depth, so the answer is the same on
-    // every run rather than whatever order the map happened to iterate in.
-    let mut ordered: Vec<(usize, &str)> = target
-        .groups
-        .keys()
-        .map(|n| (depth.get(n).copied().unwrap_or(0), n.as_str()))
-        .collect();
-    ordered.sort();
-
-    for (_, name) in &ordered {
-        let (Some(vars), Some(group)) = (effective.get(name), target.groups.get(*name)) else {
+    for (name, group) in &source.groups {
+        let Some(vars) = &group.vars else {
             continue;
         };
-        for host in &group.hosts {
-            per_host
-                .entry(host.clone())
-                .or_default()
-                .extend(vars.clone());
+        let is_all = name == "all";
+        if !is_all && !target.groups.contains_key(name) {
+            continue;
         }
+
+        let mut wanted = HostVars::new();
+        for field in fields {
+            if let Some(value) = vars.get(field) {
+                wanted.insert(field.clone(), value.clone());
+            }
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+
+        partial.insert(
+            name.clone(),
+            Group {
+                hosts: if is_all {
+                    target.hostvars.keys().cloned().collect()
+                } else {
+                    Vec::new()
+                },
+                children: Vec::new(),
+                vars: Some(wanted),
+            },
+        );
     }
 
-    per_host
+    partial
 }
 
 async fn execute_enricher(
@@ -756,11 +709,11 @@ mod tests {
     }
 
     // The field describes a whole tenancy, so it is declared once on the group
-    // rather than on each host — and the source has no members of that group at
-    // all. Only the target knows who is in it, which is the point of resolving
-    // the source's group vars through the target's membership.
+    // rather than on each host -- and the source has no members of that group at
+    // all. It is carried onto the TARGET's group of the same name, where one
+    // copy serves every member, instead of being written onto each of them.
     #[tokio::test]
-    async fn a_declarative_merge_resolves_the_sources_group_vars() {
+    async fn a_declarative_merge_carries_group_vars_onto_the_group() {
         let cache = MemoryCache::new();
         cache.set(
             "src-a",
@@ -798,7 +751,7 @@ mod tests {
             ),
         );
 
-        let outcome = run_enricher(
+        run_enricher(
             &cache,
             &SpyEnricher::default(),
             &SyncHealthRegistry::new(),
@@ -810,39 +763,113 @@ mod tests {
         .await
         .expect("target is cached");
 
-        assert!(outcome.success());
-        assert_eq!(outcome.hosts_updated, 1);
         let entry = cache.get("src-a").expect("entry");
-        let host = &entry.dataset.hostvars["motoko.section9.net"];
-        assert_eq!(host["infinibox"], "vol-group");
+        let vars = entry.dataset.groups["section9"]
+            .vars
+            .as_ref()
+            .expect("the group carries the vars");
+        assert_eq!(vars["infinibox"], "vol-group");
         assert!(
-            !host.contains_key("unrelated"),
+            !vars.contains_key("unrelated"),
             "the allow-list still applies to a group's vars"
         );
+        // Not copied onto the member: that is the duplication this avoids.
+        assert!(!entry.dataset.hostvars["motoko.section9.net"].contains_key("infinibox"));
         // No host crossed over: only variables travel.
         assert_eq!(entry.dataset.hostvars.len(), 1);
     }
 
-    // The host's own entry in the source is the more specific statement about
-    // it, so it is applied after the group's and wins.
+    // `all` means every host, so it needs no matching group in the target. It is
+    // created carrying the target's hosts, because an endpoint drops a group with
+    // neither hosts nor children -- vars alone would be silently thrown away.
     #[tokio::test]
-    async fn a_hosts_own_source_vars_beat_the_groups() {
+    async fn the_sources_all_group_is_merged_and_carries_the_targets_hosts() {
         let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
         cache.set(
-            "src-a",
+            "src-b",
             CacheEntry::new(
                 Dataset {
+                    hostvars: HashMap::new(),
                     groups: [(
-                        "section9".to_string(),
-                        group(&["motoko.section9.net"], &[], &[]),
+                        "all".to_string(),
+                        group(&[], &[], &[("infinibox", "estate")]),
                     )]
                     .into_iter()
                     .collect(),
-                    ..dataset()
+                    remove_hosts: Vec::new(),
                 },
                 3600,
             ),
         );
+
+        run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &declarative_enricher(),
+            None,
+        )
+        .await
+        .expect("target is cached");
+
+        let entry = cache.get("src-a").expect("entry");
+        let all = entry.dataset.groups.get("all").expect("all was created");
+        assert_eq!(all.vars.as_ref().unwrap()["infinibox"], "estate");
+        assert_eq!(
+            all.hosts,
+            vec!["motoko.section9.net"],
+            "without hosts the endpoint would prune it and the vars would vanish"
+        );
+    }
+
+    // A group the target does not have describes machines it does not hold, so
+    // there is nothing to carry it onto.
+    #[tokio::test]
+    async fn a_group_the_target_does_not_have_is_skipped() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
+        cache.set(
+            "src-b",
+            CacheEntry::new(
+                Dataset {
+                    hostvars: HashMap::new(),
+                    groups: [(
+                        "somewhere-else".to_string(),
+                        group(&[], &[], &[("infinibox", "nope")]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    remove_hosts: Vec::new(),
+                },
+                3600,
+            ),
+        );
+
+        run_enricher(
+            &cache,
+            &SpyEnricher::default(),
+            &SyncHealthRegistry::new(),
+            std::path::Path::new("unused"),
+            "en-d",
+            &declarative_enricher(),
+            None,
+        )
+        .await
+        .expect("target is cached");
+
+        let entry = cache.get("src-a").expect("entry");
+        assert!(!entry.dataset.groups.contains_key("somewhere-else"));
+    }
+
+    // A host's own entry in the source is genuinely per host, so it is still
+    // copied onto the host.
+    #[tokio::test]
+    async fn a_hosts_own_source_vars_are_still_copied_onto_the_host() {
+        let cache = MemoryCache::new();
+        cache.set("src-a", CacheEntry::new(dataset(), 3600));
         cache.set(
             "src-b",
             CacheEntry::new(
@@ -855,12 +882,7 @@ mod tests {
                     )]
                     .into_iter()
                     .collect(),
-                    groups: [(
-                        "section9".to_string(),
-                        group(&[], &[], &[("infinibox", "vol-group")]),
-                    )]
-                    .into_iter()
-                    .collect(),
+                    groups: HashMap::new(),
                     remove_hosts: Vec::new(),
                 },
                 3600,
@@ -884,78 +906,6 @@ mod tests {
             entry.dataset.hostvars["motoko.section9.net"]["infinibox"],
             "vol-host"
         );
-    }
-
-    // A host in a child group inherits from every ancestor of it, and the
-    // deeper group is the more specific statement — the order a consumer
-    // resolving the inventory itself would apply.
-    #[tokio::test]
-    async fn a_deeper_group_beats_the_ancestor_it_is_declared_under() {
-        let cache = MemoryCache::new();
-        cache.set(
-            "src-a",
-            CacheEntry::new(
-                Dataset {
-                    groups: [
-                        ("section9".to_string(), group(&[], &["field"], &[])),
-                        (
-                            "field".to_string(),
-                            group(&["motoko.section9.net"], &[], &[]),
-                        ),
-                    ]
-                    .into_iter()
-                    .collect(),
-                    ..dataset()
-                },
-                3600,
-            ),
-        );
-        cache.set(
-            "src-b",
-            CacheEntry::new(
-                Dataset {
-                    hostvars: HashMap::new(),
-                    groups: [
-                        (
-                            "section9".to_string(),
-                            group(&[], &[], &[("infinibox", "vol-parent"), ("site", "hq")]),
-                        ),
-                        (
-                            "field".to_string(),
-                            group(&[], &[], &[("infinibox", "vol-child")]),
-                        ),
-                    ]
-                    .into_iter()
-                    .collect(),
-                    remove_hosts: Vec::new(),
-                },
-                3600,
-            ),
-        );
-
-        let enricher: Enricher = serde_yaml_ng::from_str(
-            "name: d\ntarget_id: src-a\nsource_id: src-b\nfields: [\"infinibox\", \"site\"]\n",
-        )
-        .expect("enricher fixture");
-
-        run_enricher(
-            &cache,
-            &SpyEnricher::default(),
-            &SyncHealthRegistry::new(),
-            std::path::Path::new("unused"),
-            "en-d",
-            &enricher,
-            None,
-        )
-        .await
-        .expect("target is cached");
-
-        let entry = cache.get("src-a").expect("entry");
-        let host = &entry.dataset.hostvars["motoko.section9.net"];
-        // the child's value wins where both declare it
-        assert_eq!(host["infinibox"], "vol-child");
-        // and the ancestor's own field still reaches the host
-        assert_eq!(host["site"], "hq");
     }
 
     #[tokio::test]

@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A static inventory reads `group_vars/<name>/` directories, not only
+  `group_vars/<name>.yaml`.** Ansible accepts either layout; only the flat one
+  was read, so an inventory using directories — one file per concern, which is
+  how a large one stays readable — lost every variable it declared. Silently:
+  the sync reported every host and every group, each with no vars at all, and
+  the "no matching group" warning never fired because the map was empty rather
+  than mismatched. Files within a directory merge alphabetically, matching
+  Ansible, and a name defined both as a file and as a directory now fails the
+  sync instead of one of them quietly winning.
+
 ## [0.24.0] - 2026-08-30
 
 ### Added

@@ -5,7 +5,7 @@ use crate::domain::dataset::{Dataset, Group, HostVars};
 // Native parser for Ansible STATIC YAML inventories — the classic layout:
 //
 //   inventory.yaml        all: { hosts: {...}, children: { web: {...} } }
-//   group_vars/all.yaml
+//   group_vars/all.yaml            (or group_vars/all/ holding several files)
 //   group_vars/web.yaml
 //   host_vars/web01.example.com.yaml
 //
@@ -28,10 +28,12 @@ use crate::domain::dataset::{Dataset, Group, HostVars};
 pub struct StaticInventoryInput {
     // Contents of the inventory YAML file
     pub inventory: String,
-    // group name (from the filename, extension stripped) → file contents
-    pub group_vars: HashMap<String, String>,
-    // hostname (from the filename) → file contents
-    pub host_vars: HashMap<String, String>,
+    // group name → the files that define it, in the order they are merged.
+    // A list because Ansible accepts group_vars/web.yaml *or* group_vars/web/
+    // holding several files; each entry is (label for errors, contents).
+    pub group_vars: HashMap<String, Vec<(String, String)>>,
+    // hostname → its files, same shape and for the same reason
+    pub host_vars: HashMap<String, Vec<(String, String)>>,
 }
 
 pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), String> {
@@ -312,15 +314,22 @@ fn yaml_vars(value: &serde_yaml_ng::Value) -> Result<HostVars, String> {
 }
 
 fn parse_vars_files(
-    files: &HashMap<String, String>,
+    files: &HashMap<String, Vec<(String, String)>>,
     kind: &str,
 ) -> Result<HashMap<String, HostVars>, String> {
     let mut parsed = HashMap::new();
-    for (name, contents) in files {
-        check_not_vaulted(&format!("{}/{}", kind, name), contents)?;
-        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)
-            .map_err(|e| format!("{}/{} is not valid YAML: {}", kind, name, e))?;
-        let vars = yaml_vars(&value).map_err(|e| format!("{}/{}: {}", kind, name, e))?;
+    for (name, parts) in files {
+        // Merged in the order the adapter listed them -- alphabetical for a
+        // directory -- so a key set twice takes the later file's value, which
+        // is what Ansible does.
+        let mut vars = HostVars::new();
+        for (label, contents) in parts {
+            check_not_vaulted(&format!("{}/{}", kind, label), contents)?;
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)
+                .map_err(|e| format!("{}/{} is not valid YAML: {}", kind, label, e))?;
+            let file_vars = yaml_vars(&value).map_err(|e| format!("{}/{}: {}", kind, label, e))?;
+            vars.extend(file_vars);
+        }
         parsed.insert(name.clone(), vars);
     }
     Ok(parsed)
@@ -347,6 +356,12 @@ fn key_as_string(key: &serde_yaml_ng::Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The tests below each define a name from a single file; the adapter is
+    // what turns a directory into several. Named for the file it stands in for.
+    fn one(name: &str, contents: &str) -> Vec<(String, String)> {
+        vec![(format!("{}.yaml", name), contents.to_string())]
+    }
 
     fn input(inventory: &str) -> StaticInventoryInput {
         StaticInventoryInput {
@@ -405,14 +420,14 @@ all:
         let mut inv = input(BASIC);
         inv.group_vars.insert(
             "all".to_string(),
-            "timezone: UTC\nntp_server: global.ntp\n".to_string(),
+            one("all", "timezone: UTC\nntp_server: global.ntp\n"),
         );
         // group file overrides the group's inline var
         inv.group_vars
-            .insert("web".to_string(), "ntp_server: web.ntp\n".to_string());
+            .insert("web".to_string(), one("web", "ntp_server: web.ntp\n"));
         inv.host_vars.insert(
             "web02.example.com".to_string(),
-            "http_port: 9090\n".to_string(),
+            one("web02.example.com", "http_port: 9090\n"),
         );
 
         let (dataset, _) = parse(&inv).unwrap();
@@ -465,7 +480,10 @@ all:
         let mut inv = input(BASIC);
         inv.host_vars.insert(
             "web01.example.com".to_string(),
-            "$ANSIBLE_VAULT;1.1;AES256\n6338386437...".to_string(),
+            one(
+                "web01.example.com",
+                "$ANSIBLE_VAULT;1.1;AES256\n6338386437...",
+            ),
         );
 
         let err = parse(&inv).unwrap_err();
@@ -513,9 +531,11 @@ all:
     fn orphan_vars_files_warn() {
         let mut inv = input(BASIC);
         inv.group_vars
-            .insert("ghosts".to_string(), "x: 1\n".to_string());
-        inv.host_vars
-            .insert("nope.example.com".to_string(), "y: 2\n".to_string());
+            .insert("ghosts".to_string(), one("ghosts", "x: 1\n"));
+        inv.host_vars.insert(
+            "nope.example.com".to_string(),
+            one("nope.example.com", "y: 2\n"),
+        );
 
         let (_, warnings) = parse(&inv).unwrap();
         assert!(warnings.iter().any(|w| w.contains("group_vars/ghosts")));

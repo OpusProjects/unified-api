@@ -7,6 +7,9 @@ use tracing::{debug, warn};
 
 use crate::domain::source::OutputFormat;
 use crate::domain::static_inventory::{StaticInventoryInput, parse};
+
+// name → the files that define it, in merge order: (label for errors, contents)
+type VarsFiles = HashMap<String, Vec<(String, String)>>;
 use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
 
 // Connector for static Ansible YAML inventories: no process is spawned — the
@@ -87,51 +90,116 @@ impl ConnectorPort for StaticInventoryConnector {
     }
 }
 
-// Read every *.yaml / *.yml in a directory into {name-without-extension:
-// contents}. A missing directory is fine (not every inventory has one).
-async fn read_vars_dir(dir: &Path) -> Result<HashMap<String, String>, ConnectorError> {
-    let mut files = HashMap::new();
+// Read a group_vars/ or host_vars/ directory into {name → the files that
+// define it}. A missing directory is fine (not every inventory has one).
+//
+// Ansible accepts either layout, and so does this: `group_vars/web.yaml`, or
+// `group_vars/web/` holding any number of files that are merged together. The
+// directory form is how a large inventory stays readable — one file per
+// concern rather than one enormous file per group — and reading only the flat
+// form dropped every variable of an inventory written the other way. Silently:
+// the sync reported every host and every group, each with no vars at all.
+async fn read_vars_dir(dir: &Path) -> Result<VarsFiles, ConnectorError> {
+    let mut files: VarsFiles = HashMap::new();
 
     let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(files),
-        Err(e) => {
+        Err(e) => return Err(read_error(dir, e)),
+    };
+
+    while let Some(entry) = entries.next_entry().await.map_err(|e| read_error(dir, e))? {
+        let path = entry.path();
+
+        let (name, parts) = if path.is_dir() {
+            let Some(name) = file_name(&path) else {
+                continue;
+            };
+            (name, read_vars_subdir(&path).await?)
+        } else {
+            if !is_yaml(&path) || !path.is_file() {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(label) = file_name(&path) else {
+                continue;
+            };
+            let contents = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| read_error(&path, e))?;
+            (stem.to_string(), vec![(label, contents)])
+        };
+
+        // Both layouts for one name is ambiguous, and guessing which wins would
+        // be a variable silently taking a value nobody can find in the tree.
+        if files.insert(name.clone(), parts).is_some() {
             return Err(ConnectorError {
-                message: format!("cannot read '{}': {}", dir.display(), e),
+                message: format!(
+                    "'{}' is defined both as a file and as a directory",
+                    dir.join(&name).display()
+                ),
                 stderr: String::new(),
                 exit_code: None,
             });
         }
-    };
-
-    while let Some(entry) = entries.next_entry().await.map_err(|e| ConnectorError {
-        message: format!("cannot list '{}': {}", dir.display(), e),
-        stderr: String::new(),
-        exit_code: None,
-    })? {
-        let path = entry.path();
-        let is_yaml = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "yaml" || ext == "yml");
-        if !is_yaml || !path.is_file() {
-            continue;
-        }
-
-        let name = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or_default()
-            .to_string();
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| ConnectorError {
-                message: format!("cannot read '{}': {}", path.display(), e),
-                stderr: String::new(),
-                exit_code: None,
-            })?;
-        files.insert(name, contents);
     }
 
     Ok(files)
+}
+
+// Every *.yaml / *.yml directly inside one group_vars/<name>/ directory,
+// sorted by file name so the merge order is the one Ansible uses and does not
+// depend on however the filesystem happened to return them. Nested
+// directories are not descended into — Ansible does not either.
+async fn read_vars_subdir(dir: &Path) -> Result<Vec<(String, String)>, ConnectorError> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|e| read_error(dir, e))?;
+    let mut paths = Vec::new();
+
+    while let Some(entry) = entries.next_entry().await.map_err(|e| read_error(dir, e))? {
+        let path = entry.path();
+        if is_yaml(&path) && path.is_file() {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+
+    let mut parts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let Some(base) = file_name(&path) else {
+            continue;
+        };
+        let label = match file_name(dir) {
+            Some(parent) => format!("{}/{}", parent, base),
+            None => base,
+        };
+        let contents = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| read_error(&path, e))?;
+        parts.push((label, contents));
+    }
+    Ok(parts)
+}
+
+fn is_yaml(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext == "yaml" || ext == "yml")
+}
+
+fn file_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_string())
+}
+
+fn read_error(path: &Path, e: std::io::Error) -> ConnectorError {
+    ConnectorError {
+        message: format!("cannot read '{}': {}", path.display(), e),
+        stderr: String::new(),
+        exit_code: None,
+    }
 }

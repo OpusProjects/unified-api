@@ -12,13 +12,23 @@ use crate::domain::dataset::{Dataset, Group, HostVars};
 // This is pure domain logic: it receives FILE CONTENTS (the adapter does the
 // disk IO) and returns a Dataset plus human-readable warnings.
 //
-// Variable precedence, lowest to highest (a simplified version of Ansible's
-// own ordering — documented in docs/connectors.md):
-//   1. `all` inline vars, then group_vars/all.yaml
-//   2. each group containing the host, parents before children, alphabetical
-//      among groups of the same depth — inline vars then group_vars file
-//   3. host inline vars (in the inventory file)
-//   4. host_vars/<host>.yaml
+// Vars are emitted WHERE THEY ARE DECLARED, not resolved onto every host:
+// a group's vars stay on the group, a host's stay on the host, and whoever
+// reads the inventory applies precedence. Ansible is the authority on its own
+// ordering, so deferring to it is both cheaper and more faithful than
+// reimplementing it here.
+//
+// It was resolved here once, and the cost is why it is not any more: copying
+// each group's vars onto every member meant a 1097-host inventory whose
+// group_vars/all is 55 KB carried that 55 KB a thousand times over — a 53 MB
+// dataset, ~94% of it the same bytes, which OOMKilled the server on sync.
+//
+// So per host this emits only:
+//   1. host inline vars (in the inventory file)
+//   2. host_vars/<host>.yaml
+// and per group its inline vars merged with its group_vars file. `all` is
+// emitted as a group like any other — that is where group_vars/all lands, and
+// Ansible applies it to every host because every host is in `all`.
 //
 // Deliberately unsupported, and loud about it:
 //   - INI inventories (YAML only)
@@ -56,7 +66,7 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
     let mut walk = Walk::default();
     for (name, node) in root {
         let name = key_as_string(name)?;
-        walk.group(&name, node, 0)?;
+        walk.group(&name, node)?;
     }
 
     // Effective vars per group = inline vars, overridden by its group_vars file
@@ -78,46 +88,13 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
         }
     }
 
-    // Second pass: flatten precedence into per-host effective vars.
+    // Second pass: the host's OWN vars. Group vars are not folded in here —
+    // they are emitted on the group, and the consumer resolves them.
     let mut hostvars: HashMap<String, HostVars> = HashMap::new();
-    for (host, direct) in &walk.host_memberships {
+    for host in walk.host_memberships.keys() {
         let mut vars: HostVars = HashMap::new();
 
-        // 1. `all` (inline + file), which contains every host by definition
-        if let Some(all_vars) = group_effective_vars.get("all") {
-            vars.extend(all_vars.clone());
-        }
-
-        // 2. every group containing the host (directly or via ancestors),
-        //    parents before children, alphabetical within the same depth
-        //
-        // A walk over a graph rather than a chain: a group can be declared under
-        // several parents, so it has several ancestries and a host inherits from
-        // all of them. `visited` both dedupes that and guarantees termination,
-        // which a hand-written inventory should never need but costs nothing.
-        let mut chain: Vec<(usize, String)> = Vec::new();
-        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut pending: Vec<String> = direct.clone();
-        while let Some(name) = pending.pop() {
-            if !visited.insert(name.clone()) {
-                continue;
-            }
-            if name != "all" {
-                let depth = walk.groups.get(&name).map(|g| g.depth).unwrap_or(0);
-                chain.push((depth, name.clone()));
-            }
-            if let Some(parents) = walk.parents.get(&name) {
-                pending.extend(parents.iter().cloned());
-            }
-        }
-        chain.sort();
-        for (_, group) in &chain {
-            if let Some(group_vars) = group_effective_vars.get(group) {
-                vars.extend(group_vars.clone());
-            }
-        }
-
-        // 3. inline host vars, 4. host_vars/<host>.yaml
+        // 1. inline host vars, 2. host_vars/<host>.yaml
         if let Some(inline) = walk.host_inline_vars.get(host) {
             vars.extend(inline.clone());
         }
@@ -136,11 +113,16 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
         }
     }
 
-    // Dataset groups: everything except the implicit all/ungrouped, with
-    // direct hosts, children, and the group's own (unflattened) vars.
+    // Dataset groups: every declared group with its direct hosts, children and
+    // its own vars.
+    //
+    // `all` is emitted like any other group, because it is where group_vars/all
+    // lands and nothing else carries those vars now that they are not copied
+    // onto each host. `ungrouped` stays out: Ansible synthesises it for hosts
+    // that are in no group, so emitting it would be inventing membership.
     let mut groups: HashMap<String, Group> = HashMap::new();
     for (name, info) in &walk.groups {
-        if name == "all" || name == "ungrouped" {
+        if name == "ungrouped" {
             continue;
         }
         let vars = group_effective_vars
@@ -180,7 +162,6 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
 }
 
 struct GroupInfo {
-    depth: usize,
     hosts: Vec<String>,
     children: Vec<String>,
     inline_vars: HostVars,
@@ -189,41 +170,23 @@ struct GroupInfo {
 #[derive(Default)]
 struct Walk {
     groups: HashMap<String, GroupInfo>,
-    // child group -> its parent groups.
-    //
-    // A LIST, because the same group may be declared under more than one parent
-    // — ordinary in Ansible, and the reason this is a graph rather than a tree.
-    // Keeping one parent lost half the ancestry, and with it half the group vars
-    // a host should have inherited.
-    parents: HashMap<String, Vec<String>>,
     // host -> groups it appears under directly
     host_memberships: HashMap<String, Vec<String>>,
     host_inline_vars: HashMap<String, HostVars>,
 }
 
 impl Walk {
-    fn group(
-        &mut self,
-        name: &str,
-        node: &serde_yaml_ng::Value,
-        depth: usize,
-    ) -> Result<(), String> {
+    fn group(&mut self, name: &str, node: &serde_yaml_ng::Value) -> Result<(), String> {
         // Taken out of the map rather than built fresh: a group may be declared
         // more than once (under two parents, or twice under the same one), and
         // replacing what was there dropped every host the earlier declaration
         // carried. Silently — the host stayed in `hostvars`, so nothing looked
         // wrong until an inventory rendered from `groups` failed to target it.
-        //
-        // The deepest declaration wins the depth, which drives var precedence:
-        // a group nested further down is the more specific statement about a
-        // host, so its vars should be applied later.
         let mut info = self.groups.remove(name).unwrap_or(GroupInfo {
-            depth,
             hosts: Vec::new(),
             children: Vec::new(),
             inline_vars: HashMap::new(),
         });
-        info.depth = info.depth.max(depth);
 
         // A group may be null (empty) or a mapping with hosts/children/vars
         if let Some(mapping) = node.as_mapping() {
@@ -258,16 +221,12 @@ impl Walk {
                         for (child, child_node) in children {
                             let child = key_as_string(child)?;
                             info.children.push(child.clone());
-                            self.parents
-                                .entry(child.clone())
-                                .or_default()
-                                .push(name.to_string());
                             // Recursing re-enters `group` for the child, which
                             // merges into whatever that child already had — so
                             // the second parent adds to the first rather than
                             // replacing it. This is why `info` is held out of
                             // the map across the recursion.
-                            self.group(&child, child_node, depth + 1)?;
+                            self.group(&child, child_node)?;
                         }
                     }
                     "vars" => {
@@ -395,28 +354,27 @@ all:
 
         assert!(warnings.is_empty());
         assert_eq!(dataset.hostvars.len(), 4);
-        // inline host var
+        // inline host var, which is the host's own
         assert_eq!(dataset.hostvars["web02.example.com"]["http_port"], 8080);
-        // inline group var flattened into member hosts
-        assert_eq!(
-            dataset.hostvars["web01.example.com"]["ntp_server"],
-            "ntp.example.com"
-        );
-        // `all` is implicit, not a Dataset group
-        assert_eq!(dataset.groups.len(), 2);
-        assert_eq!(
-            dataset.groups["web"].hosts,
-            vec!["web01.example.com", "web02.example.com"]
-        );
-        // group vars also kept on the group itself
+        // the group's var is NOT copied onto its members
+        assert!(!dataset.hostvars["web01.example.com"].contains_key("ntp_server"));
+        // it stays on the group, once
         assert_eq!(
             dataset.groups["web"].vars.as_ref().unwrap()["ntp_server"],
             "ntp.example.com"
         );
+        // `all` is a group like any other: it holds group_vars/all
+        assert_eq!(dataset.groups.len(), 3);
+        assert_eq!(dataset.groups["all"].hosts, vec!["standalone.example.com"]);
+        assert_eq!(dataset.groups["all"].children, vec!["db", "web"]);
+        assert_eq!(
+            dataset.groups["web"].hosts,
+            vec!["web01.example.com", "web02.example.com"]
+        );
     }
 
     #[test]
-    fn group_vars_files_and_precedence() {
+    fn group_vars_files_land_on_their_own_group() {
         let mut inv = input(BASIC);
         inv.group_vars.insert(
             "all".to_string(),
@@ -432,27 +390,29 @@ all:
 
         let (dataset, _) = parse(&inv).unwrap();
 
-        // all < group: web hosts get the web override
+        // group_vars/all lands on `all`, once, rather than on every host
+        let all = dataset.groups["all"]
+            .vars
+            .as_ref()
+            .expect("all carries vars");
+        assert_eq!(all["timezone"], "UTC");
+        assert_eq!(all["ntp_server"], "global.ntp");
+        assert!(!dataset.hostvars["standalone.example.com"].contains_key("timezone"));
+        assert!(!dataset.hostvars["db01.example.com"].contains_key("ntp_server"));
+
+        // within a group, its file still beats its inline var
         assert_eq!(
-            dataset.hostvars["web01.example.com"]["ntp_server"],
+            dataset.groups["web"].vars.as_ref().unwrap()["ntp_server"],
             "web.ntp"
         );
-        // hosts outside web keep the all-level value
-        assert_eq!(
-            dataset.hostvars["db01.example.com"]["ntp_server"],
-            "global.ntp"
-        );
-        // group_vars/all reaches every host, including ungrouped ones
-        assert_eq!(
-            dataset.hostvars["standalone.example.com"]["timezone"],
-            "UTC"
-        );
-        // host_vars file beats the inline host var
+
+        // host_vars file still beats the inline host var -- both are the
+        // host's own, so this one is resolved here
         assert_eq!(dataset.hostvars["web02.example.com"]["http_port"], 9090);
     }
 
     #[test]
-    fn child_group_vars_override_parent() {
+    fn a_parent_and_child_each_keep_their_own_vars() {
         let inv = input(
             r#"
 all:
@@ -470,7 +430,17 @@ all:
         );
 
         let (dataset, _) = parse(&inv).unwrap();
-        assert_eq!(dataset.hostvars["host01.example.com"]["dns"], "zone.dns");
+        // Both values survive, on their own group. Which one wins for the host
+        // is Ansible's call when it reads the inventory -- the child, by depth.
+        assert_eq!(
+            dataset.groups["region-a"].vars.as_ref().unwrap()["dns"],
+            "region.dns"
+        );
+        assert_eq!(
+            dataset.groups["zone-a"].vars.as_ref().unwrap()["dns"],
+            "zone.dns"
+        );
+        assert!(!dataset.hostvars["host01.example.com"].contains_key("dns"));
         // structure preserved: region-a has zone-a as child
         assert_eq!(dataset.groups["region-a"].children, vec!["zone-a"]);
     }
@@ -578,10 +548,11 @@ all:
         assert_eq!(dataset.hostvars.len(), 2);
     }
 
-    // Both ancestries count, so a host inherits the vars of every parent the
-    // group is declared under, not just the last one walked.
+    // Both ancestries must survive in the structure: a group declared under two
+    // parents is reachable from each, which is what lets a consumer resolve the
+    // vars of every one of them onto the host.
     #[test]
-    fn a_host_inherits_from_every_ancestry_of_its_group() {
+    fn a_group_declared_under_two_parents_is_a_child_of_each() {
         let inv = input(
             r#"
 all:
@@ -602,9 +573,17 @@ all:
         );
         let (dataset, _) = parse(&inv).unwrap();
 
-        let vars = &dataset.hostvars["web01.example.com"];
-        assert_eq!(vars["site"], "site-a");
-        assert_eq!(vars["region"], "emea");
+        assert_eq!(dataset.groups["dc1"].children, vec!["web"]);
+        assert_eq!(dataset.groups["dc2"].children, vec!["web"]);
+        assert_eq!(dataset.groups["web"].hosts, vec!["web01.example.com"]);
+        assert_eq!(
+            dataset.groups["dc1"].vars.as_ref().unwrap()["site"],
+            "site-a"
+        );
+        assert_eq!(
+            dataset.groups["dc2"].vars.as_ref().unwrap()["region"],
+            "emea"
+        );
     }
 
     #[test]

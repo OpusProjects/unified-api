@@ -271,15 +271,25 @@ credentials and `SOURCE_CONFIG` don't apply to this connector.
 
 **What lands where:**
 
-- Hosts get their **effective variables flattened** into `hostvars`, merged in
-  this precedence (lowest first): `all` inline vars → `group_vars/all` →
-  each group containing the host (parents before children, alphabetical at
-  the same depth; inline vars then `group_vars/<group>` per group) → the
-  host's inline vars → `host_vars/<host>`. This is a simplified version of
-  Ansible's own ordering; exotic overlaps may differ.
-- Groups keep their structure: direct `hosts`, `children`, and the group's
-  own (unflattened) vars. The implicit `all`/`ungrouped` are not emitted as
-  groups — `all`'s vars reach every host through the flattening.
+- Variables are emitted **where they are declared**, not resolved onto every
+  host. A host's `hostvars` hold its own two sources only — its inline vars in
+  the inventory file, then `host_vars/<host>` — and a group's vars stay on the
+  group: its inline vars merged with `group_vars/<group>`.
+- Groups keep their structure: direct `hosts`, `children`, and their own vars.
+  `all` **is** emitted as a group, because that is where `group_vars/all`
+  lands; `ungrouped` is not, since Ansible synthesises it for hosts that are in
+  no group and emitting it would be inventing membership.
+- **Precedence is the consumer's.** Ansible applies its own ordering when it
+  reads the inventory, and it is the authority on its own rules, so this
+  connector no longer reimplements them. The resolved result on each host is
+  unchanged for the ordinary cases the old flattening covered.
+
+  It was resolved here once. The cost is why it is not any more: copying a
+  group's vars onto each member meant a 1097-host inventory whose
+  `group_vars/all` is 55 KB carried that 55 KB a thousand times over — a 53 MB
+  dataset, ~94% of it the same bytes repeated, which OOMKilled the server on
+  sync. Anything reading `hostvars` directly rather than through Ansible — a
+  declarative enricher, `output: json` — must resolve group vars itself.
 
 **Deliberately unsupported (loud, never silent):**
 

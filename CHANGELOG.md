@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A static inventory emits variables where they are declared, instead of
+  resolving them onto every host.** A group's vars stay on the group and a
+  host's on the host; Ansible applies its own precedence when it reads the
+  inventory, which it is the authority on. `all` is now emitted as a group,
+  because that is where `group_vars/all` lands. The resolved result on each
+  host is unchanged for an Ansible consumer.
+
+  It was resolved in the connector until now, and the cost is why it is not
+  any more: copying a group's vars onto each member meant a 1097-host
+  inventory whose `group_vars/all` is 55 KB carried that 55 KB a thousand
+  times over — a 53 MB dataset, ~94% of it the same bytes — and the server was
+  OOMKilled on every sync. Anything reading `hostvars` directly rather than
+  through Ansible (`output: json`, a declarative enricher) must now resolve
+  group vars itself.
+
+### Fixed
+
+- **`exclude_vars` drops the name from groups as well as hosts.** It stripped
+  `hostvars` only, so a variable declared on a group reached every member
+  through the group door — with group vars no longer flattened, that is the
+  usual place for one to live. An endpoint's exclusion list is how something
+  is kept out of it, and a filter with a way around it is not one.
+
 ## [0.24.1] - 2026-09-01
 
 ### Fixed

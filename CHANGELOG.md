@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **A declarative enricher resolves the source's group vars, not just its
+  hostvars.** For each host of the target it now looks the field up in the
+  source's groups — every group the *target* places the host in, ancestors
+  included — before falling back to, and being overridden by, the source's own
+  hostvars for that host. Membership comes from the target and values from the
+  source, which is what lets a source describe a group it holds no members of:
+  the usual shape for a variable that describes a whole tenancy rather than a
+  machine, and the only shape available once group vars are no longer flattened
+  onto every host. Where two of a host's groups declare the same field the more
+  deeply nested one wins, ties at one depth broken alphabetically. Only
+  variables cross — a shared group name cannot pull one source's hosts into
+  another.
+
 ### Changed
 
 - **A static inventory emits variables where they are declared, instead of

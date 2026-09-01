@@ -35,9 +35,9 @@ enrich-reachability:
   timeout_seconds: 300
 ```
 
-**Declarative merge** — no script at all: copy the named top-level hostvars
-`fields` from one cached source onto the hosts of another, for every host
-present in both. Use it for the common "join two sources by hostname" case:
+**Declarative merge** — no script at all: copy the named `fields` from one
+cached source onto the hosts of another. Use it for the common "join two
+sources by hostname" case:
 
 ```yaml
 enrich-storage:
@@ -52,6 +52,24 @@ A declarative enricher writes **only** the fields it names — never the rest of
 the host's map — so two of them on one target cannot erase each other's keys.
 Config validation requires one mode or the other, and refuses a view as a
 target: a view has no cache entry to write into; enrich the member instead.
+
+**Where a field is looked up.** For each host of the target, in order:
+
+1. the source's **group vars**, for every group the *target* puts the host in —
+   ancestors included, since a host in a child group inherits from each parent;
+2. the source's **hostvars** for that host, which win, being the more specific
+   statement about it.
+
+The membership is read from the target and the values from the source, which is
+what lets a source describe a group it holds no members of — the usual shape for
+a variable that describes a whole tenancy rather than a machine. Where two of a
+host's groups declare the same field, the more deeply nested one wins, and ties
+at one depth are broken alphabetically so the answer does not depend on map
+iteration order.
+
+Only **variables** cross. A source cannot pull its own hosts into the target
+through a shared group name, so an enricher stays safe where adding the source
+to the endpoint's `source_ids` would not be.
 
 ---
 

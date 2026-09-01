@@ -1,6 +1,6 @@
 [package]
 name = "unified-api"
-version = "0.24.1"
+version = "0.25.0"
 edition = "2024"
 # MSRV, kept in lockstep with docker/Dockerfile's pinned toolchain: a language
 # feature newer than the image's compiler must fail loudly at `cargo build`,

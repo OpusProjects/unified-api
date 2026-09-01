@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-01
+
 ### Added
 
 - **A declarative enricher resolves the source's group vars, not just its

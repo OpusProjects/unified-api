@@ -84,11 +84,29 @@ know, which is most of them.
 An endpoint renders a group that has vars even when it has no hosts, for the
 same reason.
 
-**`fields` narrows; it is not the default.** Given, only those names travel, on
-either path. Omitted, **every** var the source declares travels — which is what
-a group's vars mean in Ansible, where being in a group carries all of them and
-there is no per-name permission. An explicitly empty list is not the same as an
-omitted one: `fields: []` names nothing, so nothing travels.
+**Selectors narrow; they are not the default.** Four of them, two axes and two
+directions, under one rule: an absent list selects everything, a present one
+selects only what it names, and an **exclusion beats an inclusion**.
+
+| | by variable name | by group name |
+|---|---|---|
+| include | `fields` | `groups` |
+| exclude | `fields_excluded` | `groups_excluded` |
+
+Omitted, **every** var the source declares travels — which is what a group's
+vars mean in Ansible, where being in a group carries all of them and there is no
+per-name permission. An explicitly empty list is not the same as an omitted one:
+`fields: []` names nothing, so nothing travels.
+
+The group axis exists because that is often where the real boundary runs. A
+tenancy's local accounts sit on that tenancy's own group, beside the login name
+every play needs — same variable names on both, so no list of *names* can tell
+them apart. `groups_excluded: ["tenancy_theirs"]` can.
+
+`all` is exempt from needing a matching group in the target, not from being
+selected against: an explicit `groups` list is the whole list, `all` included,
+so what is written is what is taken. And excluding a group stops the source's
+vars reaching it — it does not remove a group the target owns.
 
 > Omitting it therefore hands the target everything the matching groups hold,
 > including anything sensitive declared beside the variable you wanted. An

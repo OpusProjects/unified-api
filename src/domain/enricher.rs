@@ -42,6 +42,25 @@ pub struct Enricher {
     #[serde(default)]
     pub fields: Option<Vec<String>>,
 
+    // The same narrowing on the other axis, and in the other direction. Two
+    // selectors, two directions, one rule: absent takes everything, and an
+    // exclusion beats an inclusion.
+    //
+    //   fields / fields_excluded   — by variable name
+    //   groups / groups_excluded   — by group name
+    //
+    // The group axis exists because that is where the estate's real boundary
+    // runs: a tenancy's local accounts sit on its own group, beside the login
+    // name every play needs. Only the group name tells them apart.
+    #[serde(default)]
+    pub fields_excluded: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub groups: Option<Vec<String>>,
+
+    #[serde(default)]
+    pub groups_excluded: Option<Vec<String>>,
+
     // Automatic execution interval (0 or None = manual only)
     #[serde(default)]
     pub sync_interval_seconds: Option<u64>,

@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`groups`, `groups_excluded` and `fields_excluded` on a declarative
+  enricher.** With the existing `fields` that is two axes and two directions,
+  under one rule: an absent list selects everything, a present one selects only
+  what it names, and an exclusion beats an inclusion.
+
+  The group axis is the one that was missing, and it is where the real boundary
+  usually runs. A tenancy's local accounts — password hashes, SSH keys — sit on
+  that tenancy's own group, beside the login name every play needs. Both are
+  called the same thing on every tenancy's group, so no list of variable *names*
+  separates them; the group name does.
+
+  `all` is exempt from needing a matching group in the target, not from being
+  selected against: an explicit `groups` list is the whole list, `all` included.
+  Excluding a group stops the source's vars reaching it and does not remove a
+  group the target owns.
+
 ### Changed
 
 - **A declarative enricher creates a group the target does not have, instead of

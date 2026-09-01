@@ -128,12 +128,25 @@ fn merge_and_filter(
         }
     }
 
-    // A group keeps only surviving hosts; one left with neither hosts nor
-    // children carries nothing and is dropped.
+    // A group keeps only surviving hosts. What happens to one left empty depends
+    // on whether it ever named any, and the two cases are opposites:
+    //
+    // - it listed members and a filter took them all: the filter's answer for
+    //   this group is "nothing", so it goes, along with the hosts it named.
+    // - it never listed any: it is a declaration of what the group MEANS, for
+    //   members settled somewhere else -- Ansible's `group_by` puts a host into
+    //   an existing group of the same name at play time and picks up the vars
+    //   it finds there. Dropping it would throw those away between the enricher
+    //   writing them and the endpoint answering, and say nothing.
     let survivors: HashSet<&String> = hostvars.keys().collect();
     groups.retain(|_, group| {
+        let named_hosts = !group.hosts.is_empty();
         group.hosts.retain(|host| survivors.contains(host));
-        !(group.hosts.is_empty() && group.children.is_empty())
+        if named_hosts {
+            !(group.hosts.is_empty() && group.children.is_empty())
+        } else {
+            !(group.children.is_empty() && group.vars.as_ref().is_none_or(HashMap::is_empty))
+        }
     });
 
     (hostvars, groups)
@@ -347,6 +360,40 @@ mod tests {
         // the windows group lost its only host and is dropped
         assert!(inv.get("windows").is_none());
         assert_eq!(inv["linux"]["hosts"], serde_json::json!(["linux1"]));
+    }
+
+    // Two empty groups, opposite answers. One named a host and a filter took it:
+    // the filter's answer for that group is "nothing", vars or no vars. The
+    // other never named one, so it is a declaration for members settled
+    // elsewhere and has to survive to be of any use.
+    #[test]
+    fn an_emptied_group_is_pruned_but_one_that_never_had_hosts_is_kept() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({
+                    "linux1": {"os": "linux"},
+                    "win1": {"os": "windows"}
+                }),
+                serde_json::json!({
+                    "windows": {"hosts": ["win1"], "vars": {"ntp": "ntp.win"}},
+                    "oraclelinux_9": {"vars": {"repositories_repos": ["ol9-baseos"]}}
+                }),
+            ),
+        );
+
+        let inv = render(&datasets, serde_json::json!({"filter_os": "linux"}));
+
+        assert!(
+            inv.get("windows").is_none(),
+            "it named a host, the filter removed it, so the group carries nothing here"
+        );
+        assert_eq!(
+            inv["oraclelinux_9"]["vars"]["repositories_repos"],
+            serde_json::json!(["ol9-baseos"]),
+            "it never named a host: a declaration for members decided elsewhere"
+        );
     }
 
     #[test]

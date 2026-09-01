@@ -2048,10 +2048,14 @@ fn app_for_group_var_enrichment() -> (axum::Router, std::sync::Arc<unified_api::
     )
     .expect("target fixture");
 
-    // The source: says what `all` means, and holds no hosts of its own.
+    // The source: says what `all` means, and what a group the target has never
+    // heard of means. It holds no hosts of its own for either.
     let vars: Dataset = serde_json::from_str(
         r#"{"hostvars": {},
-            "groups": {"all": {"vars": {"cmdb_role": "device42", "secret": "no"}}}}"#,
+            "groups": {
+              "all": {"vars": {"cmdb_role": "device42", "secret": "no"}},
+              "oraclelinux_9": {"vars": {"cmdb_role": "device42-ol9"}}
+            }}"#,
     )
     .expect("vars fixture");
 
@@ -2109,6 +2113,33 @@ async fn enriched_group_vars_reach_the_rendered_inventory() {
             .get("cmdb_role")
             .is_none(),
         "a group var must not be duplicated onto every member"
+    );
+}
+
+// A group can arrive with vars and no hosts of its own: an enricher publishing
+// what a group MEANS, for members a consumer works out later -- `group_by` puts
+// a host into an existing group of the same name at play time and picks up the
+// vars it finds there. The endpoint used to drop such a group for being empty,
+// between the enricher writing it and the render, with nothing said.
+#[tokio::test]
+async fn a_group_with_vars_and_no_hosts_still_reaches_the_rendered_inventory() {
+    let (app, _state) = app_for_group_var_enrichment();
+
+    let (status, _) = post(app.clone(), "/api/v1/enrichers/en-vars/run").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = get(app, "/api/v1/endpoints/ep-target").await;
+    assert_eq!(status, StatusCode::OK);
+    let inventory: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
+
+    assert_eq!(
+        inventory["oraclelinux_9"]["vars"]["cmdb_role"], "device42-ol9",
+        "a group the target never had must still be rendered; body was: {}",
+        body
+    );
+    assert!(
+        inventory["oraclelinux_9"].get("hosts").is_none(),
+        "it carries no hosts of its own -- membership is decided elsewhere"
     );
 }
 

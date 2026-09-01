@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **A declarative enricher creates a group the target does not have, instead of
+  skipping it — and an endpoint renders a group that has vars but no hosts.**
+  Two halves of one thing: publishing what a group *means* for members that are
+  settled somewhere else.
+
+  A source declares a group's variables; who is in it is often not its to know.
+  Device42 decides membership on its next sync, or Ansible's `group_by` does at
+  play time — it puts a host into an existing group of the same name and picks
+  up the vars it finds there. Skipping the group lost every variable declared
+  for one the target had not heard of yet, which for an inventory whose groups
+  come from a different system is most of them.
+
+  The render side matters as much: a group with vars and no hosts was dropped
+  as empty, so even a created group would have been thrown away between the
+  enricher writing it and the endpoint answering — silently, with the enricher
+  reporting success.
+
+  A group that *did* name hosts and lost them all to a filter is still pruned:
+  the filter's answer for it is nothing, vars or no vars. The two empty groups
+  are opposite cases and are treated as such.
+
+  No host is added by any of this. An enricher still moves variables only.
+
 ## [0.27.0] - 2026-09-01
 
 ### Changed

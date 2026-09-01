@@ -73,8 +73,16 @@ then more specific groups, then host vars, then `extra_vars`. Nothing is
 resolved here, which is also why a group's vars are not flattened onto its
 members — the same trade the static-inventory connector makes.
 
-A group the target does not have is skipped: it describes machines this target
-does not hold.
+A group the target does not have **is created**, carrying the vars and no hosts.
+The source declares what a group *means*; who is in it may be settled later and
+elsewhere — by the next sync of whichever source owns membership, or by
+Ansible's `group_by` at play time, which puts a host into an existing group of
+the same name and picks up the vars it finds there. Skipping such a group lost
+every variable declared for one whose members are not the declaring source's to
+know, which is most of them.
+
+An endpoint renders a group that has vars even when it has no hosts, for the
+same reason.
 
 **`fields` narrows; it is not the default.** Given, only those names travel, on
 either path. Omitted, **every** var the source declares travels — which is what

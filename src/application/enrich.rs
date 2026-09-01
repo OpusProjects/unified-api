@@ -280,10 +280,13 @@ fn group_vars_for_target(
         let Some(vars) = &group.vars else {
             continue;
         };
+        // A group the target does not have yet is CREATED, not skipped. The
+        // source declares what a group means; who is in it may be decided later
+        // and elsewhere -- by Device42 on the next sync, or by `group_by` at
+        // play time from a fact the machine reports. Skipping it lost every
+        // variable declared for a group whose membership is not the source's to
+        // know, which is most of them.
         let is_all = name == "all";
-        if !is_all && !target.groups.contains_key(name) {
-            continue;
-        }
 
         let wanted = selected(vars, fields);
         if wanted.is_empty() {
@@ -838,10 +841,13 @@ mod tests {
         );
     }
 
-    // A group the target does not have describes machines it does not hold, so
-    // there is nothing to carry it onto.
+    // A group the target does not have yet is created, carrying the vars and no
+    // hosts. Who is in it gets decided later and elsewhere -- by the next sync of
+    // the source that owns membership, or by `group_by` at play time. Skipping it
+    // lost every variable declared for a group whose members are not the
+    // declaring source's to know.
     #[tokio::test]
-    async fn a_group_the_target_does_not_have_is_skipped() {
+    async fn a_group_the_target_does_not_have_is_created_vars_only() {
         let cache = MemoryCache::new();
         cache.set("src-a", CacheEntry::new(dataset(), 3600));
         cache.set(
@@ -874,7 +880,18 @@ mod tests {
         .expect("target is cached");
 
         let entry = cache.get("src-a").expect("entry");
-        assert!(!entry.dataset.groups.contains_key("somewhere-else"));
+        let created = entry
+            .dataset
+            .groups
+            .get("somewhere-else")
+            .expect("the group is created rather than skipped");
+        assert_eq!(created.vars.as_ref().unwrap()["infinibox"], "nope");
+        assert!(
+            created.hosts.is_empty(),
+            "an enricher publishes what a group means, never who is in it"
+        );
+        // and still no host crossed over
+        assert_eq!(entry.dataset.hostvars.len(), 1);
     }
 
     // A host's own entry in the source is genuinely per host, so it is still

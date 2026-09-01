@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-09-01
+
 ### Fixed
 
 - **A static inventory reads `group_vars/<name>/` directories, not only

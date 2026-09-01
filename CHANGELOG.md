@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-01
+
 ### Changed
 
 - **A declarative enricher carries the source's group vars onto the target's

@@ -107,11 +107,23 @@ fn merge_and_filter(
         hostvars.retain(|host, _| allowed.contains(host));
     }
 
-    // Strip unwanted vars from the survivors.
+    // Strip unwanted vars from the survivors -- from groups as well as hosts.
+    //
+    // A var declared on a group reaches every member of it once the consumer
+    // resolves the inventory, so stripping only hostvars would let an excluded
+    // name through the group door. exclude_vars is how something is kept out of
+    // an endpoint, and a filter with a way around it is not one.
     if !exclude_vars.is_empty() {
         for vars in hostvars.values_mut() {
             for name in &exclude_vars {
                 vars.remove(name);
+            }
+        }
+        for group in groups.values_mut() {
+            if let Some(vars) = group.vars.as_mut() {
+                for name in &exclude_vars {
+                    vars.remove(name);
+                }
             }
         }
     }
@@ -357,6 +369,28 @@ mod tests {
         assert!(vars.get("secret").is_none());
         assert!(vars.get("serial").is_none());
         assert_eq!(vars["os"], "linux");
+    }
+
+    // A var on a group reaches every member once the consumer resolves the
+    // inventory, so sweeping only hostvars left a way round the exclusion —
+    // and the group is now the ordinary place for a group's vars to live.
+    #[test]
+    fn exclude_vars_strips_the_name_from_groups_too() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux"}}),
+                serde_json::json!({
+                    "web": {"hosts": ["h1"], "vars": {"secret": "x", "ntp": "pool"}}
+                }),
+            ),
+        );
+
+        let inv = render(&datasets, serde_json::json!({"exclude_vars": "secret"}));
+
+        assert!(inv["web"]["vars"].get("secret").is_none());
+        assert_eq!(inv["web"]["vars"]["ntp"], "pool");
     }
 
     #[test]

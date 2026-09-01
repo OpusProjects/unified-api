@@ -59,7 +59,7 @@ POST:
 | `filter_datacenter` | Keep hosts whose `datacenter` hostvar equals this |
 | `filter_os` | Keep hosts whose `os` hostvar equals this |
 | `filter_group` | Keep hosts in any of these groups (comma-separated) |
-| `exclude_vars` | Drop these hostvars (comma-separated) from every host |
+| `exclude_vars` | Drop these variables (comma-separated) from every host **and every group** — a name left on a group would otherwise reach its members when the consumer resolves the inventory |
 | `columns` (csv only) | Hostvar names (comma-separated) to emit as columns, in order, after the leading `host` column. Default: every hostvar name seen, sorted |
 
 A group that loses every host to a filter is dropped. A CSV cell renders a

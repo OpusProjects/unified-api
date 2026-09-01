@@ -66,18 +66,29 @@ async fn reads_a_full_inventory_layout_from_disk() {
     let dataset = result.expect("static inventory must parse").dataset;
 
     assert_eq!(dataset.hostvars.len(), 4);
-    // group_vars/all reaches every host
-    assert_eq!(dataset.hostvars["localhost"]["timezone"], "UTC");
-    // group_vars/<group> reaches its members only
-    assert_eq!(dataset.hostvars["zk01.example.com"]["zk_port"], 2181);
-    assert!(!dataset.hostvars["nas01.example.com"].contains_key("zk_port"));
-    // host_vars file
+    // group_vars/all lands on `all`, held once instead of per host
+    let all = dataset.groups["all"]
+        .vars
+        .as_ref()
+        .expect("all carries vars");
+    assert_eq!(all["timezone"], "UTC");
+    assert_eq!(all["useransible"], "laughingman_ansible");
+    assert!(!dataset.hostvars["localhost"].contains_key("timezone"));
+    // group_vars/<group> lands on that group
+    assert_eq!(
+        dataset.groups["zookeeper"].vars.as_ref().unwrap()["zk_port"],
+        2181
+    );
+    assert!(dataset.groups["nas"].vars.is_none());
+    // host_vars file is the host's own, so it stays on the host
     assert_eq!(
         dataset.hostvars["nas01.example.com"]["nas_cert_uuid"],
         "59343d18"
     );
-    // groups: all is implicit, the rest are real
-    assert_eq!(dataset.groups.len(), 2);
+    // groups: `all` is emitted too, so three rather than two
+    assert_eq!(dataset.groups.len(), 3);
+    assert_eq!(dataset.groups["all"].hosts, vec!["localhost"]);
+    assert_eq!(dataset.groups["all"].children, vec!["nas", "zookeeper"]);
     assert_eq!(
         dataset.groups["zookeeper"].hosts,
         vec!["zk01.example.com", "zk02.example.com"]
@@ -285,13 +296,22 @@ all:
         .expect("a directory layout must parse")
         .dataset;
 
-    let host = &dataset.hostvars["web01.example.com"];
-    // every file in group_vars/all/ merged, not just one of them
-    assert_eq!(host["ntp"], "pool.ntp");
-    assert_eq!(host["useransible"], "pq_ansible");
-    assert_eq!(host["http_port"], 8080);
-    assert_eq!(host["disk"], "ssd");
-    assert!(!host.contains_key("ignored"));
+    // every file in group_vars/all/ merged, not just one of them -- on the
+    // group, which is where a group's vars live
+    let all = dataset.groups["all"]
+        .vars
+        .as_ref()
+        .expect("all carries vars");
+    assert_eq!(all["ntp"], "pool.ntp");
+    assert_eq!(all["useransible"], "pq_ansible");
+    assert!(!all.contains_key("ignored"));
+    // and group_vars/web/ on web
+    assert_eq!(
+        dataset.groups["web"].vars.as_ref().unwrap()["http_port"],
+        8080
+    );
+    // host_vars/<host>/ is the host's own
+    assert_eq!(dataset.hostvars["web01.example.com"]["disk"], "ssd");
 }
 
 // A key set in two files of the same directory takes the later one, matching
@@ -320,7 +340,7 @@ async fn files_in_a_vars_directory_merge_alphabetically() {
         .expect("must parse")
         .dataset;
 
-    assert_eq!(dataset.hostvars["solo.example.com"]["who"], "z");
+    assert_eq!(dataset.groups["all"].vars.as_ref().unwrap()["who"], "z");
 }
 
 // Both layouts for one name is ambiguous. Picking one would give a variable a

@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-01
+
 ### Changed
 
 - **A declarative enricher with no `fields` now takes every var the source
@@ -1667,7 +1669,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/OpusProjects/unified-api/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/OpusProjects/unified-api/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/OpusProjects/unified-api/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/OpusProjects/unified-api/compare/v0.24.0...v0.24.1

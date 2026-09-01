@@ -222,3 +222,135 @@ async fn unparseable_group_vars_fail_rather_than_vanish() {
         .await;
     assert!(result.is_err(), "unparseable group_vars must not be silent");
 }
+
+// Ansible accepts group_vars/web.yaml or group_vars/web/ holding several
+// files. Only the flat form was read, so an inventory written the other way
+// came back with every host and no variables at all — which is how a real
+// estate of 119 group_vars directories produced 1097 hosts and zero vars.
+#[tokio::test]
+async fn group_vars_and_host_vars_may_be_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("inventory.yaml"),
+        r#"
+all:
+  hosts:
+    web01.example.com: {}
+  children:
+    web:
+      hosts:
+        web01.example.com: {}
+"#,
+    )
+    .await;
+    // one concern per file, the reason the directory form exists
+    write(
+        &dir.path().join("group_vars/all/ntp.yaml"),
+        "ntp: pool.ntp\n",
+    )
+    .await;
+    write(
+        &dir.path().join("group_vars/all/ssh.yaml"),
+        "useransible: pq_ansible\n",
+    )
+    .await;
+    write(
+        &dir.path().join("group_vars/web/http.yml"),
+        "http_port: 8080\n",
+    )
+    .await;
+    write(
+        &dir.path().join("host_vars/web01.example.com/disk.yaml"),
+        "disk: ssd\n",
+    )
+    .await;
+    // not YAML, and a nested directory: neither is read
+    write(&dir.path().join("group_vars/all/README.md"), "notes\n").await;
+    write(
+        &dir.path().join("group_vars/all/nested/deep.yaml"),
+        "ignored: true\n",
+    )
+    .await;
+
+    let connector = StaticInventoryConnector::new();
+    let dataset = connector
+        .execute(
+            dir.path().join("inventory.yaml").to_str().unwrap(),
+            &[],
+            OutputFormat::Native,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .expect("a directory layout must parse")
+        .dataset;
+
+    let host = &dataset.hostvars["web01.example.com"];
+    // every file in group_vars/all/ merged, not just one of them
+    assert_eq!(host["ntp"], "pool.ntp");
+    assert_eq!(host["useransible"], "pq_ansible");
+    assert_eq!(host["http_port"], 8080);
+    assert_eq!(host["disk"], "ssd");
+    assert!(!host.contains_key("ignored"));
+}
+
+// A key set in two files of the same directory takes the later one, matching
+// Ansible's alphabetical merge — and not whatever order the filesystem gave.
+#[tokio::test]
+async fn files_in_a_vars_directory_merge_alphabetically() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("inventory.yaml"),
+        "all:\n  hosts:\n    solo.example.com: {}\n",
+    )
+    .await;
+    write(&dir.path().join("group_vars/all/a_first.yaml"), "who: a\n").await;
+    write(&dir.path().join("group_vars/all/z_last.yaml"), "who: z\n").await;
+
+    let connector = StaticInventoryConnector::new();
+    let dataset = connector
+        .execute(
+            dir.path().join("inventory.yaml").to_str().unwrap(),
+            &[],
+            OutputFormat::Native,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .expect("must parse")
+        .dataset;
+
+    assert_eq!(dataset.hostvars["solo.example.com"]["who"], "z");
+}
+
+// Both layouts for one name is ambiguous. Picking one would give a variable a
+// value nobody can find by reading the tree, so it is refused instead.
+#[tokio::test]
+async fn a_name_defined_as_both_file_and_directory_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("inventory.yaml"),
+        "all:\n  hosts:\n    solo.example.com: {}\n",
+    )
+    .await;
+    write(&dir.path().join("group_vars/all.yaml"), "who: file\n").await;
+    write(&dir.path().join("group_vars/all/x.yaml"), "who: dir\n").await;
+
+    let connector = StaticInventoryConnector::new();
+    let err = connector
+        .execute(
+            dir.path().join("inventory.yaml").to_str().unwrap(),
+            &[],
+            OutputFormat::Native,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .expect_err("both layouts for one name must be refused");
+
+    assert!(
+        err.message.contains("both as a file and as a directory"),
+        "error was: {}",
+        err.message
+    );
+}

@@ -242,6 +242,12 @@ For classic Ansible **static YAML inventories** — an `inventory.yaml` with the
 directories next to it. No process is spawned and no `ansible-core` is
 needed: the files are parsed natively.
 
+Either Ansible layout works for those directories: `group_vars/web.yaml`, or
+`group_vars/web/` holding any number of `*.yaml`/`*.yml` files that are merged
+alphabetically — one file per concern is how a large inventory stays readable.
+Nested directories below that are not descended into. Defining the same name
+both ways fails the sync rather than picking one.
+
 A group may be declared more than once — under two parents, or twice under the
 same one. The declarations are **merged**: hosts, children and group vars all
 accumulate, and a host inherits the vars of every ancestry its group is declared

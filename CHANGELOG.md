@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-09-02
+
 ### Added
 
 - **`limit:` on an output endpoint — a constructed inventory.** An endpoint
@@ -1751,7 +1753,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/OpusProjects/unified-api/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/OpusProjects/unified-api/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/OpusProjects/unified-api/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/OpusProjects/unified-api/compare/v0.25.0...v0.26.0

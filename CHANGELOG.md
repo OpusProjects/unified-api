@@ -6,6 +6,43 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`limit:` on an output endpoint — a constructed inventory.** An endpoint
+  merges everything its sources carry and then returns only the hosts one of
+  them has:
+
+  ```yaml
+  ep-awx-managed:
+    source_ids: ["src-cmdb", "src-vmware", "src-facts"]
+    output: ansible
+    limit:
+      by_hosts_from_inventory: "src-cmdb"
+  ```
+
+  One source decides who is in, the others decide what is known. A host the
+  limit keeps arrives with every variable, group and membership the other
+  sources gave it; a VM that exists in vCenter and not in the CMDB does not
+  appear at all. Until now the only way to get that was a source list that
+  merged less, which also lost the enrichment.
+
+  The limit runs on the datasets before a transformer is chosen, so a script
+  gets the same inventory a builtin does — an endpoint's scope should not
+  depend on how it is rendered. It is deliberately not overridable per request:
+  the `config:` filters are transformer settings a caller may override, while a
+  limit is the endpoint's scope, and an endpoint is granted to keys that may
+  not read its sources raw.
+
+  A group the limit empties keeps its vars, unlike one a `filter_*` empties: a
+  limit says which hosts the inventory has, not which groups stopped meaning
+  anything. Rendering still never touches the cache — the trimming is
+  copy-on-write.
+
+  `limit:` holds one rule per field, so further kinds arrive under the same
+  key. Config validation refuses a limit naming a source outside the endpoint's
+  `source_ids`, a limit with no rule at all, and (as everywhere) a misspelled
+  key. See [docs/endpoints.md](docs/endpoints.md#limits-a-constructed-inventory).
+
 ## [0.28.0] - 2026-09-01
 
 ### Added

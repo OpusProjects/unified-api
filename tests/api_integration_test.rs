@@ -1491,6 +1491,7 @@ async fn endpoint_errors_carry_a_body_like_every_other_route() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(30),
         },
     )]);
@@ -2032,6 +2033,7 @@ fn app_for_group_var_enrichment() -> (axum::Router, std::sync::Arc<unified_api::
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(30),
         },
     )]);

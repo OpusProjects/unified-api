@@ -10,6 +10,69 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::domain::dataset::{Dataset, Group, HostVars};
+use crate::domain::endpoint::EndpointLimit;
+
+// Apply an endpoint's limit to the datasets it is about to render: a
+// constructed inventory. Everything the sources carry is still merged — the
+// limit only decides which HOSTS come out the other side, so a host kept by it
+// arrives with every variable, group and membership the other sources gave it.
+//
+// It runs here, on the datasets, rather than inside merge_and_filter, for one
+// reason: a script transformer is handed the datasets whole and does its own
+// merging, so a limit implemented in the builtin pipeline would silently not
+// apply to scripts. An endpoint's scope must not depend on which transformer
+// renders it.
+//
+// Note what a limited-but-emptied group does here: it keeps its vars. The
+// group is left in place with a trimmed host list, so by the time
+// merge_and_filter prunes, a group whose members were all outside the limit
+// looks exactly like a group that never named hosts — a declaration of what
+// the group MEANS, for members settled elsewhere (see the pruning comment
+// there). That is the right answer for a limit: it says which hosts the
+// inventory contains, not which groups stopped meaning anything.
+pub fn apply_limit(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    limit: &EndpointLimit,
+) -> HashMap<String, Arc<Dataset>> {
+    let Some(source_id) = limit.by_hosts_from_inventory.as_deref() else {
+        // No rule set: nothing to restrict. Cloning the map clones Arcs, not
+        // datasets. (Config validation refuses this case at load; handled
+        // rather than assumed.)
+        return datasets.clone();
+    };
+
+    // The hosts of a source are the ones its `hostvars` lists — the same set
+    // `GET /sources/{id}/hosts` returns, and the same one a view's ownership
+    // asks about.
+    //
+    // A source that is not here at all yields an EMPTY allowlist, so the
+    // render comes out empty rather than unlimited. Both are wrong, but only
+    // one is visible: an empty inventory is noticed immediately, while an
+    // inventory that quietly grew back to every host looks like a working
+    // endpoint. (The handler's 503 on a missing source means this should be
+    // unreachable.)
+    let allowed: HashSet<&String> = datasets
+        .get(source_id)
+        .map(|dataset| dataset.hostvars.keys().collect())
+        .unwrap_or_default();
+
+    datasets
+        .iter()
+        .map(|(id, dataset)| {
+            // Copy-on-write, the same trick the cache read path uses: the Arc
+            // is shared with the cache and every concurrent reader, so
+            // Arc::make_mut clones the Dataset behind it exactly once, here,
+            // and the cached one is never touched.
+            let mut limited = Arc::clone(dataset);
+            let owned = Arc::make_mut(&mut limited);
+            owned.hostvars.retain(|host, _| allowed.contains(host));
+            for group in owned.groups.values_mut() {
+                group.hosts.retain(|host| allowed.contains(host));
+            }
+            (id.clone(), limited)
+        })
+        .collect()
+}
 
 // One setting: a dynamic request parameter overrides the endpoint's static
 // config, and both are strings (a query string carries no types).
@@ -138,6 +201,12 @@ fn merge_and_filter(
     //   an existing group of the same name at play time and picks up the vars
     //   it finds there. Dropping it would throw those away between the enricher
     //   writing them and the endpoint answering, and say nothing.
+    //
+    // `children` lists are NOT rewritten here: a parent can be left naming a
+    // group this pass dropped. Ansible reads an undefined child as an empty
+    // group, and a dropped group had no vars and no children to lose, so the
+    // inventory is unchanged by it — documented in docs/endpoints.md for the
+    // consumers that walk the tree by name instead of by key.
     let survivors: HashSet<&String> = hostvars.keys().collect();
     groups.retain(|_, group| {
         let named_hosts = !group.hosts.is_empty();
@@ -625,5 +694,219 @@ mod tests {
         let first = render_ansible(&datasets, &cfg, &serde_json::json!({}));
         let second = render_ansible(&datasets, &cfg, &serde_json::json!({}));
         assert_eq!(first, second);
+    }
+
+    // =====================================================================
+    // Limits: the constructed-inventory half. Merge everything the sources
+    // carry, then hand back only the hosts one of them has.
+    // =====================================================================
+
+    fn limit_by(source_id: &str) -> EndpointLimit {
+        EndpointLimit {
+            by_hosts_from_inventory: Some(source_id.to_string()),
+        }
+    }
+
+    // The shape this exists for: a CMDB that decides which hosts are real, and
+    // a hypervisor that knows a great deal about hosts the CMDB never listed.
+    fn cmdb_and_vmware() -> HashMap<String, Arc<Dataset>> {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src-cmdb".to_string(),
+            dataset(
+                serde_json::json!({
+                    "motoko.section9.net": {"owner": "section9"},
+                    "batou.section9.net": {"owner": "section9"}
+                }),
+                serde_json::json!({
+                    "cmdb_managed": {"hosts": ["motoko.section9.net", "batou.section9.net"]}
+                }),
+            ),
+        );
+        datasets.insert(
+            "src-vmware".to_string(),
+            dataset(
+                serde_json::json!({
+                    "motoko.section9.net": {"vcpus": 8},
+                    "decoy.vmware.local": {"vcpus": 2}
+                }),
+                serde_json::json!({
+                    "cluster_a": {
+                        "hosts": ["motoko.section9.net", "decoy.vmware.local"],
+                        "vars": {"ntp": "ntp.section9.net"}
+                    },
+                    "cluster_b": {"hosts": ["decoy.vmware.local"], "vars": {"ntp": "ntp.dmz"}},
+                    "cluster_c": {"hosts": ["decoy.vmware.local"]}
+                }),
+            ),
+        );
+        datasets
+    }
+
+    fn limited_inventory(limit: &EndpointLimit) -> serde_json::Value {
+        let datasets = apply_limit(&cmdb_and_vmware(), limit);
+        render(&datasets, serde_json::json!({}))
+    }
+
+    #[test]
+    fn a_limit_keeps_only_the_hosts_the_named_inventory_has() {
+        let inv = limited_inventory(&limit_by("src-cmdb"));
+        let hostvars = &inv["_meta"]["hostvars"];
+
+        assert!(
+            hostvars.get("decoy.vmware.local").is_none(),
+            "a host only the other source has must not reach the output: {}",
+            inv
+        );
+        // Both of the limiting inventory's hosts survive -- including the one
+        // the other source knows nothing about.
+        assert!(hostvars.get("motoko.section9.net").is_some());
+        assert!(hostvars.get("batou.section9.net").is_some());
+    }
+
+    // The whole point of a limit rather than a source list: everything is still
+    // merged, so a surviving host arrives with every variable it collected.
+    #[test]
+    fn a_surviving_host_keeps_what_the_other_sources_said_about_it() {
+        let inv = limited_inventory(&limit_by("src-cmdb"));
+        let motoko = &inv["_meta"]["hostvars"]["motoko.section9.net"];
+
+        assert_eq!(motoko["owner"], "section9", "from the limiting source");
+        assert_eq!(motoko["vcpus"], 8, "from the source that did not limit");
+    }
+
+    #[test]
+    fn group_membership_survives_the_limit_minus_the_hosts_it_removed() {
+        let inv = limited_inventory(&limit_by("src-cmdb"));
+
+        // The group belongs to the source that was limited away, and it still
+        // reaches the output -- carrying its var and the member that survived.
+        assert_eq!(
+            inv["cluster_a"]["hosts"],
+            serde_json::json!(["motoko.section9.net"])
+        );
+        assert_eq!(inv["cluster_a"]["vars"]["ntp"], "ntp.section9.net");
+        assert_eq!(
+            inv["cmdb_managed"]["hosts"],
+            serde_json::json!(["batou.section9.net", "motoko.section9.net"])
+        );
+    }
+
+    // A group whose every member was outside the limit is not a group a filter
+    // emptied: the limit says which hosts the inventory has, not which groups
+    // stopped meaning anything. It keeps its vars, exactly like a group that
+    // arrived with vars and no hosts -- and goes only when it carries nothing.
+    #[test]
+    fn a_group_the_limit_emptied_keeps_its_vars_and_goes_only_when_it_has_none() {
+        let inv = limited_inventory(&limit_by("src-cmdb"));
+
+        assert_eq!(
+            inv["cluster_b"]["vars"]["ntp"], "ntp.dmz",
+            "an emptied group with vars still declares what it means: {}",
+            inv
+        );
+        assert!(
+            inv["cluster_b"].get("hosts").is_none(),
+            "but it names none of the hosts the limit removed"
+        );
+        assert!(
+            inv.get("cluster_c").is_none(),
+            "an emptied group with nothing else to say is dropped"
+        );
+    }
+
+    // apply_limit trims copies. The Arc it is handed is the cache's own entry,
+    // shared with every concurrent reader, and a render must never mutate it.
+    #[test]
+    fn the_cached_datasets_are_left_untouched() {
+        let datasets = cmdb_and_vmware();
+        let before = Arc::clone(&datasets["src-vmware"]);
+
+        let _limited = apply_limit(&datasets, &limit_by("src-cmdb"));
+
+        assert!(
+            before.hostvars.contains_key("decoy.vmware.local"),
+            "the cached dataset lost a host to a render"
+        );
+        assert_eq!(
+            before.groups["cluster_a"].hosts.len(),
+            2,
+            "the cached dataset lost group membership to a render"
+        );
+    }
+
+    #[test]
+    fn a_limit_that_names_no_rule_changes_nothing() {
+        let unlimited = render(&cmdb_and_vmware(), serde_json::json!({}));
+        let inv = limited_inventory(&EndpointLimit::default());
+        assert_eq!(inv, unlimited);
+    }
+
+    // Fail closed. Config validation makes this unreachable (the limit source
+    // must be one of the endpoint's sources, and the handler 503s on a source
+    // with no cache entry), but the choice matters: an empty inventory is seen,
+    // an inventory that quietly grew back to everything is not.
+    #[test]
+    fn a_limit_naming_a_source_that_is_not_here_renders_no_hosts() {
+        let inv = limited_inventory(&limit_by("src-ghost"));
+
+        assert_eq!(inv["_meta"]["hostvars"], serde_json::json!({}));
+        assert!(inv.get("cmdb_managed").is_none());
+    }
+
+    // The limit runs before the transformer, so it applies to every builtin --
+    // and composes with the filters rather than replacing them.
+    #[test]
+    fn the_limit_reaches_the_json_and_csv_builtins_and_composes_with_a_filter() {
+        let datasets = apply_limit(&cmdb_and_vmware(), &limit_by("src-cmdb"));
+        let config: HashMap<String, String> = HashMap::new();
+
+        let merged: serde_json::Value =
+            serde_json::from_str(&render_json(&datasets, &config, &serde_json::json!({}))).unwrap();
+        assert!(merged["hostvars"].get("decoy.vmware.local").is_none());
+        assert_eq!(merged["hostvars"]["motoko.section9.net"]["vcpus"], 8);
+
+        let csv = render_csv(&datasets, &config, &serde_json::json!({}));
+        assert_eq!(
+            csv,
+            "host,owner,vcpus\nbatou.section9.net,section9,\nmotoko.section9.net,section9,8\n"
+        );
+
+        // A filter still narrows what the limit left.
+        let filtered: HashMap<String, String> =
+            serde_json::from_value(serde_json::json!({"filter_group": "cluster_a"})).unwrap();
+        let inv: serde_json::Value = serde_json::from_str(&render_ansible(
+            &datasets,
+            &filtered,
+            &serde_json::json!({}),
+        ))
+        .unwrap();
+        assert!(inv["_meta"]["hostvars"].get("batou.section9.net").is_none());
+        assert!(
+            inv["_meta"]["hostvars"]
+                .get("motoko.section9.net")
+                .is_some()
+        );
+    }
+
+    // Limiting by a source against itself is the identity, whatever the other
+    // sources carry -- the case an operator hits first when trying one out.
+    #[test]
+    fn limiting_a_single_source_by_itself_changes_nothing() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src-only".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux"}}),
+                serde_json::json!({"web": {"hosts": ["h1"]}}),
+            ),
+        );
+
+        let limited = apply_limit(&datasets, &limit_by("src-only"));
+        let cfg = HashMap::new();
+        assert_eq!(
+            render_ansible(&limited, &cfg, &serde_json::json!({})),
+            render_ansible(&datasets, &cfg, &serde_json::json!({}))
+        );
     }
 }

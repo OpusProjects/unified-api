@@ -871,6 +871,7 @@ async fn endpoint_combines_sources() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -921,6 +922,7 @@ async fn endpoint_filters_by_datacenter() {
             script_args: vec![],
             project_id: None,
             config: ep_config,
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -962,6 +964,7 @@ async fn builtin_ansible_output_renders_inventory() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: None,
         },
     );
@@ -1003,6 +1006,7 @@ async fn builtin_json_output_filters_via_query_params() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: None,
         },
     );
@@ -1055,6 +1059,7 @@ async fn builtin_csv_output_renders_rows_with_csv_content_type() {
             script_args: vec![],
             project_id: None,
             config,
+            limit: None,
             timeout_seconds: None,
         },
     );
@@ -1115,6 +1120,7 @@ async fn a_timed_out_endpoint_answers_504_with_the_standard_error_shape() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(1),
         },
     );
@@ -1158,6 +1164,7 @@ async fn endpoint_without_synced_sources_returns_503() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -1202,6 +1209,7 @@ async fn list_endpoints_shows_readiness() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -1249,6 +1257,7 @@ async fn endpoint_with_dynamic_params() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -1305,6 +1314,7 @@ async fn endpoint_get_passes_query_params() {
             script_args: vec![],
             project_id: None,
             config: HashMap::new(),
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -1362,6 +1372,7 @@ async fn endpoint_params_override_config() {
             script_args: vec![],
             project_id: None,
             config: ep_config,
+            limit: None,
             timeout_seconds: Some(300),
         },
     );
@@ -1646,4 +1657,183 @@ async fn refresh_origin_with_no_hops_left_is_still_a_sync() {
     let result: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(result["success"], true);
     assert_eq!(result["total_hosts"], 6);
+}
+
+// =========================================================================
+// Constructed inventory: an endpoint that merges several sources and then
+// limits the result to the hosts one of them has. The unit tests cover the
+// merge; these cover the wiring -- that the limit reaches a builtin AND a
+// script transformer, that it never touches the cache, and that an endpoint
+// without one still returns everything.
+// =========================================================================
+
+fn app_with_limited_endpoints() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
+    use unified_api::domain::cache_entry::CacheEntry;
+    use unified_api::domain::dataset::Dataset;
+    use unified_api::domain::endpoint::{EndpointLimit, OutputFormat};
+
+    let sources = vec!["src-cmdb".to_string(), "src-vmware".to_string()];
+    let limit = Some(EndpointLimit {
+        by_hosts_from_inventory: Some("src-cmdb".to_string()),
+    });
+
+    let endpoint = |output, script: Option<&str>, limit: Option<EndpointLimit>| OutputEndpoint {
+        name: "Constructed".to_string(),
+        source_ids: sources.clone(),
+        output,
+        script_path: script.map(str::to_string),
+        script_args: vec![],
+        project_id: None,
+        config: HashMap::new(),
+        limit,
+        timeout_seconds: script.map(|_| 300),
+    };
+
+    let script = "tests/adapters/out/output/ansible_inventory.py";
+    let endpoints = HashMap::from([
+        (
+            "ep-built".to_string(),
+            endpoint(Some(OutputFormat::Ansible), None, limit.clone()),
+        ),
+        (
+            "ep-script".to_string(),
+            endpoint(None, Some(script), limit.clone()),
+        ),
+        (
+            "ep-unlimited".to_string(),
+            endpoint(Some(OutputFormat::Ansible), None, None),
+        ),
+    ]);
+
+    let (app, state) = unified_api::AppBuilder::new()
+        .endpoints(endpoints)
+        .build_with_state();
+
+    // The inventory of record: which hosts exist at all.
+    let cmdb: Dataset = serde_json::from_str(
+        r#"{"hostvars": {"motoko.section9.net": {"owner": "section9"},
+                         "batou.section9.net": {"owner": "section9"}},
+            "groups": {"cmdb_managed": {"hosts": ["motoko.section9.net", "batou.section9.net"]}}}"#,
+    )
+    .expect("cmdb fixture");
+
+    // The hypervisor: knows more about one of them, plus a VM the CMDB never
+    // listed -- and puts both in a group that carries a variable.
+    let vmware: Dataset = serde_json::from_str(
+        r#"{"hostvars": {"motoko.section9.net": {"vcpus": 8},
+                         "decoy.vmware.local": {"vcpus": 2}},
+            "groups": {"cluster_a": {"hosts": ["motoko.section9.net", "decoy.vmware.local"],
+                                     "vars": {"ntp": "ntp.section9.net"}},
+                       "cluster_solo": {"hosts": ["decoy.vmware.local"]}}}"#,
+    )
+    .expect("vmware fixture");
+
+    state.cache.set("src-cmdb", CacheEntry::new(cmdb, 3600));
+    state.cache.set("src-vmware", CacheEntry::new(vmware, 3600));
+
+    (app, state)
+}
+
+#[tokio::test]
+async fn a_limited_endpoint_merges_everything_and_returns_one_inventorys_hosts() {
+    let (app, _state) = app_with_limited_endpoints();
+
+    let (status, body) = request(app, "GET", "/api/v1/endpoints/ep-built").await;
+    assert_eq!(status, StatusCode::OK);
+    let inv: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
+
+    // Only the CMDB's hosts come out...
+    assert!(
+        inv["_meta"]["hostvars"].get("decoy.vmware.local").is_none(),
+        "a host outside the limiting inventory reached the output: {}",
+        body
+    );
+    assert!(inv["_meta"]["hostvars"].get("batou.section9.net").is_some());
+    // ...carrying what the other source knew about them.
+    assert_eq!(inv["_meta"]["hostvars"]["motoko.section9.net"]["vcpus"], 8);
+    assert_eq!(
+        inv["_meta"]["hostvars"]["motoko.section9.net"]["owner"],
+        "section9"
+    );
+    // Groups and membership survive, minus the hosts the limit removed.
+    assert_eq!(
+        inv["cluster_a"]["hosts"],
+        serde_json::json!(["motoko.section9.net"])
+    );
+    assert_eq!(inv["cluster_a"]["vars"]["ntp"], "ntp.section9.net");
+    assert_eq!(
+        inv["cmdb_managed"]["hosts"],
+        serde_json::json!(["batou.section9.net", "motoko.section9.net"])
+    );
+}
+
+// The limit is applied to the datasets, before a transformer is chosen, so a
+// script sees the same inventory a builtin does. An endpoint's scope must not
+// depend on how it happens to be rendered.
+#[tokio::test]
+async fn the_limit_reaches_a_script_transformer_too() {
+    let (app, _state) = app_with_limited_endpoints();
+
+    let (status, body) = request(app, "POST", "/api/v1/endpoints/ep-script").await;
+    assert_eq!(status, StatusCode::OK);
+    let inv: serde_json::Value = serde_json::from_str(&body).expect("script inventory json");
+
+    assert!(
+        inv["_meta"]["hostvars"].get("decoy.vmware.local").is_none(),
+        "the script was handed a host the limit should have removed: {}",
+        body
+    );
+    assert_eq!(inv["_meta"]["hostvars"]["motoko.section9.net"]["vcpus"], 8);
+    assert_eq!(
+        inv["cluster_a"]["hosts"],
+        serde_json::json!(["motoko.section9.net"])
+    );
+}
+
+#[tokio::test]
+async fn an_endpoint_without_a_limit_still_returns_everything() {
+    let (app, _state) = app_with_limited_endpoints();
+
+    let (status, body) = request(app, "GET", "/api/v1/endpoints/ep-unlimited").await;
+    assert_eq!(status, StatusCode::OK);
+    let inv: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
+
+    assert!(
+        inv["_meta"]["hostvars"].get("decoy.vmware.local").is_some(),
+        "an endpoint with no limit must be unchanged: {}",
+        body
+    );
+}
+
+// Rendering is a read. The limit trims copies, so the cached dataset -- shared
+// with every other consumer of that source -- keeps every host it gathered.
+#[tokio::test]
+async fn a_limited_render_does_not_shrink_the_cache() {
+    let (app, _state) = app_with_limited_endpoints();
+
+    let (status, _) = request(app.clone(), "GET", "/api/v1/endpoints/ep-built").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = request(app.clone(), "GET", "/api/v1/sources/src-vmware/dataset").await;
+    assert_eq!(status, StatusCode::OK);
+    let dataset: serde_json::Value = serde_json::from_str(&body).expect("dataset json");
+    assert!(
+        dataset["hostvars"].get("decoy.vmware.local").is_some(),
+        "the render took a host out of the cache: {}",
+        body
+    );
+    assert_eq!(
+        dataset["groups"]["cluster_a"]["hosts"]
+            .as_array()
+            .expect("hosts array")
+            .len(),
+        2,
+        "the render took group membership out of the cache: {}",
+        body
+    );
+
+    // And the unlimited endpoint, rendered after the limited one, is still whole.
+    let (_, body) = request(app, "GET", "/api/v1/endpoints/ep-unlimited").await;
+    let inv: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
+    assert!(inv["_meta"]["hostvars"].get("decoy.vmware.local").is_some());
 }

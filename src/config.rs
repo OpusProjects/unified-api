@@ -416,6 +416,29 @@ impl AppConfig {
                     ));
                 }
             }
+            // A limit restricts the endpoint to part of what it merges, so the
+            // source it names has to be part of what it merges. Naming one from
+            // outside would silently intersect against data the endpoint never
+            // reads (and never waits for), which renders as an empty inventory
+            // with nothing to explain it.
+            if let Some(limit) = &endpoint.limit {
+                if limit.is_empty() {
+                    errors.push(format!(
+                        "Endpoint '{}' sets limit but names no rule — remove it, or set \
+                         by_hosts_from_inventory",
+                        id
+                    ));
+                }
+                if let Some(from) = &limit.by_hosts_from_inventory
+                    && !endpoint.source_ids.contains(from)
+                {
+                    errors.push(format!(
+                        "Endpoint '{}' limits by hosts from '{}', which is not one of its \
+                         source_ids — add it to source_ids",
+                        id, from
+                    ));
+                }
+            }
         }
 
         // Views: a read-only composite over sources. The rules exist because
@@ -1060,6 +1083,93 @@ mod tests {
 
         load_config(dir.path().to_str().unwrap())
             .expect("a builtin-output endpoint with no sources must validate");
+    }
+
+    // A limit is what makes an endpoint a constructed inventory, and the three
+    // ways to get it wrong all fail at load rather than at render time -- a
+    // limit that quietly does nothing, or quietly matches nothing, looks like a
+    // working endpoint serving the wrong inventory.
+    fn config_dir_with_two_sources(endpoints_yaml: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "src-cmdb:\n  name: \"CMDB\"\n  project_id: \"prj-test\"\n  script_path: \"cmdb.py\"\n  ttl_seconds: 60\n\
+             src-vmware:\n  name: \"VMware\"\n  project_id: \"prj-test\"\n  script_path: \"vmware.py\"\n  ttl_seconds: 60\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("endpoints.yaml"), endpoints_yaml).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_endpoint_limited_by_one_of_its_own_sources_validates() {
+        let dir = config_dir_with_two_sources(
+            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\", \"src-vmware\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventory: \"src-cmdb\"\n",
+        );
+
+        let cfg = load_config(dir.path().to_str().unwrap())
+            .expect("a limit naming one of the endpoint's sources must validate");
+        assert_eq!(
+            cfg.endpoints["ep-built"]
+                .limit
+                .as_ref()
+                .and_then(|limit| limit.by_hosts_from_inventory.as_deref()),
+            Some("src-cmdb")
+        );
+    }
+
+    #[test]
+    fn validate_catches_a_limit_naming_a_source_the_endpoint_does_not_read() {
+        // src-vmware exists, but this endpoint never merges it -- so the
+        // intersection would be against data the endpoint never waits for.
+        let dir = config_dir_with_two_sources(
+            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventory: \"src-vmware\"\n",
+        );
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a limit naming a source outside source_ids must fail")
+            .to_string();
+        assert!(err.contains("src-vmware"), "{}", err);
+        assert!(err.contains("source_ids"), "{}", err);
+    }
+
+    #[test]
+    fn validate_catches_a_limit_that_names_no_rule() {
+        let dir = config_dir_with_two_sources(
+            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit: {}\n",
+        );
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a limit with no rule must fail")
+            .to_string();
+        assert!(err.contains("names no rule"), "{}", err);
+    }
+
+    // deny_unknown_fields reaches inside the limit too: a misspelled rule is
+    // named at load instead of silently limiting nothing.
+    #[test]
+    fn a_typo_inside_the_limit_is_named_at_load() {
+        let dir = config_dir_with_two_sources(
+            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventary: \"src-cmdb\"\n",
+        );
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("an unknown key inside limit must fail")
+            .to_string();
+        assert!(err.contains("by_hosts_from_inventary"), "{}", err);
     }
 
     #[test]

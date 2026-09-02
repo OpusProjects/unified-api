@@ -194,6 +194,14 @@ async fn execute_endpoint(
         return Ok((StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response());
     }
 
+    // A constructed inventory: merge everything, return only the part the
+    // limit describes. It happens here, before the transformer is chosen, so
+    // a builtin and a script see exactly the same scope.
+    let datasets = match &endpoint.limit {
+        Some(limit) => crate::application::output::apply_limit(&datasets, limit),
+        None => datasets,
+    };
+
     let start = Instant::now();
 
     // A builtin's format is known, so its content type is too; a script's

@@ -302,6 +302,16 @@ ep-ansible-full:
   config:
     filter_datacenter: "section9"   # filters and csv columns (see docs/endpoints.md)
 
+# A constructed inventory: merge everything, return only the hosts one source
+# has — the others still enrich them and still group them. Optional; a limit
+# must name one of the endpoint's own source_ids.
+ep-ansible-managed:
+  name: "Managed Hosts Only"
+  source_ids: ["src-section9", "src-infra"]
+  output: ansible
+  limit:
+    by_hosts_from_inventory: "src-section9"
+
 # Script transformer — for a bespoke format.
 ep-dns-zone:
   name: "DNS zone file"

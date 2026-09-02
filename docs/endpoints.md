@@ -9,6 +9,7 @@ in-process) or an external **script** (`script_path:`). Field reference lives in
 
 - [What an endpoint is](#what-an-endpoint-is)
 - [Builtin transformers](#builtin-transformers)
+- [Limits: a constructed inventory](#limits-a-constructed-inventory)
 - [The script contract](#the-script-contract)
 - [GET versus POST](#get-versus-post)
 - [Failure shapes](#failure-shapes)
@@ -62,15 +63,77 @@ POST:
 | `exclude_vars` | Drop these variables (comma-separated) from every host **and every group** — a name left on a group would otherwise reach its members when the consumer resolves the inventory |
 | `columns` (csv only) | Hostvar names (comma-separated) to emit as columns, in order, after the leading `host` column. Default: every hostvar name seen, sorted |
 
-A group that loses every host to a filter is dropped. A CSV cell renders a
-string verbatim, a missing or null var as an empty cell, and anything
-structured as compact JSON, quoted per RFC 4180. Renders are deterministic —
-identical inventory renders byte-for-byte identically, so responses diff
-cleanly across instances and across time.
+A group that loses every host to a filter is dropped. **A `children` list is
+not rewritten when that happens**, so a parent can name a child group that the
+render no longer defines. Ansible treats an undefined child as an empty group,
+which changes no host and no variable — and by the rule above a dropped group
+had neither vars nor children of its own, so nothing is lost. What it can
+break is a consumer that walks the tree and looks each child up directly: a
+missing key, or a phantom group in a group picker. Read the group keys, not
+the `children` names, when building a list to choose from.
+
+A CSV cell renders a string verbatim, a missing or null var as an empty cell,
+and anything structured as compact JSON, quoted per RFC 4180. Renders are
+deterministic — identical inventory renders byte-for-byte identically, so
+responses diff cleanly across instances and across time.
 
 The script-only knobs (`script_path`, `script_args`, `project_id`,
 `timeout_seconds`) are config errors on a builtin endpoint, named at load —
 a builtin runs in-process, so none of them can mean anything.
+
+---
+
+## Limits: a constructed inventory
+
+A `limit:` merges everything the endpoint's sources carry and then hands back
+only **part** of it. What it narrows is the host list, and nothing else: a host
+it keeps arrives with every variable, group and membership the other sources
+gave it.
+
+```yaml
+ep-awx-managed:
+  name: "Only what the CMDB manages"
+  source_ids: ["src-cmdb", "src-vmware", "src-facts"]
+  output: ansible
+  limit:
+    by_hosts_from_inventory: "src-cmdb"
+```
+
+That endpoint merges three sources and returns the hosts `src-cmdb` lists —
+enriched with everything vCenter and the facts gatherer know about them, in
+every group any of the three put them in. A VM that exists in vCenter and not
+in the CMDB does not appear. The result is what Ansible calls a constructed
+inventory: one source decides *who is in*, the others decide *what is known*.
+
+| Rule | Effect |
+|---|---|
+| `by_hosts_from_inventory` | Keep only the hosts this source has — the same hosts `GET /sources/{id}/hosts` returns for it. It must be one of the endpoint's `source_ids` |
+
+Three things worth knowing:
+
+- **It applies to every transformer**, builtins and scripts alike: the limit
+  runs on the datasets before one is chosen, so a script is handed an already
+  limited inventory on stdin. An endpoint's scope does not depend on how it is
+  rendered.
+- **It is not a request parameter.** The `config:` settings above are
+  transformer settings and a request may override any of them; a limit decides
+  the endpoint's scope, and an endpoint is granted to keys that may not read
+  its sources raw — so a caller must not be able to widen it with a query
+  string.
+- **A group the limit empties keeps its variables.** The limit says which hosts
+  the inventory contains, not which groups stopped meaning anything, so a group
+  whose every member was outside it survives as a declaration for members
+  settled elsewhere (`group_by` at play time picks up the vars it finds). It is
+  dropped only when it carries nothing else — no vars, no children. That is the
+  one place a limit and a `filter_*` differ: a filter's answer for a group it
+  emptied is "nothing", and the group goes — leaving, like any dropped group, a
+  `children` entry on its parent that no longer resolves (see above).
+
+Config errors, all named at load: a limit naming a source outside `source_ids`
+(the intersection would be against data the endpoint never reads and never
+waits for), a `limit:` with no rule in it, and a misspelled rule name.
+
+More kinds of limit will live under the same key, one field each.
 
 ---
 

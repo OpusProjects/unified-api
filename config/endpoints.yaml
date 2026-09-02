@@ -17,3 +17,13 @@ ep-ansible-oraclelinux:
   output: ansible
   config:
     filter_os: "OracleLinux"
+
+# A constructed inventory: merge both sources, but return only the hosts the
+# inventory of record has. src-infra still contributes its variables and its
+# groups for those hosts — it just cannot add hosts of its own.
+ep-ansible-managed:
+  name: "Managed Hosts Only"
+  source_ids: ["src-section9", "src-infra"]
+  output: ansible
+  limit:
+    by_hosts_from_inventory: "src-section9"

@@ -99,6 +99,110 @@ print(json.dumps({"hostvars": inventory.hosts, "groups": inventory.groups}))
 Supporting `scope`/`target` is optional but recommended: it lets consumers refresh a
 single host or group without paying for a full inventory pull.
 
+#### Asking for one host on the command line (`host_args`)
+
+`scope`/`target` reach the script inside `SOURCE_CONFIG`, which is a convention
+of ours. Inventory scripts have their own: Ansible defines `--list` and
+`--host <hostname>`. A source can name the arguments a **host-scoped** sync
+should use, and they replace `script_args` for that run:
+
+```yaml
+src-d42:
+  script_path: "connectors/d42_inventory.py"
+  script_args: ["--list"]
+  host_args: ["--host-with-groups", "{target}"]
+```
+
+`{target}` is substituted with the requested hostnames, comma-joined — the same
+value `config.target` carries, since `?host=` accepts a list. The substitution
+happens inside each argument, so `["--host={target}"]` works too.
+
+**No CLI convention is imposed.** `host_args: ["--host", "{target}"]` reproduces
+Ansible's contract exactly; a script that can do more states its own flag, as
+above. What the script must always return is the normal Dataset (or Ansible)
+shape with the requested hosts in it — not Ansible's bare `--host` dictionary,
+which carries no groups and is not a shape this service reads.
+
+Omitting `host_args` keeps the old behaviour: the script is called exactly as a
+full sync would call it and the requested hosts are picked out of whatever comes
+back. That is less wasteful than it sounds — since `_meta.hostvars` made
+per-host calls vestigial, Ansible's own `--host` was usually implemented as
+"fetch everything, then filter" — but a script that CAN fetch one host should be
+asked for one host.
+
+`host_args` is refused at startup on any source that is not a script source: the
+other connectors are not spawned with CLI arguments at all.
+
+#### What a host-scoped sync writes
+
+The requested hosts' variables, and **where those hosts belong**:
+
+- a group the connector places the host in is joined, and created if the target
+  does not have it yet;
+- a group it does **not** name is left — otherwise a machine moved in the source
+  of truth stays in its old group until the next full sync, which is exactly the
+  staleness a granular sync exists to avoid;
+- every other host's membership is untouched, and so are `all` and `ungrouped`
+  (meta-groups: membership in them is not a connector's to state);
+- returning **no** groups at all says nothing about groups rather than "this
+  host belongs to none" — a script following Ansible's `--host` contract returns
+  hostvars alone, and reading that as a departure from everything would empty
+  the inventory one scoped sync at a time.
+
+Group **vars** stay out of it unless the source opts in with
+`host_sync_updates_group_vars: true`, and even then only for the groups those
+hosts landed in. A granular call answers about a host; letting it redefine what
+a group means for every other member is a bigger statement than the sync was
+asked to make.
+
+Worked example — one script, two modes:
+
+```python
+#!/usr/bin/env python3
+"""d42_inventory.py — --list for everything, --host-with-groups for one host."""
+import argparse, json, sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--list", action="store_true")
+parser.add_argument("--host-with-groups")          # named in host_args
+args = parser.parse_args()
+
+if args.host_with_groups:
+    # `?host=a,b` arrives as one comma-separated argument
+    wanted = args.host_with_groups.split(",")
+    hosts = d42.hosts(names=wanted)                # one API call, not the fleet
+    print(json.dumps({
+        "hostvars": {h.name: h.vars for h in hosts},
+        # Where these hosts belong. Naming a group joins it; a group NOT named
+        # is one the host has left. Returning {} says nothing about groups.
+        "groups": {
+            g.name: {"hosts": [h.name for h in hosts if g in h.groups],
+                     "vars": g.vars}
+            for g in {g for h in hosts for g in h.groups}
+        },
+    }))
+    sys.exit(0)
+
+inventory = d42.everything()
+print(json.dumps({"hostvars": inventory.hostvars, "groups": inventory.groups}))
+```
+
+```yaml
+src-d42:
+  script_path: "connectors/d42_inventory.py"
+  script_args: ["--list"]
+  host_args: ["--host-with-groups", "{target}"]
+  host_sync_updates_group_vars: true
+```
+
+The pay-off is in what the granular call does NOT do. Registering a new machine
+and calling `POST /sources/src-d42/sync?host=new.example.net` costs one API
+lookup instead of the whole inventory, so a provisioning job stops waiting on a
+full pull — and if the slow part of the full pull is enrichment (resolving which
+of a host's many addresses actually answers), that work belongs in an
+[enricher](enrichers.md) on its own schedule rather than in either mode of this
+script.
+
 ### Ansible inventory scripts (`output_format: ansible`)
 
 Scripts written for Ansible print a different JSON shape than the Dataset:

@@ -52,3 +52,24 @@ src-ssh-example:
     # commented because startup validation requires the file to exist;
     # without it any key is accepted and every sync logs a warning.
     # ssh_known_hosts: "/etc/unified-api/known_hosts"
+
+# A script that can gather ONE host without gathering the inventory. The full
+# sync calls it with script_args, a `?host=` sync with host_args instead:
+#
+#   POST /api/v1/sources/src-granular/sync                      -> --list
+#   POST /api/v1/sources/src-granular/sync?host=motoko.section9.net
+#                                        -> --only-host motoko.section9.net
+#
+# Try it and read `called_with` on the host to see which mode ran.
+src-granular:
+  name: "Granular Inventory"
+  project_id: "prj-connectors-infra"
+  script_path: "tests/adapters/out/connectors/granular.py"
+  script_args: ["--list"]
+  host_args: ["--only-host", "{target}"]
+  # The granular mode describes the groups it puts the host in, so take their
+  # vars as well (off by default)
+  host_sync_updates_group_vars: true
+  credential_ids: []
+  sync_interval_seconds: 300
+  ttl_seconds: 3600

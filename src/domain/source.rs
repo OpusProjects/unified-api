@@ -48,6 +48,31 @@ pub struct Source {
     #[serde(default)]
     pub script_args: Vec<String>,
 
+    // CLI arguments for a sync that names hosts, REPLACING script_args for
+    // that run. `{target}` is substituted with the requested hostnames,
+    // comma-joined -- the same value the reserved `target` config key carries.
+    //
+    // Empty (the default) keeps the old behaviour: a host-scoped sync calls the
+    // script exactly like a full one and the requested hosts are picked out of
+    // whatever comes back. That is not as wasteful as it sounds -- Ansible's
+    // own `--host` was usually implemented as "fetch everything, then filter",
+    // since `_meta.hostvars` made per-host calls vestigial -- but a script that
+    // CAN fetch one host should be asked for one host.
+    //
+    // No CLI convention is imposed here: `["--host", "{target}"]` reproduces
+    // Ansible's contract exactly, and a script that can do better (a host with
+    // its groups, which `--host` has no room for) states its own flag.
+    #[serde(default)]
+    pub host_args: Vec<String>,
+
+    // Whether a host-scoped sync also takes the vars of the groups it places
+    // its hosts in. Off by default: a granular call answers about a HOST, and
+    // letting it redefine what a group means for every other member is a bigger
+    // statement than the sync was asked to make. Worth turning on for a script
+    // whose granular mode deliberately describes those groups in full.
+    #[serde(default)]
+    pub host_sync_updates_group_vars: bool,
+
     #[serde(default)]
     pub connector_type: ConnectorType,
 

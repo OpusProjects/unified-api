@@ -6,6 +6,60 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`host_args` on a source — ask the script for one host, instead of asking for
+  everything and filtering.** A host-scoped sync (`?host=`) already told the
+  script what it wanted, but only inside `SOURCE_CONFIG`, which is a convention
+  of ours. Inventory scripts have their own, and a script that can already
+  gather one host had no way to be called that way:
+
+  ```yaml
+  src-d42:
+    script_args: ["--list"]
+    host_args: ["--host-with-groups", "{target}"]
+  ```
+
+  These replace `script_args` for that run, with `{target}` substituted by the
+  requested hostnames, comma-joined (`?host=` accepts a list). Omitting them
+  keeps the old behaviour exactly.
+
+  **No CLI convention is imposed.** `["--host", "{target}"]` reproduces
+  Ansible's contract; a script that can return a host *with its groups* — which
+  `--host` has no room for, since membership only exists in `--list` — states
+  its own flag. The debate over whether to honour Ansible's interface is settled
+  in the YAML of whoever owns the script, not here.
+
+  Refused at startup on a source that is not a script source: the other
+  connectors are not spawned with CLI arguments at all.
+
+- **`host_sync_updates_group_vars` on a source** (default `false`): whether a
+  host-scoped sync also takes the vars of the groups it places those hosts in,
+  and only those groups. Off by default because a granular call answers about a
+  HOST, and letting it redefine what a group means for every other member is a
+  bigger statement than the sync was asked to make.
+
+### Changed
+
+- **A host-scoped sync now updates the host's group membership.** It wrote the
+  host's variables and dropped everything the connector said about where that
+  host belongs, so a machine moved to another group in the source of truth
+  stayed in its old one until the next FULL sync — the staleness a granular sync
+  exists to avoid.
+
+  The membership the connector returns is now the membership the host has: it
+  joins the groups named (creating one the target does not have), and leaves the
+  ones not named. Every other host's membership is untouched, and so are `all`
+  and `ungrouped` — meta-groups meaning "every host" and "no group", which are
+  not a connector's to state or revoke, and `all` is where an enricher parks the
+  vars describing the whole target.
+
+  Returning **no** groups at all still says nothing about groups rather than
+  "this host belongs to none". A script following Ansible's `--host` contract
+  returns hostvars and nothing else, and reading that as a departure from every
+  group would empty the inventory one scoped sync at a time.
+
+
 ## [0.29.0] - 2026-09-02
 
 ### Added

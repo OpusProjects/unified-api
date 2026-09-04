@@ -106,6 +106,11 @@ src-section9:
   project_id: "prj-connectors-infra"   # must exist in projects.yaml
   script_path: "tests/adapters/out/connectors/inventory.py"
   script_args: []                      # CLI args for the script, e.g. ["--list"]
+  host_args: []                        # CLI args for a HOST-scoped sync, e.g.
+                                       #   ["--host", "{target}"] — replaces
+                                       #   script_args for that run
+  host_sync_updates_group_vars: false  # may a host-scoped sync take the vars of
+                                       #   the groups it joins? (default false)
   output_format: "native"              # "native" (default) or "ansible"
   connector_type: "script"             # "script" (default) or "ssh"
   sync_mode: "replace"                 # "replace" (default) or "merge"
@@ -128,6 +133,8 @@ src-section9:
 |---|---|
 | `script_path` | Executable run by the script connector, or remote command/facts selector for SSH |
 | `script_args` | CLI arguments passed verbatim (no shell). `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. For SSH sources they are appended to the remote command in `script` gather mode |
+| `host_args` | CLI arguments for a sync that names hosts, replacing `script_args` for that run, with `{target}` substituted by the requested hostnames (comma-joined). Empty = call the script exactly as a full sync would and filter the answer, which is what Ansible's own `--host` usually did anyway. No convention is imposed: `["--host", "{target}"]` is Ansible's contract, and a script that can return a host *with its groups* names its own flag. Script sources only — refused at startup elsewhere. See [connectors](connectors.md#asking-for-one-host-on-the-command-line-host_args) |
+| `host_sync_updates_group_vars` | Whether a host-scoped sync also takes the vars of the groups it places those hosts in, and only those groups. Off by default: a granular call answers about a host, not about what a group means for its other members |
 | `output_format` | What the script prints: `native` (the Dataset shape) or `ansible` (standard dynamic inventory JSON with `_meta` — converted on the fly, see [connectors](connectors.md)) |
 | `connector_type` | `script` runs a local process; `ssh` fans out over hosts; `static_inventory` parses an Ansible YAML inventory (+ `group_vars/`/`host_vars/`) from disk natively; `remote` federates another unified-api instance (see [connectors](connectors.md)) |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |

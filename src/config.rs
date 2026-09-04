@@ -643,6 +643,22 @@ impl AppConfig {
             }
         }
 
+        // host_args are CLI arguments for a spawned script. The other
+        // connectors are not spawned with any (ssh builds its own remote
+        // command per host, static_inventory reads a file, remote speaks
+        // HTTP), so declaring them there is a config that looks active and
+        // is not.
+        for (id, source) in &self.sources {
+            if !source.host_args.is_empty()
+                && source.connector_type != crate::domain::source::ConnectorType::Script
+            {
+                errors.push(format!(
+                    "Source '{}' sets host_args but is not a script source",
+                    id
+                ));
+            }
+        }
+
         // Remote (federation) sources need the remote base URL
         for (id, source) in &self.sources {
             if source.connector_type == crate::domain::source::ConnectorType::Remote
@@ -1376,6 +1392,37 @@ mod tests {
         assert!(err.contains("not an ssh source"), "missing rule: {}", err);
         assert!(err.contains("cannot use itself"), "missing rule: {}", err);
         assert!(err.contains("pick one"), "missing rule: {}", err);
+    }
+
+    #[test]
+    fn validate_host_args_only_on_script_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("projects.yaml"),
+            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            concat!(
+                "src-ssh:\n  name: \"S\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
+                "  connector_type: \"ssh\"\n",
+                "  host_args: [\"--host\", \"{target}\"]\n",
+                "  config:\n    hosts: \"a.example.com\"\n",
+            ),
+        )
+        .unwrap();
+
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("expected a validation error")
+            .to_string();
+        assert!(err.contains("not a script source"), "missing rule: {}", err);
     }
 
     #[test]

@@ -25,6 +25,14 @@ pub struct Dataset {
 // serde_json::Value is like "any" — can be string, number, bool, list, etc.
 pub type HostVars = HashMap<String, serde_json::Value>;
 
+// `all` and `ungrouped` are Ansible's implicit meta-groups: "every host" and
+// "no group at all". They describe the inventory rather than recording a
+// membership anyone stated, so they are skipped wherever membership is read
+// or written.
+pub fn is_meta_group(name: &str) -> bool {
+    name == "all" || name == "ungrouped"
+}
+
 // An Ansible inventory group
 // Default: an empty group (no hosts, no children, no vars) — what a group
 // recreated for a retained host starts from.
@@ -92,7 +100,7 @@ impl Dataset {
             if name == "_meta" {
                 continue;
             }
-            if name == "all" || name == "ungrouped" {
+            if is_meta_group(name) {
                 // These exist implicitly in every Ansible inventory; keeping
                 // them would duplicate membership. Warn if dropping them
                 // loses actual information (vars or children).

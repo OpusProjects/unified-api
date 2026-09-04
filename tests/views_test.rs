@@ -92,6 +92,8 @@ fn member_source(counter_file: &str, ttl_seconds: u64, allow: bool) -> Source {
         project_id: "test".to_string(),
         script_path: "tests/adapters/out/connectors/counting.py".to_string(),
         script_args: vec![],
+        host_args: vec![],
+        host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
         connector_type: ConnectorType::Script,

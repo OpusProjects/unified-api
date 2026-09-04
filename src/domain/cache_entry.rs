@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
-use super::dataset::{Dataset, Group, HostVars};
+use super::dataset::{Dataset, Group, HostVars, is_meta_group};
 
 // The dataset serialized to JSON once, shared by every response that serves
 // it. `Bytes` is a reference-counted byte buffer: cloning it (which every
@@ -325,6 +325,51 @@ impl CacheEntry {
         }
     }
 
+    // Replace ONE host's group membership with what a host-scoped sync
+    // returned, leaving every other host's membership alone.
+    //
+    // Replaced and not added to: the connector was asked about this host and
+    // answered with the groups it is in, so a group it does not name is one the
+    // host has left. Anything else and a granular sync keeps a machine in the
+    // group it was moved out of until the next full one — which is precisely
+    // the staleness a granular sync exists to avoid.
+    //
+    // The caller must never pass an EMPTY list as "in no group": a script
+    // following Ansible's `--host` contract returns hostvars and no groups at
+    // all, and reading that as a departure from everything would empty the
+    // inventory one scoped sync at a time. Silence about groups is not a
+    // statement about them.
+    //
+    // A group that does not exist yet is created carrying this host, for the
+    // same reason a declarative enricher creates one: the alternative is
+    // dropping a membership the connector just stated.
+    //
+    // `all` and `ungrouped` are never touched. In Ansible they are meta-groups
+    // that mean "every host" and "no group", membership in them is not a
+    // connector's to state or revoke, and `all` is where an enricher parks the
+    // vars that describe the whole target.
+    pub fn set_host_groups(&mut self, hostname: &str, groups: &[String]) {
+        self.invalidate_serialized();
+        let dataset = Arc::make_mut(&mut self.dataset);
+
+        for (name, group) in dataset.groups.iter_mut() {
+            if is_meta_group(name) || groups.iter().any(|g| g == name) {
+                continue;
+            }
+            group.hosts.retain(|host| host != hostname);
+        }
+
+        for name in groups {
+            if is_meta_group(name) {
+                continue;
+            }
+            let group = dataset.groups.entry(name.clone()).or_default();
+            if !group.hosts.iter().any(|host| host == hostname) {
+                group.hosts.push(hostname.to_string());
+            }
+        }
+    }
+
     // Additive merge for derived data: adds or replaces only the keys that
     // come, leaving every other key on that host untouched.
     //
@@ -528,6 +573,84 @@ mod tests {
             groups: HashMap::new(),
             remove_hosts: vec![],
         }
+    }
+
+    // Builds an entry whose two hosts share the "legacy" group, the shape a
+    // full sync leaves behind before a granular one moves one of them.
+    fn entry_with_groups() -> CacheEntry {
+        let mut dataset = dataset_with_hosts();
+        dataset.groups.insert(
+            "legacy".to_string(),
+            Group {
+                hosts: vec![
+                    "motoko.section9.net".to_string(),
+                    "batou.section9.net".to_string(),
+                ],
+                children: vec![],
+                vars: None,
+            },
+        );
+        CacheEntry::new(dataset, 600)
+    }
+
+    #[test]
+    fn set_host_groups_joins_the_named_groups_and_leaves_the_rest() {
+        let mut entry = entry_with_groups();
+
+        entry.set_host_groups("motoko.section9.net", &["modern".to_string()]);
+
+        assert_eq!(
+            entry.dataset.groups["modern"].hosts,
+            vec!["motoko.section9.net".to_string()],
+            "the group named should have been created around the host"
+        );
+        assert_eq!(
+            entry.dataset.groups["legacy"].hosts,
+            vec!["batou.section9.net".to_string()],
+            "the host should have left the group the sync did not name, \
+             and the other host should not have moved"
+        );
+    }
+
+    #[test]
+    fn set_host_groups_is_idempotent() {
+        let mut entry = entry_with_groups();
+
+        entry.set_host_groups("motoko.section9.net", &["legacy".to_string()]);
+        entry.set_host_groups("motoko.section9.net", &["legacy".to_string()]);
+
+        assert_eq!(
+            entry.dataset.groups["legacy"].hosts.len(),
+            2,
+            "a host already in the group must not be added twice"
+        );
+    }
+
+    #[test]
+    fn set_host_groups_never_touches_the_meta_groups() {
+        let mut entry = entry_with_groups();
+        Arc::make_mut(&mut entry.dataset).groups.insert(
+            "all".to_string(),
+            Group {
+                hosts: vec![
+                    "motoko.section9.net".to_string(),
+                    "batou.section9.net".to_string(),
+                ],
+                children: vec![],
+                vars: Some([("dns".to_string(), serde_json::json!("10.0.0.1"))].into()),
+            },
+        );
+
+        entry.set_host_groups(
+            "motoko.section9.net",
+            &["modern".to_string(), "all".to_string()],
+        );
+
+        assert_eq!(
+            entry.dataset.groups["all"].hosts.len(),
+            2,
+            "`all` means every host: a scoped sync cannot evict one from it"
+        );
     }
 
     #[test]

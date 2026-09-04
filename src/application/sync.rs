@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
@@ -6,7 +6,7 @@ use tokio::time::timeout;
 use crate::application::credentials::resolve_credentials;
 use crate::application::enrich::run_enrichers_for_target;
 use crate::domain::cache_entry::{CacheEntry, RetainedHost};
-use crate::domain::dataset::HostVars;
+use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::enricher::Enricher;
 use crate::domain::source::{AdvertisedScopeRegistry, Source};
 use crate::domain::sync_health::SyncHealthRegistry;
@@ -458,6 +458,8 @@ async fn run_sync(
         config.insert("refresh_depth".to_string(), refresh_depth.to_string());
     }
 
+    let args = args_for_scope(source, &scope);
+
     let start = Instant::now();
 
     let credentials = match resolve_credentials(secrets, &source.credential_ids).await {
@@ -471,7 +473,7 @@ async fn run_sync(
         Duration::from_secs(source.timeout_seconds),
         connector.execute(
             &source.script_path,
-            &source.script_args,
+            &args,
             source.output_format,
             &config,
             &credentials,
@@ -518,6 +520,32 @@ async fn run_sync(
     }
 }
 
+// What `{target}` in a source's `host_args` is replaced with.
+const TARGET_PLACEHOLDER: &str = "{target}";
+
+// The CLI arguments this run calls the script with.
+//
+// A host-scoped sync uses `host_args` when the source declares them, so a
+// script that can gather one host is asked for one host instead of being asked
+// for everything and filtered afterwards. Every other sync — and every source
+// that declares nothing — is called exactly as before.
+//
+// The substitution is done inside each argument rather than on whole ones, so
+// both `["--host", "{target}"]` and `["--host={target}"]` work.
+fn args_for_scope(source: &Source, scope: &SyncScope) -> Vec<String> {
+    match scope {
+        SyncScope::Hosts(hosts) if !source.host_args.is_empty() => {
+            let target = hosts.join(",");
+            source
+                .host_args
+                .iter()
+                .map(|arg| arg.replace(TARGET_PLACEHOLDER, &target))
+                .collect()
+        }
+        _ => source.script_args.clone(),
+    }
+}
+
 // Applies the dataset returned by the connector to the cache. All merges
 // go through merge_or_insert / update: the decision "does the entry exist?" and the
 // modification occur under the same lock (see CachePort).
@@ -556,6 +584,53 @@ fn apply_to_cache(
                 })
                 .collect();
 
+            // Where the connector places each requested host. A host it says
+            // nothing about is left out entirely: an empty list is silence
+            // about groups (Ansible's `--host` returns hostvars and nothing
+            // else), never a claim that the host belongs to none.
+            let memberships: Vec<(String, Vec<String>)> = updates
+                .iter()
+                .filter_map(|(hostname, _, _)| {
+                    let groups: Vec<String> = dataset
+                        .groups
+                        .iter()
+                        .filter(|(_, group)| group.hosts.iter().any(|host| host == hostname))
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    (!groups.is_empty()).then_some((hostname.clone(), groups))
+                })
+                .collect();
+
+            // Opt-in: the vars of the groups those hosts landed in, and only
+            // those groups. A granular call that describes them in full is
+            // worth taking; one that happens to return the whole inventory
+            // should not redefine every group through the back door.
+            let group_vars = source.host_sync_updates_group_vars.then(|| {
+                let claimed: HashSet<&String> =
+                    memberships.iter().flat_map(|(_, groups)| groups).collect();
+                let groups = dataset
+                    .groups
+                    .iter()
+                    .filter(|(name, group)| claimed.contains(name) && group.vars.is_some())
+                    .map(|(name, group)| {
+                        // Vars only. The hosts of a group the connector
+                        // returned are the ones IT gathered, and this sync has
+                        // no mandate over anybody else's membership.
+                        let vars = Group {
+                            hosts: Vec::new(),
+                            children: group.children.clone(),
+                            vars: group.vars.clone(),
+                        };
+                        (name.clone(), vars)
+                    })
+                    .collect();
+                Dataset {
+                    hostvars: HashMap::new(),
+                    groups,
+                    remove_hosts: Vec::new(),
+                }
+            });
+
             if !updates.is_empty() {
                 // The closure runs only when the entry already existed, so it
                 // doubles as "was there anything here before?"
@@ -568,6 +643,15 @@ fn apply_to_cache(
                         occupied = true;
                         for (hostname, vars, age) in &updates {
                             entry.update_host_aged(hostname.clone(), vars.clone(), *age);
+                        }
+                        // After the hostvars, so a group created here for a
+                        // host the entry did not have is created around a host
+                        // that already exists.
+                        for (hostname, groups) in &memberships {
+                            entry.set_host_groups(hostname, groups);
+                        }
+                        if let Some(partial) = &group_vars {
+                            entry.merge_group_var_fields(partial.clone());
                         }
                     },
                 );

@@ -53,6 +53,8 @@ fn test_source(scenario: &str) -> Source {
         project_id: "test".to_string(),
         script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
         script_args: vec![],
+        host_args: vec![],
+        host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
         connector_type: ConnectorType::Script,
@@ -746,6 +748,8 @@ async fn sync_infra_source() {
             project_id: "test".to_string(),
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
+            host_args: vec![],
+            host_sync_updates_group_vars: false,
             output_format: Default::default(),
             hosts_from_source: None,
             connector_type: ConnectorType::Script,
@@ -844,6 +848,8 @@ async fn endpoint_combines_sources() {
             project_id: "test".to_string(),
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
+            host_args: vec![],
+            host_sync_updates_group_vars: false,
             output_format: Default::default(),
             hosts_from_source: None,
             connector_type: ConnectorType::Script,
@@ -1836,4 +1842,199 @@ async fn a_limited_render_does_not_shrink_the_cache() {
     let (_, body) = request(app, "GET", "/api/v1/endpoints/ep-unlimited").await;
     let inv: serde_json::Value = serde_json::from_str(&body).expect("ansible json");
     assert!(inv["_meta"]["hostvars"].get("decoy.vmware.local").is_some());
+}
+
+// =========================================================================
+// Tests: host_args — a script that can gather ONE host is asked for one host
+// =========================================================================
+
+// A source pointing at the granular sample script. `host_args` empty means
+// "call it like a full sync and filter afterwards", which is the old behaviour.
+fn granular_source(host_args: Vec<String>, host_sync_updates_group_vars: bool) -> Source {
+    Source {
+        name: "Granular".to_string(),
+        project_id: "test".to_string(),
+        script_path: "tests/adapters/out/connectors/granular.py".to_string(),
+        script_args: vec!["--list".to_string()],
+        host_args,
+        host_sync_updates_group_vars,
+        output_format: Default::default(),
+        hosts_from_source: None,
+        connector_type: ConnectorType::Script,
+        sync_mode: SyncMode::Replace,
+        credential_ids: vec![],
+        schedule: None,
+        sync_interval_seconds: None,
+        ttl_seconds: 3600,
+        timeout_seconds: 300,
+        ttl_overrides: TtlOverrides::default(),
+        allow_on_demand_refresh: false,
+        advertise_scope: None,
+        config: HashMap::new(),
+    }
+}
+
+async fn dataset_of(app: axum::Router, id: &str) -> serde_json::Value {
+    let (status, body) = request(app, "GET", &format!("/api/v1/sources/{}/dataset", id)).await;
+    assert_eq!(status, StatusCode::OK, "dataset read failed: {}", body);
+    serde_json::from_str(&body).expect("dataset json")
+}
+
+fn group_hosts(dataset: &serde_json::Value, group: &str) -> Vec<String> {
+    dataset["groups"][group]["hosts"]
+        .as_array()
+        .map(|hosts| {
+            hosts
+                .iter()
+                .map(|h| h.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn host_args_replace_the_script_args_on_a_host_scoped_sync() {
+    let mut sources = HashMap::new();
+    sources.insert(
+        "src-granular".to_string(),
+        granular_source(
+            vec!["--only-host".to_string(), "{target}".to_string()],
+            false,
+        ),
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-granular/sync").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    assert_eq!(
+        dataset["hostvars"]["motoko.section9.net"]["called_with"], "--list",
+        "a full sync must still use script_args"
+    );
+
+    let (status, _) = request(
+        app.clone(),
+        "POST",
+        "/api/v1/sources/src-granular/sync?host=motoko.section9.net",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    assert_eq!(
+        dataset["hostvars"]["motoko.section9.net"]["called_with"],
+        "--only-host motoko.section9.net",
+        "the scoped sync did not use host_args: {}",
+        dataset
+    );
+    // The host that was not asked for keeps what the full sync gathered
+    assert_eq!(
+        dataset["hostvars"]["batou.section9.net"]["called_with"],
+        "--list"
+    );
+}
+
+#[tokio::test]
+async fn a_host_scoped_sync_moves_the_host_between_groups() {
+    let mut sources = HashMap::new();
+    sources.insert(
+        "src-granular".to_string(),
+        granular_source(
+            vec!["--only-host".to_string(), "{target}".to_string()],
+            false,
+        ),
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    request(app.clone(), "POST", "/api/v1/sources/src-granular/sync").await;
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    assert_eq!(
+        group_hosts(&dataset, "legacy").len(),
+        2,
+        "the full sync should have put both hosts in legacy"
+    );
+
+    request(
+        app.clone(),
+        "POST",
+        "/api/v1/sources/src-granular/sync?host=motoko.section9.net",
+    )
+    .await;
+
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    // Joined the group the granular call names...
+    assert_eq!(
+        group_hosts(&dataset, "modern"),
+        vec!["motoko.section9.net".to_string()]
+    );
+    // ...left the one it does not...
+    assert_eq!(
+        group_hosts(&dataset, "legacy"),
+        vec!["batou.section9.net".to_string()],
+        "motoko should have left legacy, and batou should not have moved: {}",
+        dataset
+    );
+    // ...and the group vars stayed out of it, the default
+    assert!(
+        dataset["groups"]["modern"].get("vars").is_none()
+            || dataset["groups"]["modern"]["vars"].is_null(),
+        "group vars must not travel unless the source opts in: {}",
+        dataset
+    );
+}
+
+#[tokio::test]
+async fn host_sync_updates_group_vars_takes_the_vars_of_the_groups_it_joins() {
+    let mut sources = HashMap::new();
+    sources.insert(
+        "src-granular".to_string(),
+        granular_source(
+            vec!["--only-host".to_string(), "{target}".to_string()],
+            true,
+        ),
+    );
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    request(app.clone(), "POST", "/api/v1/sources/src-granular/sync").await;
+    request(
+        app.clone(),
+        "POST",
+        "/api/v1/sources/src-granular/sync?host=motoko.section9.net",
+    )
+    .await;
+
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    assert_eq!(dataset["groups"]["modern"]["vars"]["tier"], "gold");
+    assert_eq!(
+        dataset["groups"]["modern"]["vars"]["patch_window"],
+        "sunday"
+    );
+    // The group it left keeps its own vars — a host does not redefine a group
+    // it is not in any more
+    assert_eq!(dataset["groups"]["legacy"]["vars"]["tier"], "bronze");
+}
+
+#[tokio::test]
+async fn without_host_args_a_host_scoped_sync_calls_the_script_unchanged() {
+    let mut sources = HashMap::new();
+    sources.insert("src-granular".to_string(), granular_source(vec![], false));
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    request(app.clone(), "POST", "/api/v1/sources/src-granular/sync").await;
+    request(
+        app.clone(),
+        "POST",
+        "/api/v1/sources/src-granular/sync?host=motoko.section9.net",
+    )
+    .await;
+
+    let dataset = dataset_of(app.clone(), "src-granular").await;
+    assert_eq!(
+        dataset["hostvars"]["motoko.section9.net"]["called_with"], "--list",
+        "with no host_args the script must be called exactly as before"
+    );
+    // The full listing still places it in legacy, so nothing moved
+    assert_eq!(group_hosts(&dataset, "legacy").len(), 2);
+    assert!(dataset["groups"].get("modern").is_none());
 }

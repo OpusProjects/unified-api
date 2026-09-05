@@ -51,7 +51,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
-croner = "3.0.1"
+croner = "4.0.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 # The hot-path benches (cache read/serialize, view union): the README's value

@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.31.0] - 2026-09-17
 
+### Security
+
+- **rustls 0.23.41 → 0.23.45** (RUSTSEC-2026-0285: TLS 1.3 handshake messages
+  accepted across encryption level boundaries, medium). Lockfile only — it
+  reaches the build through `reqwest`'s rustls-tls and through `russh`, so it
+  affects federated reads and the SSH connector. The advisory landed three days
+  before this release and had already turned `main` red; fixed here because it
+  blocks the release either way.
+
 ### Added
 
 - **A browsable API.** The same routes, in a browser: `Accept: text/html` gets a

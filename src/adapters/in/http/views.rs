@@ -184,6 +184,34 @@ pub async fn dataset(
     .unwrap())
 }
 
+// The per-member report, shared by /status and the view's detail page. One
+// implementation because two would be two things that can disagree about the
+// same members.
+fn member_statuses(
+    state: &Arc<AppState>,
+    view: &View,
+    snap: &crate::application::views::ViewSnapshot<'_>,
+) -> Vec<ViewMemberStatus> {
+    snap.members
+        .iter()
+        .map(|member| ViewMemberStatus {
+            source_id: member.source_id.to_string(),
+            cached: member.entry.is_some(),
+            ownership_cached: member.ownership_cached(),
+            ownership_mode: member.ownership_mode,
+            age_seconds: member.entry.as_ref().map(|entry| entry.age_seconds()),
+            is_fresh: member.entry.as_ref().is_some_and(|entry| entry.is_fresh()),
+            ttl_seconds: member.default_ttl(view),
+            total_hosts: member
+                .entry
+                .as_ref()
+                .map(|entry| entry.dataset.hostvars.len())
+                .unwrap_or(0),
+            sync_health: state.sync_health.get(member.source_id).map(Into::into),
+        })
+        .collect()
+}
+
 // GET /api/v1/sources/{id}/status for a view.
 pub fn status(
     state: &Arc<AppState>,
@@ -233,25 +261,7 @@ pub fn status(
         })
         .collect();
 
-    let members: Vec<ViewMemberStatus> = snap
-        .members
-        .iter()
-        .map(|member| ViewMemberStatus {
-            source_id: member.source_id.to_string(),
-            cached: member.entry.is_some(),
-            ownership_cached: member.ownership_cached(),
-            ownership_mode: member.ownership_mode,
-            age_seconds: member.entry.as_ref().map(|entry| entry.age_seconds()),
-            is_fresh: member.entry.as_ref().is_some_and(|entry| entry.is_fresh()),
-            ttl_seconds: member.default_ttl(view),
-            total_hosts: member
-                .entry
-                .as_ref()
-                .map(|entry| entry.dataset.hostvars.len())
-                .unwrap_or(0),
-            sync_health: state.sync_health.get(member.source_id).map(Into::into),
-        })
-        .collect();
+    let members = member_statuses(state, view, &snap);
 
     Ok(SourceStatus {
         source_id: id.to_string(),
@@ -328,14 +338,64 @@ pub fn info(state: &Arc<AppState>, id: &str, view: &View) -> CachedSourceInfo {
         view,
     );
 
+    // A view holds no cache entry of its own, so "cached" means at least one
+    // member has data to serve. With none, the freshness fields are null for
+    // the same reason a never-synced source's are: a view whose members have
+    // not synced is not a view of zero hosts, it is a view of nothing yet.
+    let cached = snap.members.iter().any(|m| m.entry.is_some());
+
     CachedSourceInfo {
         source_id: id.to_string(),
+        url: format!("/api/v1/sources/{id}"),
         kind: "view",
-        is_fresh: snap.is_fresh(),
-        age_seconds: snap.age_seconds(),
-        total_hosts: snap.hosts().len(),
+        cached,
+        is_fresh: cached && snap.is_fresh(),
+        age_seconds: cached.then(|| snap.age_seconds()),
+        total_hosts: cached.then(|| snap.hosts().len()),
         // Nothing syncs a view. The members' health is on the view's /status.
         sync_health: None,
+        related: crate::adapters::r#in::http::index::view_related(id),
+    }
+}
+
+// One view, as a resource: the same shape a source's detail page has, with
+// the members it routes to in place of the gathering configuration a view does
+// not have.
+pub fn detail(
+    state: &Arc<AppState>,
+    id: &str,
+    view: &View,
+) -> crate::adapters::r#in::http::detail::SourceDetail {
+    let config = state.config();
+    let snap = snapshot(
+        &*state.cache,
+        &config.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
+
+    let cached = snap.members.iter().any(|m| m.entry.is_some());
+
+    crate::adapters::r#in::http::detail::SourceDetail {
+        source_id: id.to_string(),
+        url: format!("/api/v1/sources/{id}"),
+        name: view.name.clone(),
+        kind: "view",
+        cached,
+        is_fresh: cached && snap.is_fresh(),
+        age_seconds: cached.then(|| snap.age_seconds()),
+        ttl_seconds: snap.ttl_seconds(),
+        total_hosts: cached.then(|| snap.hosts().len()),
+        total_groups: cached.then(|| snap.groups().len()),
+        // A view holds no serialized buffer of its own — it is merged per read
+        // — so there is no size to report without doing the merge twice.
+        dataset_bytes: None,
+        // Nothing syncs a view; each member's health is in `members`.
+        sync_health: None,
+        gathering: None,
+        members: Some(member_statuses(state, view, &snap)),
+        related: crate::adapters::r#in::http::index::view_related(id),
     }
 }
 

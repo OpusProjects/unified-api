@@ -92,6 +92,20 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "invalid API key")
     }
 
+    // Only a cookie-authenticated write can produce this: a request carrying an
+    // explicit key never needs a CSRF token. The wording says so, because the
+    // first person to see it will be holding a curl command that works.
+    pub fn csrf_required() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "missing or invalid CSRF token — a request authenticated by the \
+             browser session cookie must carry the token from its login, in the \
+             X-CSRF-Token header or a _csrf form field. Requests that present \
+             an API key directly (X-API-Key or Authorization: Bearer) do not \
+             need one",
+        )
+    }
+
     // Refusing a refresh is worth its own wording, because the two ways it can
     // be refused have completely different fixes and both used to be one bland
     // 403 or nothing at all.

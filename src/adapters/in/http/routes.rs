@@ -4,7 +4,7 @@ use axum::http::HeaderValue;
 use axum::{
     Router, middleware,
     response::{IntoResponse, Redirect},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
 };
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -20,17 +20,32 @@ use crate::AppState;
 use crate::adapters::r#in::http;
 use crate::adapters::r#in::http::auth::{ApiKeyRegistry, ApiKeys};
 use crate::adapters::r#in::http::openapi::ApiDoc;
+use crate::adapters::r#in::http::session::Sessions;
 
 // Build the complete router: API routes (protected by API keys if
 // configured), public health probes, and Swagger UI.
 pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Router<()> {
+    // The store lives on the state so the configuration handlers can reach it
+    // through State rather than being handed it: a reload revokes keys, and
+    // revoking a key has to end its browser sessions in the same breath.
+    let sessions = Arc::clone(&state.sessions);
     let api_routes = Router::new()
+        // The root of the API: where someone who knows no routes starts.
+        // Both spellings, because axum matches paths literally and a person
+        // typing the address in a browser has no reason to guess our trailing
+        // slash — getting a 404 from the one route whose job is discovery
+        // would be a poor joke.
+        .route("/api/v1", get(http::index::api_index))
+        .route("/api/v1/", get(http::index::api_index))
         .route("/api/v1/sources", get(http::sources::list_cached_sources))
         .route(
             "/api/v1/sources/{id}/dataset",
             get(http::sources::get_source_dataset),
         )
-        .route("/api/v1/sources/{id}", delete(http::cache::evict_source))
+        .route(
+            "/api/v1/sources/{id}",
+            get(http::detail::get_source).delete(http::cache::evict_source),
+        )
         .route(
             "/api/v1/sources/{id}/groups",
             get(http::sources::list_source_groups),
@@ -84,9 +99,30 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
                 .delete(http::config::delete_config_file),
         );
 
+    // Everything the browsable API adds is behind one flag, and it is OFF
+    // unless asked for. A deployment that upgrades and wants nothing to do
+    // with browsers gets exactly the router it had: no login form, no cookie
+    // credential, no HTML renderer, no method override.
+    let ui = state.ui.clone();
+
     let api_routes = api_routes
         .layer(middleware::from_fn(http::auth::require_api_key))
         .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))));
+
+    let api_routes = if ui.enabled {
+        api_routes
+            .layer(axum::Extension(Sessions(Arc::clone(&sessions))))
+            // Outside the key middleware: it lifts a browser form's CSRF token
+            // and _method out of the body before auth needs them.
+            .layer(middleware::from_fn(http::session::form_action))
+            // Outside the key middleware, so a browser that has not
+            // authenticated gets a page saying so rather than a JSON body it
+            // renders as raw text. Inside the compression layer added further
+            // down, so the HTML is gzipped like every other response.
+            .layer(middleware::from_fn(http::html::negotiate))
+    } else {
+        api_routes
+    };
 
     // /metrics is always registered on the PUBLIC router; whether it needs a
     // key is the handler's per-scrape decision (server.metrics_require_auth,
@@ -95,7 +131,28 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
     // wraps the group above.
     let metrics_route = Router::new()
         .route("/metrics", get(http::metrics::metrics))
-        .layer(axum::Extension(ApiKeys(api_keys)));
+        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))));
+
+    // Login is public by necessity: a page that asks for a credential cannot
+    // require one. It carries the key registry and the session store itself,
+    // since the auth middleware wraps only the group above.
+    // Logout is POST only: a state change does not belong on a GET, where a
+    // prefetch, an <img> or a link in someone else's page can reach it.
+    let login_routes = if ui.enabled {
+        Router::new()
+            .route(
+                "/api/v1/login",
+                get(http::login::login_form).post(http::login::login_submit),
+            )
+            .route("/api/v1/logout", post(http::login::logout))
+            .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))))
+            .layer(axum::Extension(Sessions(Arc::clone(&sessions))))
+            .layer(axum::Extension(http::login::SessionTtl(
+                std::time::Duration::from_secs(ui.session_ttl_seconds),
+            )))
+    } else {
+        Router::new()
+    };
 
     let router = Router::new()
         .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
@@ -109,6 +166,7 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
     let body_limit_state = Arc::clone(&state);
     let router = router
         .merge(metrics_route)
+        .merge(login_routes)
         .merge(api_routes)
         .merge(
             SwaggerUi::new("/swagger-ui")

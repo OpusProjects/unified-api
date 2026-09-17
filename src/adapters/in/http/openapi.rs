@@ -27,10 +27,12 @@ impl Modify for SecurityAddon {
         ("api_key" = [])
     ),
     paths(
+        http::index::api_index,
         http::health::healthz,
         http::health::readyz,
         http::metrics::metrics,
         http::sources::list_cached_sources,
+        http::detail::get_source,
         http::sources::get_source_dataset,
         http::sources::list_source_groups,
         http::sources::list_source_hosts,
@@ -57,7 +59,10 @@ impl Modify for SecurityAddon {
     ),
     components(schemas(
         http::error::ErrorBody,
+        http::index::ApiIndex,
         http::sources::CachedSourceInfo,
+        http::detail::SourceDetail,
+        http::detail::Gathering,
         http::sources::GroupInfo,
         http::sources::HostList,
         http::sources::HostStatus,

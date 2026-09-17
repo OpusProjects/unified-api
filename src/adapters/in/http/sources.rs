@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
@@ -14,6 +14,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::index;
 use crate::adapters::r#in::http::views;
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::domain::cache_entry::CacheEntry;
@@ -182,21 +183,45 @@ pub(crate) fn sanitize_header_value(value: &str) -> String {
         .collect()
 }
 
+#[derive(Deserialize, IntoParams)]
+pub struct ListParams {
+    /// Only ids that currently hold data. The list used to be cache entries
+    /// only, so a consumer that iterates it and then fetches each
+    /// `/dataset` — the canonical pattern — never met an id without one. Now
+    /// that configured-but-empty sources are listed, that loop can meet a 404;
+    /// `?cached=true` is the old list, for a consumer that wants it back
+    /// without changing its logic.
+    pub cached: Option<bool>,
+}
+
 // ToSchema = utoipa generates the JSON Schema definition for this struct
 // It will appear in the "Schemas" section of the Swagger UI
 #[derive(Serialize, ToSchema)]
 pub struct CachedSourceInfo {
     pub source_id: String,
+    /// This object's own address, so a consumer can follow the list into the
+    /// thing it listed — the same role `url` plays on an AWX object.
+    pub url: String,
     /// "source" for a cached source, "view" for a read-only composite over
     /// several of them. A view answers on the same routes in the same shapes,
     /// so this is the only place the difference shows.
     pub kind: &'static str,
+    /// Whether there is data behind this id right now. False for a source that
+    /// is configured but has never completed a sync — the case `sync_health`
+    /// exists to explain.
+    pub cached: bool,
     pub is_fresh: bool,
-    pub age_seconds: u64,
-    pub total_hosts: usize,
+    /// Null when nothing is cached. Not zero: a zero here reads as "synced
+    /// just now, and empty", which is the opposite of what it would mean.
+    pub age_seconds: Option<u64>,
+    /// Null when nothing is cached, for the same reason as `age_seconds`.
+    pub total_hosts: Option<usize>,
     /// Absent until the source has been synced at least once through this process
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_health: Option<SyncHealthInfo>,
+    /// Where to go next: the routes this id answers, by name. A view carries
+    /// no write links, because it refuses writes.
+    pub related: crate::adapters::r#in::http::index::Related,
 }
 
 // The freshness fields above say how old the data is. These say whether
@@ -231,30 +256,49 @@ impl From<SyncHealth> for SyncHealthInfo {
     get,
     path = "/api/v1/sources",
     tag = "Sources",
+    params(ListParams),
     responses(
-        (status = 200, description = "Cached sources with freshness info, then every configured view (kind: \"view\"). A view is listed whether or not its members have synced — it is a contract to discover, not a cache entry", body = Vec<CachedSourceInfo>)
+        (status = 200, description = "Every configured source and view this key may read, whether or not it holds data. `cached` says which do; a source that has never synced reports null freshness and its `sync_health` says why. Pass ?cached=true for only the ids that currently hold data", body = Vec<CachedSourceInfo>)
     )
 )]
 pub async fn list_cached_sources(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
+    Query(params): Query<ListParams>,
 ) -> Json<Vec<CachedSourceInfo>> {
     let config = state.config();
-    let keys = state.cache.keys();
 
-    let mut sources: Vec<CachedSourceInfo> = keys
-        .iter()
-        .filter(|key| auth.permissions.allows_source(key))
-        .filter_map(|key| {
-            let entry = state.cache.get(key)?;
-            Some(CachedSourceInfo {
-                source_id: key.clone(),
+    // Every CONFIGURED source, not only the cached ones.
+    //
+    // Listing cache entries meant a source that had never completed a sync did
+    // not appear at all — and that is precisely the source an operator is
+    // looking for. `sync_health` exists to record why a source that never
+    // synced failed, and the route that surfaces it was the one route that
+    // never listed the source. The union with the cache keys covers the other
+    // direction too: an id dropped from sources.yaml whose entry is still in
+    // memory until it is evicted.
+    let mut ids: BTreeSet<String> = config.sources.keys().cloned().collect();
+    ids.extend(state.cache.keys());
+
+    let only_cached = params.cached.unwrap_or(false);
+
+    let mut sources: Vec<CachedSourceInfo> = ids
+        .into_iter()
+        .filter(|id| auth.permissions.allows_source(id))
+        .filter(|id| !only_cached || state.cache.get(id).is_some())
+        .map(|id| {
+            let entry = state.cache.get(&id);
+            CachedSourceInfo {
                 kind: "source",
-                is_fresh: entry.is_fresh(),
-                age_seconds: entry.age_seconds(),
-                total_hosts: entry.dataset.hostvars.len(),
-                sync_health: state.sync_health.get(key).map(Into::into),
-            })
+                cached: entry.is_some(),
+                is_fresh: entry.as_ref().is_some_and(|e| e.is_fresh()),
+                age_seconds: entry.as_ref().map(|e| e.age_seconds()),
+                total_hosts: entry.as_ref().map(|e| e.dataset.hostvars.len()),
+                sync_health: state.sync_health.get(&id).map(Into::into),
+                related: index::source_related(&id),
+                url: format!("/api/v1/sources/{id}"),
+                source_id: id,
+            }
         })
         .collect();
 

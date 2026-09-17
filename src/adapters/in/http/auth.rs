@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use axum::extract::Request;
+use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 use subtle::ConstantTimeEq;
@@ -145,6 +146,13 @@ pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedAp
     Ok(keys)
 }
 
+// A browser session's identity, published on the response for the HTML layer.
+#[derive(Clone)]
+pub struct BrowserIdentity {
+    pub key_name: String,
+    pub csrf: String,
+}
+
 // Who authenticated this request. The middleware inserts it into the request
 // extensions; handlers extract it with Extension<AuthContext> and enforce the
 // permissions for the specific id they operate on (the middleware cannot — it
@@ -176,6 +184,20 @@ pub fn presented_token(headers: &axum::http::HeaderMap) -> Option<&str> {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
         })
+}
+
+// The browser session behind this request, if it has one and the store is
+// mounted. Returns the session's identity, never the session token.
+fn session_auth(request: &Request) -> Option<crate::adapters::r#in::http::session::Authenticated> {
+    use crate::adapters::r#in::http::session::{COOKIE_NAME, Sessions, cookie_value};
+
+    let sessions = request.extensions().get::<Sessions>()?;
+    let header = request
+        .headers()
+        .get(axum::http::header::COOKIE)?
+        .to_str()
+        .ok()?;
+    sessions.0.get(cookie_value(header, COOKIE_NAME)?)
 }
 
 // Constant-time comparison per key, and no early break: the scan always
@@ -215,7 +237,87 @@ pub async fn require_api_key(
             key_name: None,
             permissions: Permissions::Admin,
         });
-        return Ok(next.run(request).await);
+        let mut response = next.run(request).await;
+        // The console works here too. There is no ambient credential on an
+        // open instance — nothing to forge, and nothing a CSRF token would
+        // protect — so the pages get an identity with an empty token and their
+        // action buttons render. Without this the browsable API silently lost
+        // Sync and Evict on exactly the setup people try it on first, with
+        // nothing on the page to say why.
+        response.extensions_mut().insert(BrowserIdentity {
+            key_name: "open (no API keys configured)".to_string(),
+            csrf: String::new(),
+        });
+        return Ok(response);
+    }
+
+    // A browser session, when no header was offered. Checked second on
+    // purpose: a request that carries an explicit key is a machine's, and it
+    // should authenticate as that key even from inside a browser that happens
+    // to hold a cookie.
+    if presented_token(request.headers()).is_none()
+        && let Some(auth) = session_auth(&request)
+    {
+        // CSRF, and only here. A cookie is an AMBIENT credential: the browser
+        // attaches it to any request any page can cause, so a page on the
+        // internet could otherwise make your browser POST a sync — or a
+        // DELETE — to this API and succeed. SameSite=Strict on the cookie
+        // blocks the cross-site navigation case, but that is one attribute
+        // standing between an admin session and a write, so the token is
+        // required as well.
+        //
+        // Header-authenticated requests skip this entirely: they carry nothing
+        // ambient, there is nothing to forge, and demanding a token from them
+        // would break every existing consumer on the next upgrade.
+        // "Safe method" by intent, not by verb. GET is exempt because a GET
+        // should not change anything — but this API has one that does:
+        // `/dataset?refresh=true` runs a connector script. A read that can SSH
+        // into a datacenter is a write for this purpose, and the ambient
+        // credential makes it reachable from a page that merely gets an
+        // operator to click a link.
+        let side_effecting_read = request
+            .uri()
+            .query()
+            .is_some_and(|q| q.split('&').any(|p| p == "refresh=true"));
+
+        if side_effecting_read || !matches!(*request.method(), Method::GET | Method::HEAD) {
+            let presented = request
+                .headers()
+                .get("x-csrf-token")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+                .or_else(|| {
+                    request
+                        .extensions()
+                        .get::<crate::adapters::r#in::http::session::FormControls>()
+                        .and_then(|controls| controls.csrf.clone())
+                });
+
+            let ok = presented.is_some_and(|presented| {
+                crate::adapters::r#in::http::session::csrf_matches(&auth.csrf, &presented)
+            });
+
+            if !ok {
+                return Err(crate::adapters::r#in::http::error::ApiError::csrf_required());
+            }
+        }
+
+        tracing::Span::current().record("key_name", auth.key_name.as_str());
+        let identity = BrowserIdentity {
+            key_name: auth.key_name.clone(),
+            csrf: auth.csrf,
+        };
+        request.extensions_mut().insert(AuthContext {
+            key_name: Some(auth.key_name),
+            permissions: auth.permissions,
+        });
+        let mut response = next.run(request).await;
+        // On the RESPONSE, not the request: the HTML layer runs OUTSIDE this
+        // middleware, so by the time it can look, the request is gone. This is
+        // how the page knows whose session it is rendering for, and which CSRF
+        // token its action forms must carry.
+        response.extensions_mut().insert(identity);
+        return Ok(response);
     }
 
     let Some(token) = presented_token(request.headers()) else {

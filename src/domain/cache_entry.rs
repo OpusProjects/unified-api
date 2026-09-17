@@ -169,6 +169,17 @@ impl CacheEntry {
     // Every mutation replaces the OnceLock with a fresh, empty one: clones
     // taken BEFORE the mutation keep serving the bytes they already share,
     // the entry in the cache re-serializes on its next read.
+    // The size of the serialized dataset, but ONLY if it is already there.
+    //
+    // `serialized_json()` would build it, which is the wrong trade for a field
+    // that merely reports a size: the buffer is dropped on every mutation, so a
+    // source that syncs every five minutes would pay a full serialization the
+    // first time anyone opened its page, to answer a question nobody blocked
+    // on. Absent is a fine answer.
+    pub fn serialized_len(&self) -> Option<usize> {
+        self.serialized.get().map(|json| json.bytes.len())
+    }
+
     fn invalidate_serialized(&mut self) {
         self.serialized = Arc::new(OnceLock::new());
     }

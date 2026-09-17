@@ -15,7 +15,7 @@ use crate::config::{AppConfig, CONFIG_FILES, ConfigErrors, REQUIRED_CONFIG_FILE,
 use crate::ports::config_store::{ConfigChange, ConfigFileStat, ConfigStorePort};
 
 use super::audit;
-use super::auth::{ApiKeys, AuthContext, resolve_api_keys};
+use super::auth::{ApiKeys, AuthContext, ResolvedApiKey, resolve_api_keys};
 use super::error::{ApiError, ErrorBody};
 
 // The configuration directory, over HTTP.
@@ -181,6 +181,22 @@ pub struct ReloadQuery {
     /// write, so the push is one request instead of two
     #[serde(default)]
     pub reload: bool,
+}
+
+// Swap the API keys in force, and end the browser sessions of any key that no
+// longer exists.
+//
+// The two belong together. A reload is how a key is revoked, and a session is
+// a handle on a key: without this, removing a key from api_keys.yaml and
+// reloading left every browser already logged in with it working for the rest
+// of its TTL — the console outliving the revocation, which is the one thing a
+// revocation is for.
+fn swap_keys(state: &AppState, keys: &ApiKeys, resolved: Vec<ResolvedApiKey>) -> usize {
+    let live: Vec<String> = resolved.iter().map(|key| key.name.clone()).collect();
+    let count = resolved.len();
+    keys.0.replace(resolved);
+    state.sessions.retain_keys(&live);
+    count
 }
 
 // ------------------------------------------------------------------- helpers
@@ -666,8 +682,7 @@ pub async fn reload_config(
 
     let resolved = keys_for(&cfg, &keys)?;
     let report = reload_use_case::apply(&state, &cfg);
-    let key_count = resolved.len();
-    keys.0.replace(resolved);
+    let key_count = swap_keys(&state, &keys, resolved);
 
     audit::record(&auth, &headers, "config_reload", "config", "success");
 
@@ -722,8 +737,7 @@ async fn write(
     let reloaded = match resolved {
         Some(resolved) => {
             let report = reload_use_case::apply(state, &cfg);
-            let key_count = resolved.len();
-            keys.0.replace(resolved);
+            let key_count = swap_keys(state, keys, resolved);
             Some(reload_info(&report, key_count))
         }
         None => None,

@@ -6,6 +6,93 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-09-17
+
+### Added
+
+- **A browsable API.** The same routes, in a browser: `Accept: text/html` gets a
+  page instead of a JSON body, with the JSON printed as an indented tree, every
+  route rendered as a link you can click, and breadcrumbs back up the tree.
+  Modelled on AWX's `/api/v2/`.
+
+  Off by default. `server.ui.enabled: true` turns it on, and nothing about it
+  exists in the router until you do — no login form, no cookie credential, no
+  HTML renderer. A deployment that wants machine-to-machine only should not
+  grow a console because it took a new image.
+
+  ```yaml
+  server:
+    ui:
+      enabled: true
+      session_ttl_seconds: 3600
+  ```
+
+  The handlers were not touched. A middleware renders what they already return,
+  so a route added later is browsable the day it is added. See
+  [docs/browsable-api.md](docs/browsable-api.md).
+
+- **`GET /api/v1/`** — the index: every collection this key may read, as paths.
+  Where someone who knows no routes starts. Answers with and without the
+  trailing slash.
+
+- **`related` on the metadata responses** (`/sources`, `/status`, `/groups`,
+  `/hosts`, `/scope`, `/enrichers`, `/endpoints`, `/projects`) — the routes
+  each object answers, by name, so a consumer can follow the graph instead of
+  knowing it in advance. Works in `curl | jq` with no HTML anywhere; that is
+  the half that makes an API navigable.
+
+  Deliberately **not** on `/dataset`: that response is served from a
+  pre-serialized buffer whose ETag is the hash of exactly those bytes, and
+  decorating it would mean re-serializing the hot path per request.
+
+- **`GET /api/v1/sources/{id}`** — a source (or view) as a resource. The id
+  answered only `DELETE`, so the obvious click from the list landed on a 405.
+  Carries freshness, health, `dataset_bytes`, and for an admin a `gathering`
+  block with the connector, project, script, schedule and credential ids.
+
+- **`GET /api/v1/sources?cached=true`** — only the ids that currently hold
+  data, which is what the list used to be. For a consumer that iterates the
+  list and fetches each `/dataset` and wants that loop to keep never meeting a
+  404.
+
+- **The route's own documentation, in the page.** A collapsible panel with the
+  description, the parameters and the response codes, read from the OpenAPI
+  document in memory — the same text that feeds Swagger, so the two cannot
+  drift. The header block above it names `Allow`, which is the answer to "why
+  did that link 405 at me", available before the click.
+
+- **Action buttons** on a resource page (Sync now, Evict cache), derived from
+  the spec and narrowed by what the object itself declares in `related` — so a
+  view, which refuses every write, offers none. The parameters each action
+  takes become form fields, so a sync of one host is a box you type into.
+
+- **Six colour themes**, chosen with a link and remembered in a cookie. No
+  JavaScript anywhere on these pages, which is what lets the policy forbid
+  scripts outright.
+
+### Changed
+
+- **Breaking (anyone reading `age_seconds` or `total_hosts` off
+  `GET /api/v1/sources`):** both are now `null` when the id holds no data,
+  alongside a new `cached` boolean. A zero there read as "synced just now, and
+  empty", which is the opposite of what it meant.
+
+- **Breaking (anyone iterating `GET /api/v1/sources`):** the list is every
+  CONFIGURED source, not only the cached ones, sorted by id. A source that has
+  never completed a sync did not appear at all — and that is precisely the
+  source an operator goes looking for, since `sync_health` exists to record why
+  it failed. Two consequences worth planning for: the list can be longer than
+  before, and it can contain an id whose `/dataset` answers 404. `?cached=true`
+  restores the old membership exactly.
+
+- `GET /api/v1/sources/{id}/dataset` asked for by a browser with no `?limit=`
+  redirects to the first page when the response is too large to draw. An
+  explicit `?limit=` is honoured whatever it produces — the size limit is a
+  default, not a ceiling.
+
+- Responses from `/api/v1` carry `Vary: Accept`, so a cache in front of the API
+  cannot serve a stored page to a consumer that asked for JSON.
+
 ## [0.30.0] - 2026-09-05
 
 ### Added
@@ -1809,7 +1896,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.30.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/OpusProjects/unified-api/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/OpusProjects/unified-api/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/OpusProjects/unified-api/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/OpusProjects/unified-api/compare/v0.27.0...v0.28.0

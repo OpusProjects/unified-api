@@ -80,11 +80,17 @@ async fn sync_then_query_full_flow() {
     sources.insert("src-test".to_string(), test_source("default"));
     let app = unified_api::AppBuilder::new().sources(sources).build();
 
-    // 1. Before sync, the cache is empty
+    // 1. Before sync, the source is listed as configured but holding nothing.
+    // Not absent: a source you cannot see is a source you cannot diagnose.
     let (status, body) = request(app.clone(), "GET", "/api/v1/sources").await;
     assert_eq!(status, StatusCode::OK);
     let sources_list: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-    assert_eq!(sources_list.len(), 0);
+    assert_eq!(sources_list.len(), 1);
+    assert_eq!(sources_list[0]["source_id"], "src-test");
+    assert_eq!(sources_list[0]["cached"], false);
+    // null rather than 0: a zero would read as "synced just now, and empty"
+    assert!(sources_list[0]["age_seconds"].is_null());
+    assert!(sources_list[0]["total_hosts"].is_null());
 
     // 2. We do sync — executes fake_inventory.py with scenario=default
     let (status, body) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -160,18 +166,38 @@ async fn sync_health_is_reported_per_source() {
 
     let (_, body) = request(app.clone(), "GET", "/api/v1/sources").await;
     let listed: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-    // Only the source that synced has a cache entry, and it reports healthy
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0]["source_id"], "src-ok");
-    assert_eq!(listed[0]["sync_health"]["consecutive_failures"], 0);
-    assert!(listed[0]["sync_health"]["last_error"].is_null());
-    assert!(listed[0]["sync_health"]["last_success_age_seconds"].is_u64());
+    // BOTH are listed: the one that synced, and the one whose failure is the
+    // reason anybody would be looking. Sorted by id, so src-broken is first.
+    assert_eq!(listed.len(), 2);
 
-    // The broken source never entered the cache, so its health is not
-    // reachable through /status — the known limitation of hanging health off
-    // the read endpoints (see the PR description)
-    let (status, _) = request(app, "GET", "/api/v1/sources/src-broken/status").await;
+    let broken = &listed[0];
+    assert_eq!(broken["source_id"], "src-broken");
+    assert_eq!(broken["cached"], false);
+    assert!(broken["age_seconds"].is_null());
+    assert_eq!(broken["sync_health"]["consecutive_failures"], 1);
+    assert!(
+        broken["sync_health"]["last_error"].is_string(),
+        "the failure that kept it out of the cache must be readable here"
+    );
+    assert!(broken["sync_health"]["last_success_age_seconds"].is_null());
+
+    let ok = &listed[1];
+    assert_eq!(ok["source_id"], "src-ok");
+    assert_eq!(ok["cached"], true);
+    assert_eq!(ok["sync_health"]["consecutive_failures"], 0);
+    assert!(ok["sync_health"]["last_error"].is_null());
+    assert!(ok["sync_health"]["last_success_age_seconds"].is_u64());
+
+    // /status still needs a cache entry — it reports on DATA — but the source's
+    // own page answers, and carries the health that explains the absence.
+    let (status, _) = request(app.clone(), "GET", "/api/v1/sources/src-broken/status").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = request(app, "GET", "/api/v1/sources/src-broken").await;
+    assert_eq!(status, StatusCode::OK);
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["cached"], false);
+    assert!(detail["sync_health"]["last_error"].is_string());
 }
 
 #[tokio::test]

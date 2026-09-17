@@ -41,6 +41,18 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
 
+    // The browsable HTML API: content negotiation, the login form, browser
+    // sessions and the form-action middleware. OFF by default and restart-only.
+    //
+    // Off by default because turning it on is a decision, not an upgrade. It
+    // adds a publicly reachable login form, a cookie credential and an HTML
+    // renderer to a service whose consumers are AWX and AnsibleForms; a
+    // deployment that wants machine-to-machine only should not grow all that
+    // because it took a new image. Restart-only because it decides which
+    // middlewares and routes are in the router, and the router is built once.
+    #[serde(default)]
+    pub ui: UiConfig,
+
     // Origins allowed for CORS. Empty (the default) = no CORS headers at all,
     // which is right for server-to-server consumers. ["*"] = any origin.
     #[serde(default)]
@@ -240,6 +252,22 @@ pub fn is_config_file(name: &str) -> bool {
 // path and interval. Silently ignoring those
 // keys is how a pipeline comes to believe it changed a port it did not
 // change — so they are diffed and NAMED in the reload report instead.
+// The browsable API's settings.
+#[derive(Deserialize, Default, Clone, PartialEq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+
+    // How long a browser session lives. Read per login, so it reloads.
+    #[serde(default = "default_session_ttl_seconds")]
+    pub session_ttl_seconds: u64,
+}
+
+fn default_session_ttl_seconds() -> u64 {
+    3600
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct RestartOnlySettings {
     pub host: String,
@@ -248,6 +276,7 @@ pub struct RestartOnlySettings {
     pub persistence_interval_seconds: Option<u64>,
     pub projects_dir: String,
     pub config_api_enabled: bool,
+    pub ui_enabled: bool,
 }
 
 impl RestartOnlySettings {
@@ -263,6 +292,7 @@ impl RestartOnlySettings {
                 .map(|p| p.interval_seconds),
             projects_dir: cfg.projects_config.dir.clone(),
             config_api_enabled: cfg.config_api.enabled,
+            ui_enabled: cfg.server.ui.enabled,
         }
     }
 
@@ -287,6 +317,7 @@ impl RestartOnlySettings {
             self.config_api_enabled != other.config_api_enabled,
             "config_api.enabled",
         );
+        check(self.ui_enabled != other.ui_enabled, "server.ui.enabled");
         keys
     }
 }

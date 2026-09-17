@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use utoipa::ToSchema;
 
 use super::dataset::Dataset;
 use super::sync_mode::SyncMode;
 
-#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, Clone, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectorType {
     #[default]

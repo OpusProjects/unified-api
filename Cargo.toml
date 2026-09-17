@@ -1,6 +1,6 @@
 [package]
 name = "unified-api"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2024"
 # MSRV, kept in lockstep with docker/Dockerfile's pinned toolchain: a language
 # feature newer than the image's compiler must fail loudly at `cargo build`,
@@ -21,6 +21,10 @@ bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
 # git operation, so the SIMD engines' unsafe code buys nothing here.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 dashmap = "6"
+# Session and CSRF tokens for the browsable API's login, straight from the OS
+# random source. Already in the tree (rustls, russh and ahash all pull it), so
+# naming it here adds no code to the build.
+getrandom = "0.4"
 # Hashed known_hosts entries (|1|salt|hash) are HMAC-SHA1 of the hostname.
 # Both crates are already in the tree as russh dependencies — pinning the
 # same versions adds no new code to the build.

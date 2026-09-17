@@ -152,6 +152,16 @@ pub struct AppState {
     // here, and moving it under a running process would strand every checkout
     // that is already on disk.
     pub projects_dir: PathBuf,
+
+    // Browser sessions for the browsable API. Empty and unused when
+    // `ui.enabled` is false — the routes that would create one are not in the
+    // router at all.
+    pub sessions: Arc<crate::adapters::r#in::http::session::SessionStore>,
+
+    // The browsable HTML API's settings. Static like `projects_dir`, and for
+    // the same reason: it decides which middlewares and routes are in the
+    // router, and the router is built once (config::RestartOnlySettings).
+    pub ui: crate::config::UiConfig,
     // Why each source's data looks the way it does (last attempt, last
     // success, last error). Not a port: it is in-process state with no
     // outside world behind it, like the cache's contents.

@@ -46,6 +46,7 @@ pub struct AppBuilder {
     credentials: HashMap<String, Credential>,
     secrets_settings: config::SecretsConfig,
     projects_dir: std::path::PathBuf,
+    ui: crate::config::UiConfig,
     secrets: Arc<dyn SecretsPort>,
     // Some = the configuration API is enabled: the directory can be read and
     // written over HTTP, and a reload can swap what this builder is about to
@@ -74,6 +75,7 @@ impl AppBuilder {
             credentials: HashMap::new(),
             secrets_settings: config::SecretsConfig::default(),
             projects_dir: std::path::PathBuf::from("projects"),
+            ui: crate::config::UiConfig::default(),
             // MockSecrets by default: in tests there is no secrets store
             secrets: Arc::new(MockSecrets::new()),
             config_store: None,
@@ -92,6 +94,13 @@ impl AppBuilder {
             // axum's own default, mirrored like the three above
             max_body_bytes: 2 * 1024 * 1024,
         }
+    }
+
+    // The browsable HTML API's settings. Off by default, like the config it
+    // mirrors — a test that wants the browser surface asks for it.
+    pub fn ui(mut self, ui: crate::config::UiConfig) -> Self {
+        self.ui = ui;
+        self
     }
 
     pub fn sources(mut self, sources: HashMap<String, Source>) -> Self {
@@ -158,6 +167,7 @@ impl AppBuilder {
         self.credentials = cfg.credentials.clone();
         self.secrets_settings = cfg.secrets_config.clone();
         self.projects_dir = std::path::PathBuf::from(&cfg.projects_config.dir);
+        self.ui = cfg.server.ui.clone();
         self.cors_allowed_origins = cfg.server.cors_allowed_origins.clone();
         self.readyz_require_all_sources = cfg.server.readyz_require_all_sources;
         self.metrics_require_auth = cfg.server.metrics_require_auth;
@@ -285,6 +295,8 @@ impl AppBuilder {
             restart_pending: std::sync::RwLock::new(Vec::new()),
             reload: ReloadNotifier::new(),
             projects_dir: self.projects_dir,
+            ui: self.ui,
+            sessions: std::sync::Arc::new(crate::adapters::r#in::http::session::SessionStore::new()),
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             advertised_scopes: Arc::new(domain::source::AdvertisedScopeRegistry::new()),
             enrich_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),

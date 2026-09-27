@@ -123,7 +123,13 @@ pub fn lookup(path: &str, method: &str) -> Option<RouteDoc> {
             let parameters = op
                 .parameters
                 .as_ref()
-                .map(|params| params.iter().map(to_param_doc).collect())
+                .map(|params| {
+                    params
+                        .iter()
+                        .filter_map(inline_param)
+                        .map(to_param_doc)
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let mut responses: Vec<(String, String)> = op
@@ -336,6 +342,7 @@ pub fn actions(template: &str) -> Vec<Action> {
                     .map(|params| {
                         params
                             .iter()
+                            .filter_map(inline_param)
                             .filter(|p| {
                                 matches!(p.parameter_in, utoipa::openapi::path::ParameterIn::Query)
                             })
@@ -351,6 +358,21 @@ pub fn actions(template: &str) -> Vec<Action> {
     actions
 }
 
+/// Unwraps an inline parameter, skipping a `$ref` one.
+///
+/// Since utoipa 6 an operation's parameters are `RefOr<Parameter>`. The
+/// derive macros only ever emit them inline, so a reference would need a
+/// components lookup this page has no use for — it is dropped, the same way
+/// a referenced response is.
+fn inline_param(
+    p: &utoipa::openapi::RefOr<utoipa::openapi::path::Parameter>,
+) -> Option<&utoipa::openapi::path::Parameter> {
+    match p {
+        utoipa::openapi::RefOr::T(param) => Some(param),
+        utoipa::openapi::RefOr::Ref(_) => None,
+    }
+}
+
 fn to_param_doc(p: &utoipa::openapi::path::Parameter) -> ParamDoc {
     ParamDoc {
         name: p.name.clone(),
@@ -359,6 +381,8 @@ fn to_param_doc(p: &utoipa::openapi::path::Parameter) -> ParamDoc {
             utoipa::openapi::path::ParameterIn::Path => "path",
             utoipa::openapi::path::ParameterIn::Header => "header",
             utoipa::openapi::path::ParameterIn::Cookie => "cookie",
+            // OpenAPI 3.2's whole-query-string location; none of our routes use it.
+            utoipa::openapi::path::ParameterIn::QueryString => "querystring",
         },
         required: matches!(p.required, utoipa::openapi::Required::True),
         description: p.description.clone(),

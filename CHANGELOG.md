@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-23
+
 ### Added
 
 - **One set of selectors for `/dataset` and every builtin endpoint**:
@@ -71,6 +73,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- **`pageant` 0.2.1 → 0.2.4** (GHSA out-of-bounds read from a malicious Pageant
+  agent; Windows only, through `russh`). Lockfile only.
 - **A YAML error no longer prints the lines around the mistake**, only
   where it is: in a config file or an inventory those lines can hold a
   secret, and the error goes to the log and to `sync_health.last_error`.
@@ -1981,7 +1985,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/OpusProjects/unified-api/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/OpusProjects/unified-api/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/OpusProjects/unified-api/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/OpusProjects/unified-api/compare/v0.28.0...v0.29.0

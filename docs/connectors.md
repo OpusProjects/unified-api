@@ -402,6 +402,13 @@ credentials and `SOURCE_CONFIG` don't apply to this connector.
 - ansible-vault encrypted files or values → the sync fails naming the file
 - Jinja templating: `{{ ... }}` values pass through as literal strings
   (templating belongs to the consumer, e.g. Ansible itself)
+- YAML tags: `!unsafe` and other local tags are dropped and the value kept;
+  `!vault` fails the sync
+
+**Scalars read as YAML 1.2 core, as in 0.31:** only `true`/`false` are
+booleans (`yes`, `on` stay text); `0644` and `08001` stay text, not numbers.
+Ansible itself reads YAML 1.1, where `yes` is true and `0644` is 420: quote a
+value whose type matters.
 - `group_vars`/`host_vars` files that match nothing log a warning
 
 ---

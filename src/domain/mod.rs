@@ -4,12 +4,14 @@ pub mod credential;
 pub mod dataset;
 pub mod endpoint;
 pub mod enricher;
+pub mod host_filter;
 pub mod project;
 pub mod source;
 pub mod static_inventory;
 pub mod sync_health;
 pub mod sync_mode;
 pub mod view;
+pub mod yaml;
 
 // Default execution timeout for connector/enricher/output scripts.
 // Shared by the three config types via #[serde(default = "...")].

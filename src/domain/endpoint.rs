@@ -108,3 +108,29 @@ impl EndpointLimit {
         self.by_hosts_from_inventory.is_none()
     }
 }
+
+// The settings a builtin transformer understands, in an endpoint's `config:`
+// or per request. The same names, with the same meaning, as the query
+// parameters of `GET /sources/{id}/dataset`, so a consumer learns one
+// vocabulary for both:
+//   host           — hostnames, comma-separated; `*` and `?` make them patterns
+//   group          — keep hosts in any of these (comma-separated) groups
+//   filter         — conditions on hostvars, all of which must hold
+//                    (syntax: domain::host_filter)
+//   fields         — keep only these (comma-separated) hostvars on every host;
+//                    csv also takes its column order from it
+//   exclude_fields — drop these (comma-separated) hostvars from every host and group
+pub const BUILTIN_SETTINGS: [&str; 5] = ["host", "group", "filter", "fields", "exclude_fields"];
+
+// What a setting from before 0.32 is called now, for the load-time error that
+// names it. They were renamed, not aliased: one name per meaning.
+pub fn renamed_setting(old: &str) -> Option<&'static str> {
+    match old {
+        "filter_os" => Some("filter: \"os=<value>\""),
+        "filter_datacenter" => Some("filter: \"datacenter=<value>\""),
+        "filter_group" => Some("group"),
+        "columns" => Some("fields"),
+        "exclude_vars" => Some("exclude_fields"),
+        _ => None,
+    }
+}

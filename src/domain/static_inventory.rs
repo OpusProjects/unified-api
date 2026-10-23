@@ -51,7 +51,7 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
 
     check_not_vaulted("inventory file", &input.inventory)?;
 
-    let root: serde_json::Value = serde_saphyr::from_str(&input.inventory)
+    let root = crate::domain::yaml::to_json(&input.inventory)
         .map_err(|e| format!("inventory file is not valid YAML: {}", e))?;
     let root = root
         .as_object()
@@ -283,7 +283,7 @@ fn parse_vars_files(
         let mut vars = HostVars::new();
         for (label, contents) in parts {
             check_not_vaulted(&format!("{}/{}", kind, label), contents)?;
-            let value: serde_json::Value = serde_saphyr::from_str(contents)
+            let value = crate::domain::yaml::to_json(contents)
                 .map_err(|e| format!("{}/{} is not valid YAML: {}", kind, label, e))?;
             let file_vars = yaml_vars(&value).map_err(|e| format!("{}/{}: {}", kind, label, e))?;
             vars.extend(file_vars);

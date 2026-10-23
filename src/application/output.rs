@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::domain::dataset::{Dataset, Group, HostVars};
-use crate::domain::endpoint::EndpointLimit;
+use crate::domain::endpoint::{BUILTIN_SETTINGS, EndpointLimit, renamed_setting};
+use crate::domain::host_filter::HostFilter;
 
 // Apply an endpoint's limit to the datasets it is about to render: a
 // constructed inventory. Everything the sources carry is still merged — the
@@ -83,6 +84,62 @@ fn setting(params: &serde_json::Value, config: &HashMap<String, String>, key: &s
     config.get(key).cloned().unwrap_or_default()
 }
 
+// Check a request's parameters before a builtin renders anything, so a
+// mistake is answered as one — a 400 naming it — rather than as an
+// inventory that quietly ignored the parameter or matched nothing:
+//   - a setting from before 0.32 (it would be ignored like any unknown name,
+//     and the caller would get the whole inventory where it asked for a slice)
+//   - a setting that is not a string (`filter` may also be a list of them)
+//   - a malformed `filter` condition
+pub fn check_params(
+    config: &HashMap<String, String>,
+    params: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(object) = params.as_object() {
+        let mut keys: Vec<&String> = object.keys().collect();
+        keys.sort();
+        for key in keys {
+            if let Some(new) = renamed_setting(key) {
+                return Err(format!(
+                    "'{key}' was renamed in 0.32 — it is called {new} now"
+                ));
+            }
+            let value = &object[key];
+            let list = key == "filter" && value.is_array();
+            if BUILTIN_SETTINGS.contains(&key.as_str()) && !value.is_string() && !list {
+                return Err(format!("'{key}' must be a string, got {value}"));
+            }
+        }
+    }
+    host_filter(config, params).map(|_| ())
+}
+
+// The host filter of a request: `host` and `filter` from the request
+// (overriding the endpoint's static config), parsed. On an endpoint every
+// `host` entry is matched as a case-insensitive pattern, an exact name being
+// a pattern without wildcards. A POST body may send `filter` as a JSON list
+// instead of one `;`-joined string — a list is how a typed caller naturally
+// builds it, and each entry is then one whole condition, `;` and all.
+pub fn host_filter(
+    config: &HashMap<String, String>,
+    params: &serde_json::Value,
+) -> Result<HostFilter, String> {
+    let host = setting(params, config, "host");
+    match params.get("filter") {
+        Some(serde_json::Value::Array(items)) => {
+            let conditions = items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .ok_or_else(|| format!("filter entries must be strings, got {item}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            HostFilter::from_conditions(&host, &conditions)
+        }
+        _ => HostFilter::parse(&host, &setting(params, config, "filter")),
+    }
+}
+
 fn comma_list(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -95,20 +152,25 @@ fn comma_list(raw: &str) -> Vec<String> {
 // every builtin: the formats differ only in how the surviving hosts and
 // groups are written out, so the merge-and-filter half lives once.
 //
-// Filters (from `config`, each overridable per request via `params`):
-//   filter_datacenter — keep hosts whose `datacenter` hostvar equals this
-//   filter_os         — keep hosts whose `os` hostvar equals this
-//   filter_group      — keep hosts in any of these (comma-separated) groups
-//   exclude_vars      — drop these (comma-separated) hostvars from every host
+// Settings: see domain::endpoint::BUILTIN_SETTINGS. host, group and filter
+// select hosts and are ANDed; fields and exclude_fields shape vars here, for
+// every format (csv also takes its column order from `fields`).
 fn merge_and_filter(
     datasets: &HashMap<String, Arc<Dataset>>,
     config: &HashMap<String, String>,
     params: &serde_json::Value,
 ) -> (HashMap<String, HostVars>, HashMap<String, Group>) {
-    let filter_datacenter = setting(params, config, "filter_datacenter");
-    let filter_os = setting(params, config, "filter_os");
-    let filter_group = setting(params, config, "filter_group");
-    let exclude_vars = comma_list(&setting(params, config, "exclude_vars"));
+    let group = setting(params, config, "group");
+    let fields = comma_list(&setting(params, config, "fields"));
+    let exclude_fields = comma_list(&setting(params, config, "exclude_fields"));
+    // The HTTP handler validates the filter before it renders and answers 400
+    // for a bad one, so a parse error cannot reach here from a request. If one
+    // ever did (a bad value in an endpoint's static config, read by a caller
+    // that skipped validation), the render fails closed: an empty inventory,
+    // never an unfiltered one.
+    let Ok(host_filter) = host_filter(config, params) else {
+        return (HashMap::new(), HashMap::new());
+    };
 
     // Sources are a HashMap, whose iteration order is random, so merge them in
     // a stable order (sorted by id): an overlapping host then resolves the same
@@ -148,45 +210,38 @@ fn merge_and_filter(
         }
     }
 
-    // Host filters.
-    if !filter_datacenter.is_empty() {
-        hostvars.retain(|_, vars| {
-            vars.get("datacenter").and_then(serde_json::Value::as_str)
-                == Some(filter_datacenter.as_str())
-        });
-    }
-    if !filter_os.is_empty() {
-        hostvars.retain(|_, vars| {
-            vars.get("os").and_then(serde_json::Value::as_str) == Some(filter_os.as_str())
-        });
-    }
-    if !filter_group.is_empty() {
+    // Host filters, ANDed.
+    if !group.is_empty() {
         let mut allowed: HashSet<String> = HashSet::new();
-        for name in comma_list(&filter_group) {
+        for name in comma_list(&group) {
             if let Some(group) = groups.get(&name) {
                 allowed.extend(group.hosts.iter().cloned());
             }
         }
         hostvars.retain(|host, _| allowed.contains(host));
     }
+    if !host_filter.is_empty() {
+        hostvars.retain(|host, vars| host_filter.matches(host, vars));
+    }
 
-    // Strip unwanted vars from the survivors -- from groups as well as hosts.
+    // Shape the survivors' vars. `fields` keeps only the hostvars it names,
+    // as on `GET /sources/{id}/dataset`: it picks columns of a host, and group
+    // vars are not columns. `exclude_fields` drops the vars it names from
+    // groups as well as hosts.
     //
     // A var declared on a group reaches every member of it once the consumer
     // resolves the inventory, so stripping only hostvars would let an excluded
-    // name through the group door. exclude_vars is how something is kept out of
+    // name through the group door. exclude_fields is how something is kept out of
     // an endpoint, and a filter with a way around it is not one.
-    if !exclude_vars.is_empty() {
+    if !fields.is_empty() || !exclude_fields.is_empty() {
         for vars in hostvars.values_mut() {
-            for name in &exclude_vars {
-                vars.remove(name);
-            }
+            vars.retain(|name, _| {
+                (fields.is_empty() || fields.contains(name)) && !exclude_fields.contains(name)
+            });
         }
         for group in groups.values_mut() {
             if let Some(vars) = group.vars.as_mut() {
-                for name in &exclude_vars {
-                    vars.remove(name);
-                }
+                vars.retain(|name, _| !exclude_fields.contains(name));
             }
         }
     }
@@ -269,7 +324,8 @@ pub fn render_ansible(
 // Render the merged datasets in the raw source shape (`hostvars` + `groups`),
 // like `GET /sources/{id}/dataset` but merged across sources and filtered —
 // for consumers that want the inventory as data rather than in a tool's
-// format. Filters: see merge_and_filter.
+// format. Filters: see merge_and_filter — `fields` there is what lets a
+// search that wants three fields of a thousand hosts not ship all of them.
 pub fn render_json(
     datasets: &HashMap<String, Arc<Dataset>>,
     config: &HashMap<String, String>,
@@ -311,16 +367,16 @@ fn csv_value(value: Option<&serde_json::Value>) -> String {
 
 // Render the surviving hosts as CSV: a header row, then one row per host,
 // sorted by hostname. The first column is `host`; the rest default to every
-// hostvar name seen (sorted), and `columns` (comma-separated, in `config` or
+// hostvar name seen (sorted), and `fields` (comma-separated, in `config` or
 // per request via `params`) picks and orders them instead. Groups do not
-// appear — a row per host is the point; use `filter_group` to select by one.
+// appear — a row per host is the point; use `group` to select by one.
 // Filters: see merge_and_filter.
 pub fn render_csv(
     datasets: &HashMap<String, Arc<Dataset>>,
     config: &HashMap<String, String>,
     params: &serde_json::Value,
 ) -> String {
-    let columns = comma_list(&setting(params, config, "columns"));
+    let columns = comma_list(&setting(params, config, "fields"));
     let (hostvars, _groups) = merge_and_filter(datasets, config, params);
 
     let columns = if columns.is_empty() {
@@ -422,7 +478,7 @@ mod tests {
             ),
         );
 
-        let inv = render(&datasets, serde_json::json!({"filter_os": "linux"}));
+        let inv = render(&datasets, serde_json::json!({"filter": "os=linux"}));
 
         assert!(inv["_meta"]["hostvars"].get("win1").is_none());
         assert!(inv["_meta"]["hostvars"].get("linux1").is_some());
@@ -452,7 +508,7 @@ mod tests {
             ),
         );
 
-        let inv = render(&datasets, serde_json::json!({"filter_os": "linux"}));
+        let inv = render(&datasets, serde_json::json!({"filter": "os=linux"}));
 
         assert!(
             inv.get("windows").is_none(),
@@ -466,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn exclude_vars_strips_named_hostvars() {
+    fn exclude_fields_strips_named_hostvars() {
         let mut datasets = HashMap::new();
         datasets.insert(
             "src".to_string(),
@@ -478,7 +534,7 @@ mod tests {
 
         let inv = render(
             &datasets,
-            serde_json::json!({"exclude_vars": "secret, serial"}),
+            serde_json::json!({"exclude_fields": "secret, serial"}),
         );
 
         let vars = &inv["_meta"]["hostvars"]["h1"];
@@ -491,7 +547,7 @@ mod tests {
     // inventory, so sweeping only hostvars left a way round the exclusion —
     // and the group is now the ordinary place for a group's vars to live.
     #[test]
-    fn exclude_vars_strips_the_name_from_groups_too() {
+    fn exclude_fields_strips_the_name_from_groups_too() {
         let mut datasets = HashMap::new();
         datasets.insert(
             "src".to_string(),
@@ -503,7 +559,7 @@ mod tests {
             ),
         );
 
-        let inv = render(&datasets, serde_json::json!({"exclude_vars": "secret"}));
+        let inv = render(&datasets, serde_json::json!({"exclude_fields": "secret"}));
 
         assert!(inv["web"]["vars"].get("secret").is_none());
         assert_eq!(inv["web"]["vars"]["ntp"], "pool");
@@ -520,12 +576,12 @@ mod tests {
             ),
         );
         let config: HashMap<String, String> =
-            serde_json::from_value(serde_json::json!({"filter_os": "linux"})).unwrap();
+            serde_json::from_value(serde_json::json!({"filter": "os=linux"})).unwrap();
         // request asks for windows, overriding the static linux filter
         let out = render_ansible(
             &datasets,
             &config,
-            &serde_json::json!({"filter_os": "windows"}),
+            &serde_json::json!({"filter": "os=windows"}),
         );
         let inv: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(inv["_meta"]["hostvars"].get("b").is_some());
@@ -564,6 +620,91 @@ mod tests {
         );
     }
 
+    // `fields` reaches the ansible format as well as json and csv. It picks
+    // hostvars only; `exclude_fields` reaches group vars too.
+    #[test]
+    fn fields_and_exclude_fields_shape_the_ansible_format() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux", "secret": "x", "role": "web"}}),
+                serde_json::json!({"web": {"hosts": ["h1"], "vars": {"os": "l", "ntp": "n", "secret": "y"}}}),
+            ),
+        );
+
+        let inv = render(
+            &datasets,
+            serde_json::json!({"fields": "os,role,secret", "exclude_fields": "secret"}),
+        );
+
+        assert_eq!(
+            inv["_meta"]["hostvars"]["h1"],
+            serde_json::json!({"os": "linux", "role": "web"})
+        );
+        assert_eq!(
+            inv["web"]["vars"],
+            serde_json::json!({"os": "l", "ntp": "n"})
+        );
+    }
+
+    #[test]
+    fn check_params_names_the_mistake() {
+        let config = HashMap::new();
+        let check = |params: serde_json::Value| check_params(&config, &params);
+        assert!(check(serde_json::json!({"host": "a*", "filter": ["os=linux"]})).is_ok());
+        assert!(
+            check(serde_json::json!({"columns": "os"}))
+                .unwrap_err()
+                .contains("fields")
+        );
+        assert!(
+            check(serde_json::json!({"fields": ["os"]}))
+                .unwrap_err()
+                .contains("string")
+        );
+        assert!(
+            check(serde_json::json!({"group": 7}))
+                .unwrap_err()
+                .contains("string")
+        );
+        assert!(
+            check(serde_json::json!({"filter": [1]}))
+                .unwrap_err()
+                .contains("strings")
+        );
+        assert!(
+            check(serde_json::json!({"filter": "os"}))
+                .unwrap_err()
+                .contains("no operator")
+        );
+        // A parameter the builtins do not read is the caller's business.
+        assert!(check(serde_json::json!({"limit": 5})).is_ok());
+    }
+
+    // A list entry is one condition: a `;` in it belongs to the value.
+    #[test]
+    fn a_filter_list_entry_is_one_whole_condition() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"note": "a;b"}, "h2": {"note": "a"}}),
+                serde_json::json!({}),
+            ),
+        );
+        let out = render_json(
+            &datasets,
+            &HashMap::new(),
+            &serde_json::json!({"filter": ["note=a;b"]}),
+        );
+        let merged: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            merged["hostvars"],
+            serde_json::json!({"h1": {"note": "a;b"}})
+        );
+    }
+
     #[test]
     fn json_applies_the_shared_filters() {
         let mut datasets = HashMap::new();
@@ -578,7 +719,7 @@ mod tests {
             ),
         );
         let config: HashMap<String, String> = serde_json::from_value(
-            serde_json::json!({"filter_os": "linux", "exclude_vars": "secret"}),
+            serde_json::json!({"filter": "os=linux", "exclude_fields": "secret"}),
         )
         .unwrap();
 
@@ -631,17 +772,13 @@ mod tests {
             ),
         );
         let config: HashMap<String, String> =
-            serde_json::from_value(serde_json::json!({"columns": "role, os"})).unwrap();
+            serde_json::from_value(serde_json::json!({"fields": "role, os"})).unwrap();
 
         let out = render_csv(&datasets, &config, &serde_json::json!({}));
         assert_eq!(out, "host,role,os\nh1,web,linux\n");
 
         // A request parameter replaces the configured column list entirely.
-        let out = render_csv(
-            &datasets,
-            &config,
-            &serde_json::json!({"columns": "ram_gb"}),
-        );
+        let out = render_csv(&datasets, &config, &serde_json::json!({"fields": "ram_gb"}));
         assert_eq!(out, "host,ram_gb\nh1,64\n");
     }
 
@@ -874,7 +1011,7 @@ mod tests {
 
         // A filter still narrows what the limit left.
         let filtered: HashMap<String, String> =
-            serde_json::from_value(serde_json::json!({"filter_group": "cluster_a"})).unwrap();
+            serde_json::from_value(serde_json::json!({"group": "cluster_a"})).unwrap();
         let inv: serde_json::Value = serde_json::from_str(&render_ansible(
             &datasets,
             &filtered,

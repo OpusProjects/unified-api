@@ -110,7 +110,7 @@ vars reaching it — it does not remove a group the target owns.
 
 > Omitting it therefore hands the target everything the matching groups hold,
 > including anything sensitive declared beside the variable you wanted. An
-> endpoint's `exclude_vars` can drop a name on the way out — it covers group
+> endpoint's `exclude_fields` can drop a name on the way out — it covers group
 > vars as well as hostvars — but it does not narrow what the enricher wrote into
 > the target source itself.
 

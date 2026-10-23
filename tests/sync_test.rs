@@ -941,7 +941,7 @@ async fn endpoint_filters_by_datacenter() {
     sources.insert("src-inventory".to_string(), test_source("default"));
 
     let mut ep_config = HashMap::new();
-    ep_config.insert("filter_datacenter".to_string(), "section9".to_string());
+    ep_config.insert("filter".to_string(), "datacenter=section9".to_string());
 
     let mut endpoints = HashMap::new();
     endpoints.insert(
@@ -1055,7 +1055,7 @@ async fn builtin_json_output_filters_via_query_params() {
     let (status, body) = request(
         app.clone(),
         "GET",
-        "/api/v1/endpoints/ep-json?filter_datacenter=section9",
+        "/api/v1/endpoints/ep-json?filter=datacenter=section9",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1078,7 +1078,7 @@ async fn builtin_csv_output_renders_rows_with_csv_content_type() {
     sources.insert("src-inventory".to_string(), test_source("default"));
 
     let mut config = HashMap::new();
-    config.insert("columns".to_string(), "os,datacenter".to_string());
+    config.insert("fields".to_string(), "os,datacenter".to_string());
 
     let mut endpoints = HashMap::new();
     endpoints.insert(
@@ -1312,7 +1312,7 @@ async fn endpoint_with_dynamic_params() {
         app.clone(),
         "POST",
         "/api/v1/endpoints/ep-dynamic",
-        serde_json::json!({"filter_datacenter": "section9"}),
+        serde_json::json!({"filter": "datacenter=section9"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1368,7 +1368,7 @@ async fn endpoint_get_passes_query_params() {
     let (status, body) = request(
         app.clone(),
         "GET",
-        "/api/v1/endpoints/ep-dynamic?filter_datacenter=section9",
+        "/api/v1/endpoints/ep-dynamic?filter=datacenter=section9",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1391,7 +1391,7 @@ async fn endpoint_params_override_config() {
 
     // Static config: filters section9
     let mut ep_config = HashMap::new();
-    ep_config.insert("filter_datacenter".to_string(), "section9".to_string());
+    ep_config.insert("filter".to_string(), "datacenter=section9".to_string());
 
     let mut endpoints = HashMap::new();
     endpoints.insert(
@@ -1426,7 +1426,7 @@ async fn endpoint_params_override_config() {
         app.clone(),
         "POST",
         "/api/v1/endpoints/ep-override",
-        serde_json::json!({"filter_datacenter": "seele"}),
+        serde_json::json!({"filter": "datacenter=seele"}),
     )
     .await;
     let seele: serde_json::Value = serde_json::from_str(&body).unwrap();

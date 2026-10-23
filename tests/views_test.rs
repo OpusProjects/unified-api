@@ -780,3 +780,72 @@ async fn a_view_that_cannot_route_is_visible_in_the_gauges() {
         );
     }
 }
+
+// A view answers `filter` like a source: the filter runs on
+// each host's vars from the member that owns it, before paging.
+#[tokio::test]
+async fn a_view_filters_by_hostvars_from_the_owning_member() {
+    let f = fixture("filter", 60, None, false);
+
+    let r = get(
+        f.app.clone(),
+        "/api/v1/sources/vw-all/dataset?filter=os=RHEL",
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["total_hosts"], 1);
+    assert_eq!(r.json()["hostvars"]["h2.example"]["os"], "RHEL");
+
+    let bad = get(f.app, "/api/v1/sources/vw-all/dataset?filter=os").await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+}
+
+// On a view an exact name nobody claims is a 404 (the request cannot be
+// routed), but a pattern only selects: matching nothing is an empty page.
+#[tokio::test]
+async fn a_view_host_pattern_selects_and_never_404s() {
+    let f = fixture("pattern", 60, None, false);
+
+    let hit = get(f.app.clone(), "/api/v1/sources/vw-all/dataset?host=H2.*").await;
+    assert_eq!(hit.status, StatusCode::OK);
+    assert_eq!(hit.json()["total_hosts"], 1);
+    assert_eq!(hit.json()["hostvars"]["h2.example"]["os"], "RHEL");
+
+    let none = get(f.app, "/api/v1/sources/vw-all/dataset?host=nobody*").await;
+    assert_eq!(none.status, StatusCode::OK);
+    assert_eq!(none.json()["total_hosts"], 0);
+}
+
+// `host` and `group` select as they do on a source: groups any-of, ANDed with
+// the host list. 0.31 let `host` win and read only one group.
+#[tokio::test]
+async fn status_ands_host_with_any_of_the_groups() {
+    let f = fixture("status-select", 60, None, false);
+    let names = |body: serde_json::Value| -> Vec<String> {
+        body["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["hostname"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let both = get(
+        f.app.clone(),
+        "/api/v1/sources/vw-all/status?group=only_h1.example,only_h2.example",
+    )
+    .await;
+    assert_eq!(names(both.json()), ["h1.example", "h2.example"]);
+    let anded = get(
+        f.app.clone(),
+        "/api/v1/sources/vw-all/status?host=h1.example&group=only_h2.example",
+    )
+    .await;
+    assert_eq!(names(anded.json()), Vec::<String>::new());
+    let one = get(
+        f.app,
+        "/api/v1/sources/vw-all/dataset?group=only_h2.example&fields=os",
+    )
+    .await;
+    assert_eq!(one.json()["returned"], 1);
+}

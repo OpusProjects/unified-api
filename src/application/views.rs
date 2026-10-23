@@ -287,6 +287,12 @@ impl<'a> ViewSnapshot<'a> {
         }
     }
 
+    // Whether the view serves this host: the one test `hosts` applies to all.
+    pub fn serves(&self, hostname: &str) -> bool {
+        self.owner_index(hostname)
+            .is_some_and(|index| self.members[index].has(hostname))
+    }
+
     // Every host the view can serve: claimed by some member AND present in
     // that member's data. Sorted, so pages and listings are stable.
     //

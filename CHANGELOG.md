@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `groups=all|matching|none` on `GET /sources/{id}/dataset` (sources and
+  views). `matching` returns only the groups of the returned hosts, member
+  lists cut to them, plus the parents of kept groups; `none` drops the
+  `groups` key. A one-host read of a source of about 1,000 hosts and 40 groups goes
+  from 444,420 B to 3,516 B (`matching`) — the full group lists were most of the response.
+  `all` stays the default, so nothing changes for existing consumers.
+- Dotted paths in `fields`, `exclude_fields` and `filter` keys — on the
+  dataset route, views and the builtin endpoints (csv columns too):
+  `fields=monitor.name`, `filter=monitor.status=DOWN`. A top-level key of
+  the exact name still wins; paths walk objects, never lists.
+- `host=`, `group=` and `filter=` on `GET /sources/{id}/hosts` (sources and
+  views), selecting exactly as `/dataset` does: names of the matching hosts
+  without their hostvars. A malformed filter is a `400`.
+
 ## [0.32.0] - 2026-10-23
 
 ### Added

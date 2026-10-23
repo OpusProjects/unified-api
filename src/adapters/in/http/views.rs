@@ -10,12 +10,15 @@ use utoipa::ToSchema;
 use crate::AppState;
 use crate::adapters::r#in::http::error::ApiError;
 use crate::adapters::r#in::http::sources::{
-    CachedSourceInfo, DatasetParams, GroupInfo, HostList, HostStatus, SourceStatus, StatusParams,
-    SyncHealthInfo, VarShape, comma_names, sanitize_header_value,
+    CachedSourceInfo, DatasetParams, GroupInfo, GroupsMode, HostList, HostStatus, HostsParams,
+    SourceStatus, StatusParams, SyncHealthInfo, VarShape, comma_names, sanitize_header_value,
 };
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::application::views::{UnclaimedHosts, ViewSnapshot, snapshot};
 use crate::domain::dataset::HostVars;
+use crate::domain::group_trim;
+use crate::domain::host_filter::HostFilter;
+use crate::domain::var_path::VarSelect;
 use crate::domain::view::View;
 
 // Serving a view on the source read routes.
@@ -117,6 +120,7 @@ pub async fn dataset(
         params.fields.hash(&mut hasher);
         params.exclude_fields.hash(&mut hasher);
         params.filter.hash(&mut hasher);
+        params.groups.hash(&mut hasher);
         params.refresh.hash(&mut hasher);
         format!("\"{:x}-{}\"", hasher.finish(), state.cache.generation())
     };
@@ -153,38 +157,65 @@ pub async fn dataset(
 
         let wanted: Option<HashSet<&str>> =
             params.group.as_deref().map(|g| comma_names(g).collect());
-        let exclude: HashSet<&str> = params
-            .exclude_fields
-            .as_deref()
-            .map(|f| comma_names(f).collect())
-            .unwrap_or_default();
-        let groups: BTreeMap<&str, PageGroup> = snap
+        // exclude_fields on group vars, dotted paths included, as on a source
+        let exclude = VarSelect::new(
+            None::<Vec<&str>>,
+            params
+                .exclude_fields
+                .as_deref()
+                .into_iter()
+                .flat_map(comma_names),
+        );
+        let merged: BTreeMap<&str, _> = snap
             .groups()
             .into_iter()
             .filter(|(name, _)| wanted.as_ref().is_none_or(|w| w.contains(name)))
-            .map(|(name, group)| {
-                let vars = group.vars.map(|vars| {
-                    if exclude.is_empty() {
-                        Cow::Borrowed(vars)
-                    } else {
-                        Cow::Owned(
-                            vars.iter()
-                                .filter(|(key, _)| !exclude.contains(key.as_str()))
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect(),
-                        )
-                    }
-                });
-                (
-                    name,
-                    PageGroup {
-                        hosts: group.hosts,
-                        children: group.children,
-                        vars,
-                    },
-                )
-            })
             .collect();
+        // `groups=` as on a source: all (default), only the page's (matching),
+        // or no key at all (none).
+        let groups: Option<BTreeMap<&str, PageGroup>> = match params.groups.unwrap_or_default() {
+            GroupsMode::Omit => None,
+            GroupsMode::All => Some(
+                merged
+                    .into_iter()
+                    .map(|(name, group)| {
+                        (
+                            name,
+                            PageGroup {
+                                hosts: group.hosts,
+                                children: group.children,
+                                vars: shape_group_vars(&exclude, group.vars),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            GroupsMode::Matching => {
+                let on_page: HashSet<&str> = page.iter().copied().collect();
+                let trimmed = group_trim::matching(
+                    merged
+                        .iter()
+                        .map(|(name, g)| (*name, g.hosts.as_slice(), g.children.as_slice())),
+                    &on_page,
+                );
+                Some(
+                    merged
+                        .iter()
+                        .filter_map(|(name, group)| {
+                            let kept = trimmed.get(name)?;
+                            Some((
+                                *name,
+                                PageGroup {
+                                    hosts: kept.hosts.clone(),
+                                    children: kept.children.clone(),
+                                    vars: shape_group_vars(&exclude, group.vars),
+                                },
+                            ))
+                        })
+                        .collect(),
+                )
+            }
+        };
 
         serde_json::to_vec(&ViewDatasetPage {
             source_id: id,
@@ -206,6 +237,23 @@ pub async fn dataset(
     )
     .body(axum::body::Body::from(body))
     .unwrap())
+}
+
+// A group's vars with `exclude_fields` applied, borrowed through when it
+// excludes nothing.
+fn shape_group_vars<'a>(
+    exclude: &VarSelect,
+    vars: Option<&'a HostVars>,
+) -> Option<Cow<'a, HostVars>> {
+    vars.map(|vars| {
+        if exclude.drops_nothing() {
+            Cow::Borrowed(vars)
+        } else {
+            let mut owned = vars.clone();
+            exclude.group_vars(&mut owned);
+            Cow::Owned(owned)
+        }
+    })
 }
 
 // The per-member report, shared by /status and the view's detail page. One
@@ -360,7 +408,13 @@ pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
 }
 
 // GET /api/v1/sources/{id}/hosts for a view.
-pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
+pub fn hosts(
+    state: &Arc<AppState>,
+    id: &str,
+    view: &View,
+    params: &HostsParams,
+    host_filter: &HostFilter,
+) -> Result<HostList, ApiError> {
     let config = state.config();
     let snap = snapshot(
         &*state.cache,
@@ -369,13 +423,27 @@ pub fn hosts(state: &Arc<AppState>, id: &str, view: &View) -> HostList {
         id,
         view,
     );
-    let hosts: Vec<String> = snap.hosts().into_iter().map(str::to_string).collect();
+    let hosts: Vec<String> = if params.is_plain() {
+        snap.hosts().into_iter().map(str::to_string).collect()
+    } else {
+        // Selected as the view's /dataset selects: a named host no member
+        // claims is a 404 here too.
+        let mut selection = select(&snap, params.exact_hosts(), params.group.as_deref())
+            .map_err(|unclaimed| unclaimed_error(id, view, unclaimed))?;
+        if !host_filter.is_empty() {
+            let vars = snap.hostvars(&selection);
+            selection.retain(|host| vars.get(host).is_some_and(|v| host_filter.matches(host, v)));
+        }
+        selection.sort_unstable();
+        selection.dedup();
+        selection.into_iter().map(str::to_string).collect()
+    };
 
-    HostList {
+    Ok(HostList {
         source_id: id.to_string(),
         total_hosts: hosts.len(),
         hosts,
-    }
+    })
 }
 
 // One line of GET /api/v1/sources.
@@ -642,7 +710,8 @@ struct ViewDatasetPage<'a> {
     limit: Option<usize>,
     returned: usize,
     hostvars: HashMap<&'a str, Cow<'a, HostVars>>,
-    groups: BTreeMap<&'a str, PageGroup<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<BTreeMap<&'a str, PageGroup<'a>>>,
 }
 
 // A view's group on a filtered page: MergedGroup's three keys, with

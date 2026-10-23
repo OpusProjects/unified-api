@@ -65,6 +65,7 @@ impl Modify for SecurityAddon {
         http::detail::Gathering,
         http::sources::GroupInfo,
         http::sources::HostList,
+        http::sources::GroupsMode,
         http::sources::HostStatus,
         http::sources::SourceStatus,
         http::sources::SyncHealthInfo,

@@ -2405,3 +2405,156 @@ async fn builtin_endpoint_names_a_renamed_setting_in_a_request() {
     );
     assert!(body.contains("os=<value>"), "body was: {}", body);
 }
+
+// A source with nested hostvars and nested groups, for dotted paths and
+// `groups=`: three hosts in two groups, both under `dcs`, itself under
+// `everything`, and a group var that is an object.
+fn app_with_nested_data() -> axum::Router {
+    let (app, state) = unified_api::AppBuilder::new().build_with_state();
+    let dataset: unified_api::domain::dataset::Dataset = serde_json::from_value(serde_json::json!({
+        "hostvars": {
+            "a1.dc": {"os": "linux", "mon": {"name": "a1", "status": "UP", "services": [{"name": "Ping"}]}},
+            "a2.dc": {"os": "linux", "mon": {"name": "a2", "status": "UP", "services": []}},
+            "b1.dc": {"os": "linux", "mon": {"name": "b1", "status": "DOWN", "services": []}}
+        },
+        "groups": {
+            "grp_a": {"hosts": ["a1.dc", "a2.dc"], "vars": {"mon": {"poller": "p1", "secret": "s"}}},
+            "grp_b": {"hosts": ["b1.dc"]},
+            "dcs": {"children": ["grp_a", "grp_b"]},
+            "everything": {"children": ["dcs"]}
+        }
+    }))
+    .unwrap();
+    state.cache.set(
+        "src-nested",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 3600),
+    );
+    app
+}
+
+async fn get_json(path: &str) -> (StatusCode, serde_json::Value) {
+    let (status, body) = get(app_with_nested_data(), path).await;
+    let json = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+#[tokio::test]
+async fn dataset_groups_matching_keeps_the_pages_groups_and_their_parents() {
+    let (status, json) =
+        get_json("/api/v1/sources/src-nested/dataset?host=a1.dc&groups=matching").await;
+    assert_eq!(status, StatusCode::OK);
+    let groups = json["groups"].as_object().unwrap();
+    assert_eq!(
+        groups["grp_a"]["hosts"],
+        serde_json::json!(["a1.dc"]),
+        "members cut to the page"
+    );
+    assert_eq!(
+        groups["grp_a"]["vars"]["mon"]["poller"], "p1",
+        "group vars untouched"
+    );
+    assert_eq!(
+        groups["dcs"]["children"],
+        serde_json::json!(["grp_a"]),
+        "children cut to kept groups"
+    );
+    assert_eq!(
+        groups["everything"]["children"],
+        serde_json::json!(["dcs"]),
+        "kept through its child"
+    );
+    assert!(
+        !groups.contains_key("grp_b"),
+        "a group with no host on the page goes"
+    );
+}
+
+#[tokio::test]
+async fn dataset_groups_default_is_all_and_none_drops_the_key() {
+    let (_, json) = get_json("/api/v1/sources/src-nested/dataset?host=a1.dc").await;
+    assert_eq!(
+        json["groups"]["grp_b"]["hosts"],
+        serde_json::json!(["b1.dc"]),
+        "default unchanged: every group in full"
+    );
+    assert_eq!(
+        json["groups"]["grp_a"]["hosts"].as_array().unwrap().len(),
+        2
+    );
+
+    let (status, json) =
+        get_json("/api/v1/sources/src-nested/dataset?host=a1.dc&groups=none").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json.get("groups").is_none(), "groups=none: no groups key");
+    assert!(json["hostvars"]["a1.dc"].is_object());
+
+    let (status, _) = get_json("/api/v1/sources/src-nested/dataset?groups=some").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "an unknown mode is refused"
+    );
+}
+
+#[tokio::test]
+async fn dataset_fields_and_exclude_fields_take_dotted_paths() {
+    let (_, json) =
+        get_json("/api/v1/sources/src-nested/dataset?host=a1.dc&fields=mon.name,mon.status").await;
+    assert_eq!(
+        json["hostvars"]["a1.dc"],
+        serde_json::json!({"mon": {"name": "a1", "status": "UP"}})
+    );
+
+    // exclude_fields reaches group vars too, path by path
+    let (_, json) = get_json(
+        "/api/v1/sources/src-nested/dataset?host=a1.dc&exclude_fields=mon.services,mon.secret",
+    )
+    .await;
+    assert_eq!(
+        json["hostvars"]["a1.dc"]["mon"],
+        serde_json::json!({"name": "a1", "status": "UP"})
+    );
+    assert_eq!(
+        json["groups"]["grp_a"]["vars"],
+        serde_json::json!({"mon": {"poller": "p1"}})
+    );
+}
+
+#[tokio::test]
+async fn dataset_filter_takes_dotted_keys() {
+    let (_, json) =
+        get_json("/api/v1/sources/src-nested/dataset?filter=mon.status=DOWN&fields=mon.name").await;
+    assert_eq!(json["total_hosts"], 1);
+    assert_eq!(json["hostvars"]["b1.dc"]["mon"]["name"], "b1");
+    // a path into a list finds nothing, so `key=` (missing) matches every host
+    let (_, json) = get_json("/api/v1/sources/src-nested/dataset?filter=mon.services.name=").await;
+    assert_eq!(json["total_hosts"], 3);
+}
+
+#[tokio::test]
+async fn hosts_route_takes_the_dataset_selectors() {
+    let names = |json: &serde_json::Value| json["hosts"].clone();
+    let (_, json) = get_json("/api/v1/sources/src-nested/hosts?filter=mon.status=UP").await;
+    assert_eq!(names(&json), serde_json::json!(["a1.dc", "a2.dc"]));
+    assert_eq!(json["total_hosts"], 2);
+    let (_, json) = get_json("/api/v1/sources/src-nested/hosts?group=grp_b").await;
+    assert_eq!(names(&json), serde_json::json!(["b1.dc"]));
+    let (_, json) = get_json("/api/v1/sources/src-nested/hosts?host=A*").await;
+    assert_eq!(
+        names(&json),
+        serde_json::json!(["a1.dc", "a2.dc"]),
+        "patterns, case-insensitive"
+    );
+    let (_, json) =
+        get_json("/api/v1/sources/src-nested/hosts?host=a2.dc,b1.dc&filter=mon.status=UP").await;
+    assert_eq!(
+        names(&json),
+        serde_json::json!(["a2.dc"]),
+        "selectors are ANDed"
+    );
+    let (_, json) = get_json("/api/v1/sources/src-nested/hosts").await;
+    assert_eq!(json["total_hosts"], 3, "no selector: every host, as before");
+    let (status, json) = get_json("/api/v1/sources/src-nested/hosts?filter=mon.status").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(json["error"].as_str().unwrap().contains("no operator"));
+}

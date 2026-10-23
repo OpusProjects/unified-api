@@ -307,7 +307,7 @@ ep-ansible-full:
   source_ids: ["src-section9", "src-infra"]
   output: ansible                   # builtins: ansible, json, csv
   config:
-    filter_datacenter: "section9"   # filters and csv columns (see docs/endpoints.md)
+    filter: "datacenter=section9"   # host, group, filter, fields, exclude_fields (see docs/endpoints.md)
 
 # A constructed inventory: merge everything, return only the hosts one source
 # has — the others still enrich them and still group them. Optional; a limit

@@ -25,11 +25,15 @@ import sys
 config = json.loads(os.environ.get("ENDPOINT_CONFIG", "{}"))
 params = json.loads(os.environ.get("ENDPOINT_PARAMS", "{}"))
 
-# Params override config — dynamic beats static
-filter_datacenter = params.get("filter_datacenter", config.get("filter_datacenter", ""))
-filter_os = params.get("filter_os", config.get("filter_os", ""))
-filter_group = params.get("filter_group", config.get("filter_group", ""))
-exclude_vars = params.get("exclude_vars", config.get("exclude_vars", "")).split(",") if params.get("exclude_vars", config.get("exclude_vars", "")) else []
+# Params override config — dynamic beats static. The same names as the
+# builtin transformers; this sample implements only `key=value` conditions in
+# `filter`, which is all the tests need.
+def setting(name):
+    return params.get(name, config.get(name, ""))
+
+filter_conditions = [c.split("=", 1) for c in setting("filter").split(";") if "=" in c]
+group_filter = setting("group")
+exclude_fields = [f for f in setting("exclude_fields").split(",") if f.strip()]
 
 datasets = json.load(sys.stdin)
 
@@ -66,21 +70,15 @@ for source_id, dataset in datasets.items():
             merged_groups[group_name]["vars"].update(group["vars"])
 
 # Apply filters
-if filter_datacenter:
+for key, value in filter_conditions:
     merged_hostvars = {
         h: v for h, v in merged_hostvars.items()
-        if v.get("datacenter") == filter_datacenter
+        if str(v.get(key.strip(), "")) == value.strip()
     }
 
-if filter_os:
-    merged_hostvars = {
-        h: v for h, v in merged_hostvars.items()
-        if v.get("os") == filter_os
-    }
-
-if filter_group:
+if group_filter:
     allowed_hosts = set()
-    for g in filter_group.split(","):
+    for g in group_filter.split(","):
         g = g.strip()
         if g in merged_groups:
             allowed_hosts.update(merged_groups[g].get("hosts", []))
@@ -90,9 +88,9 @@ if filter_group:
     }
 
 # Strip vars the consumer doesn't want
-if exclude_vars:
+if exclude_fields:
     for hostname in merged_hostvars:
-        for var in exclude_vars:
+        for var in exclude_fields:
             merged_hostvars[hostname].pop(var.strip(), None)
 
 # Filter groups to only include hosts that passed the filters

@@ -107,10 +107,10 @@ Reading cached inventory: what is configured, how fresh it is, and the datasets 
 | Route | Meaning |
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health, then every configured [view](views.md) (`kind: "view"`) |
-| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=`; `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
+| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=&filter=&fields=&exclude_fields=` — the same parameters as the [builtin endpoints](endpoints.md#builtin-transformers); `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
 | `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
 | `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
-| `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; filter with `?host=` or `?group=`. `total_hosts` counts the whole source, `returned` this response |
+| `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; `?host=` names hosts, `?group=` any of several groups, ANDed. `total_hosts` counts the whole source, `returned` this response |
 | `GET /api/v1/sources/{id}/scope` | The ownership scope this source advertises — config-derived (an explicit `advertise_scope`, an SSH source's `hosts_from_source` pattern, or a view's member-ownership union), so it answers before anything has synced. `declared: false` = no claim |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` (comma-separated list) or `?group=y` scope the sync; `&refresh_origin=true` makes a federated source's origin re-gather first — see [on-demand refresh](on-demand-refresh.md) |
 | `PUT /api/v1/sources/{id}/hosts/{hostname}` | Upsert one host's vars in the cache (body: JSON object) |
@@ -228,8 +228,8 @@ cached. `host_count` counts unique members.
 
 Without query parameters, `/dataset` returns the **raw Dataset** — the exact
 shape consumers parse, unchanged. That is a lot of JSON for an enterprise
-inventory (1000 hosts ≈ 8-10MB), so add any of `limit`, `offset`, `host` or
-`group` and the response becomes a paginated envelope instead:
+inventory (1000 hosts ≈ 8-10MB), so add any of `limit`, `offset`, `host`,
+`group`, `filter`, `fields` or `exclude_fields` and the response becomes a paginated envelope instead:
 
 ```
 GET /api/v1/sources/src-d42/dataset?limit=50&offset=100
@@ -251,6 +251,27 @@ GET /api/v1/sources/src-d42/dataset?group=linux&limit=50
 `host=` returns a single host, `group=` restricts to that group's members
 (and returns only that group). Group membership lists are always included —
 they're tiny next to the hostvars, which carry the facts.
+
+`host=` also takes **patterns**: with a `*` or `?` anywhere in the list,
+every entry is matched case-insensitively (`host=*.aa1.pqe,web0?`). A
+pattern only selects — matching nothing is an empty result, never a view's
+404 for an unclaimed host — and `refresh=true` refuses it with a `400`,
+because one read could otherwise gather hundreds of hosts.
+
+`group=` takes several groups (a host in any of them), and `filter=`
+(conditions on hostvars, `;`-separated) narrows the hosts too. `host`,
+`group` and `filter` are ANDed and apply before paging, so `total_hosts`
+counts the matches — the condition syntax is in
+[endpoints: filtering by hostvars](endpoints.md#filtering-by-hostvars).
+`fields=` keeps only some hostvars and `exclude_fields=` drops some, from
+host and group vars alike.
+Combine them with `fields=` to fetch a few facts of the matching hosts only:
+
+```
+GET /api/v1/sources/src-vmware/dataset?filter=vmware_power_state=poweredOff&fields=vmware_vcenter,vmware_num_cpu
+```
+
+A malformed `filter` answers `400` with the condition named.
 
 An unmatched filter is an **empty result**, not a `404`: a filter that
 matches nothing is an empty collection, not a missing resource. This matters
@@ -340,10 +361,10 @@ The optional JSON body is passed to the script as dynamic parameters
 ```bash
 curl -X POST localhost:8182/api/v1/endpoints/ep-ansible-full \
      -H 'Content-Type: application/json' \
-     -d '{"filter_os": "OracleLinux"}'
+     -d '{"filter": "os=OracleLinux"}'
 
 # Same run, reachable by anything that can only fetch a URL
-curl 'localhost:8182/api/v1/endpoints/ep-ansible-full?filter_os=OracleLinux'
+curl 'localhost:8182/api/v1/endpoints/ep-ansible-full?filter=os=OracleLinux'
 ```
 
 Rendering an inventory is a read, so `GET` works too — for browsers, proxy

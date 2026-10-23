@@ -2185,3 +2185,223 @@ async fn enriching_group_vars_invalidates_the_cached_serialization() {
         "the route is expected to send an ETag"
     );
 }
+
+// =========================================================================
+// host patterns and filter: select hosts by name pattern and by hostvar
+// conditions, on /dataset and on the builtin endpoints, without the caller
+// downloading the whole inventory to filter it itself.
+// =========================================================================
+
+#[tokio::test]
+async fn dataset_filters_by_name_pattern_and_hostvars_before_paging() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=*.SECTION9.*",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 1, "total_hosts counts the matches");
+    assert!(json["hostvars"]["motoko.section9.net"].is_object());
+
+    // Conditions are ANDed; `~` is a case-insensitive contains.
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?filter=os=OracleLinux;role~MAGI&fields=role",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 1);
+    assert_eq!(
+        json["hostvars"]["melchior.seele.net"]["role"],
+        "magi-system"
+    );
+    assert!(json["hostvars"]["melchior.seele.net"].get("os").is_none());
+
+    // `key=` selects hosts without that var: none here.
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?filter=role=",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 0);
+}
+
+#[tokio::test]
+async fn dataset_malformed_filter_is_a_400_naming_it() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?filter=role",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("no operator"), "body was: {}", body);
+}
+
+fn app_with_json_endpoint() -> axum::Router {
+    use std::collections::HashMap;
+    use unified_api::domain::endpoint::{OutputEndpoint, OutputFormat};
+
+    let endpoints = HashMap::from([(
+        "ep-search".to_string(),
+        OutputEndpoint {
+            name: "Search".to_string(),
+            source_ids: vec!["src-demo".to_string()],
+            output: Some(OutputFormat::Json),
+            script_path: None,
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            limit: None,
+            timeout_seconds: None,
+        },
+    )]);
+    let (app, state) = unified_api::AppBuilder::new()
+        .endpoints(endpoints)
+        .build_with_state();
+    let dataset: unified_api::domain::dataset::Dataset = serde_json::from_str(
+        r#"{"hostvars": {
+              "vm1.aa1.pqe": {"power": "poweredOff", "mem_mb": 16384, "patched": "2026-05-01"},
+              "vm2.aa1.pqe": {"power": "poweredOn", "mem_mb": 4096, "patched": "2026-09-01"},
+              "vm3.dc4.pqe": {"power": "poweredOff", "mem_mb": 8192}
+            }, "groups": {}}"#,
+    )
+    .unwrap();
+    state.cache.set(
+        "src-demo",
+        unified_api::domain::cache_entry::CacheEntry::new(dataset, 3600),
+    );
+    app
+}
+
+#[tokio::test]
+async fn json_endpoint_filters_on_request_and_keeps_only_the_fields_asked() {
+    let (status, body) = get(
+        app_with_json_endpoint(),
+        "/api/v1/endpoints/ep-search?host=*.aa1.pqe&filter=power=poweredOff;mem_mb%3E%3D8192&fields=mem_mb",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body was: {}", body);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hosts = json["hostvars"].as_object().unwrap();
+    assert_eq!(hosts.len(), 1, "body was: {}", body);
+    assert_eq!(
+        json["hostvars"]["vm1.aa1.pqe"],
+        serde_json::json!({"mem_mb": 16384})
+    );
+}
+
+#[tokio::test]
+async fn json_endpoint_takes_filter_as_a_list_in_a_post_body() {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/endpoints/ep-search")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"filter": ["patched<2026-07-01"], "fields": "patched"}"#,
+        ))
+        .unwrap();
+    let response = app_with_json_endpoint().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // vm3 has no `patched`: an ordering against nothing is false, so it is out.
+    assert_eq!(
+        json["hostvars"],
+        serde_json::json!({"vm1.aa1.pqe": {"patched": "2026-05-01"}})
+    );
+}
+
+#[tokio::test]
+async fn builtin_endpoint_malformed_filter_is_a_400_not_an_empty_inventory() {
+    let (status, body) = get(
+        app_with_json_endpoint(),
+        "/api/v1/endpoints/ep-search?filter=%3Dx",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("no key"), "body was: {}", body);
+}
+
+// A pattern in host= selects; it cannot also name hosts to refresh, because
+// one read could then gather hundreds of hosts.
+#[tokio::test]
+async fn dataset_host_pattern_refuses_refresh_and_an_unmatched_one_is_empty() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=*.seele.net&refresh=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("exact host names"), "body was: {}", body);
+
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=nothing*",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 0);
+}
+
+// The selectors are ANDed, `group` takes several names, and exclude_fields
+// strips a var from hosts and from group vars alike.
+#[tokio::test]
+async fn dataset_selectors_are_anded_and_exclude_fields_reaches_groups() {
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?group=section9,seele",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["total_hosts"], 2, "a host in ANY of the groups");
+
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?host=motoko.section9.net&group=seele",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        json["total_hosts"], 0,
+        "host AND group: motoko is not in seele"
+    );
+
+    let (_, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/dataset?group=section9&exclude_fields=ansible_host,ntp_server",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let motoko = &json["hostvars"]["motoko.section9.net"];
+    assert!(motoko.get("ansible_host").is_none() && motoko["role"] == "commander");
+    assert!(
+        json["groups"]["section9"]["vars"]
+            .get("ntp_server")
+            .is_none()
+    );
+    assert!(
+        json["groups"].get("seele").is_none(),
+        "only the groups asked for"
+    );
+}
+
+// A setting renamed in 0.32, sent in a request, is named rather than ignored:
+// ignoring it would hand the caller the whole inventory.
+#[tokio::test]
+async fn builtin_endpoint_names_a_renamed_setting_in_a_request() {
+    let (status, body) = get(
+        app_with_json_endpoint(),
+        "/api/v1/endpoints/ep-search?filter_os=linux",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("'filter_os' was renamed in 0.32"),
+        "body was: {}",
+        body
+    );
+    assert!(body.contains("os=<value>"), "body was: {}", body);
+}

@@ -5,8 +5,9 @@ use std::path::Path;
 
 use crate::domain::api_key::{ApiKeyDef, ApiKeyRole};
 use crate::domain::credential::Credential;
-use crate::domain::endpoint::OutputEndpoint;
+use crate::domain::endpoint::{BUILTIN_SETTINGS, OutputEndpoint, renamed_setting};
 use crate::domain::enricher::Enricher;
+use crate::domain::host_filter::HostFilter;
 use crate::domain::project::GitProject;
 use crate::domain::source::Source;
 use crate::domain::view::View;
@@ -427,6 +428,41 @@ impl AppConfig {
                          — a builtin runs in-process, not under a script timeout",
                         id
                     ));
+                }
+                // A builtin reads exactly BUILTIN_SETTINGS; any other key in its
+                // config would be silently ignored, which is how a typo or a name
+                // from before 0.32 ends up serving an unfiltered inventory.
+                let mut keys: Vec<&String> = endpoint.config.keys().collect();
+                keys.sort();
+                for key in keys {
+                    if BUILTIN_SETTINGS.contains(&key.as_str()) {
+                        continue;
+                    }
+                    let hint = renamed_setting(key)
+                        .map(|new| format!(" — it is called {} now", new))
+                        .unwrap_or_default();
+                    errors.push(format!(
+                        "Endpoint '{}' config has unknown setting '{}'{} (a builtin understands: {})",
+                        id,
+                        key,
+                        hint,
+                        BUILTIN_SETTINGS.join(", ")
+                    ));
+                }
+                // A static filter is checked here too, so a malformed one fails
+                // the load instead of every render.
+                let host = endpoint
+                    .config
+                    .get("host")
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let filter = endpoint
+                    .config
+                    .get("filter")
+                    .map(String::as_str)
+                    .unwrap_or("");
+                if let Err(e) = HostFilter::parse(host, filter) {
+                    errors.push(format!("Endpoint '{}' config: {}", id, e));
                 }
             }
             for source_id in &endpoint.source_ids {
@@ -885,7 +921,13 @@ fn load_yaml_file<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(path)?;
-    let parsed = serde_saphyr::from_str(&contents)?;
+    // No source snippet in errors: a config file can hold a secret, and the
+    // error goes to the log. Only `true`/`false` are booleans, as in 0.31.
+    let options = serde_saphyr::options! {
+        with_snippet: false,
+        strict_booleans: true,
+    };
+    let parsed = serde_saphyr::from_str_with_options(&contents, options)?;
     Ok(parsed)
 }
 
@@ -1112,6 +1154,59 @@ mod tests {
             .expect("an endpoint with both output and script_path must fail")
             .to_string();
         assert!(err.contains("choose one"), "{}", err);
+    }
+
+    #[test]
+    fn builtin_endpoint_config_takes_only_the_shared_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-ok:\n  name: \"Ok\"\n  output: json\n  config:\n    host: \"*.aa1.pqe\"\n    group: \"linux\"\n    filter: \"os=OracleLinux\"\n    fields: \"os\"\n    exclude_fields: \"secret\"\n",
+        )
+        .unwrap();
+        load_config(dir.path().to_str().unwrap()).expect("the five shared settings must validate");
+
+        // A name from before 0.32 fails naming what it is called now; an
+        // unknown key fails listing what a builtin understands.
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-old:\n  name: \"Old\"\n  output: ansible\n  config:\n    filter_os: \"OracleLinux\"\n    colour: \"red\"\n",
+        )
+        .unwrap();
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("the load must fail")
+            .to_string();
+        assert!(
+            err.contains("'filter_os' — it is called filter: \"os=<value>\" now"),
+            "{err}"
+        );
+        assert!(
+            err.contains(
+                "'colour' (a builtin understands: host, group, filter, fields, exclude_fields)"
+            ),
+            "{err}"
+        );
+
+        // A malformed static filter fails the load, not every render.
+        fs::write(
+            dir.path().join("endpoints.yaml"),
+            "ep-bad:\n  name: \"Bad\"\n  output: csv\n  config:\n    filter: \"os\"\n",
+        )
+        .unwrap();
+        let err = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("the load must fail")
+            .to_string();
+        assert!(
+            err.contains("Endpoint 'ep-bad' config: filter condition 'os' has no operator"),
+            "{err}"
+        );
     }
 
     #[test]

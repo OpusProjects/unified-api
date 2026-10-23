@@ -83,6 +83,7 @@ pub async fn list_endpoints(
     request_body(content = Object, description = "Dynamic parameters for the endpoint script (optional)"),
     responses(
         (status = 200, description = "Transformed output from the endpoint script"),
+        (status = 400, description = "A builtin's host pattern or filter condition is malformed, or a setting renamed in 0.32 is used; the body names it", body = ErrorBody),
         (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
         (status = 404, description = "Endpoint not configured", body = ErrorBody),
         (status = 500, description = "The transformer failed; the body carries its error", body = ErrorBody),
@@ -110,6 +111,7 @@ pub async fn run_endpoint(
     ),
     responses(
         (status = 200, description = "Transformed output from the endpoint script. Query parameters become the endpoint's dynamic parameters, all as strings"),
+        (status = 400, description = "A builtin's host pattern or filter condition is malformed, or a setting renamed in 0.32 is used; the body names it", body = ErrorBody),
         (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
         (status = 404, description = "Endpoint not configured", body = ErrorBody),
         (status = 500, description = "The transformer failed; the body carries its error", body = ErrorBody),
@@ -164,6 +166,14 @@ async fn execute_endpoint(
         .endpoints
         .get(&id)
         .ok_or_else(|| ApiError::not_found(format!("endpoint '{}' is not configured", id)))?;
+
+    // A builtin reads its settings itself, so a mistake in them is the
+    // caller's and answered as such, before any work (see check_params).
+    // A script interprets its parameters on its own terms and is not checked.
+    if endpoint.output.is_some() {
+        crate::application::output::check_params(&endpoint.config, &params)
+            .map_err(ApiError::bad_request)?;
+    }
 
     // Collect datasets from configured sources (Arc clones — shared with the
     // cache, not deep copies)

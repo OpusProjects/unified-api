@@ -9,14 +9,14 @@ ep-ansible-section9:
   source_ids: ["src-section9", "src-infra"]
   output: ansible
   config:
-    filter_datacenter: "section9"
+    filter: "datacenter=section9"
 
 ep-ansible-oraclelinux:
   name: "OracleLinux Hosts"
   source_ids: ["src-section9", "src-infra"]
   output: ansible
   config:
-    filter_os: "OracleLinux"
+    filter: "os=OracleLinux"
 
 # A constructed inventory: merge both sources, but return only the hosts the
 # inventory of record has. src-infra still contributes its variables and its

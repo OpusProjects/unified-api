@@ -30,7 +30,7 @@ ep-awx-full:
   source_ids: ["src-d42", "src-fleet-facts", "src-inventory"]
   output: ansible                  # a builtin — or script_path: for a script
   config:                          # static transformer settings
-    filter_os: "OracleLinux"
+    filter: "os=OracleLinux"
 ```
 
 Endpoints read cached **sources**, never views — a view has no cache entry of
@@ -49,19 +49,57 @@ the survivors in the builtin's format.
 |---|---|---|
 | `output: ansible` | Ansible dynamic inventory — `_meta.hostvars` plus one key per group | `application/json` |
 | `output: json` | The merged, filtered inventory in the raw source shape (`hostvars` + `groups`) | `application/json` |
-| `output: csv` | One row per host, sorted by hostname — columns picked by `columns` | `text/csv` |
+| `output: csv` | One row per host, sorted by hostname — columns picked by `fields` | `text/csv` |
 
-Every setting lives in the endpoint's free-form `config:` map, and a request
+Every setting lives in the endpoint's `config:` map, and a request
 overrides any of them dynamically — a query parameter on GET, a body field on
-POST:
+POST. They are the **same parameters, with the same meaning, as
+[`GET /sources/{id}/dataset`](api.md#dataset-pagination)**, so one vocabulary
+covers both:
 
 | Setting | Effect |
 |---|---|
-| `filter_datacenter` | Keep hosts whose `datacenter` hostvar equals this |
-| `filter_os` | Keep hosts whose `os` hostvar equals this |
-| `filter_group` | Keep hosts in any of these groups (comma-separated) |
-| `exclude_vars` | Drop these variables (comma-separated) from every host **and every group** — a name left on a group would otherwise reach its members when the consumer resolves the inventory |
-| `columns` (csv only) | Hostvar names (comma-separated) to emit as columns, in order, after the leading `host` column. Default: every hostvar name seen, sorted |
+| `host` | Keep these hosts (comma-separated). `*` and `?` make an entry a pattern (`*.aa1.pqe`); matching is case-insensitive |
+| `group` | Keep hosts in **any** of these groups (comma-separated) |
+| `filter` | Keep hosts whose hostvars meet **every** condition — see [Filtering by hostvars](#filtering-by-hostvars) |
+| `fields` | Keep only these hostvars (comma-separated) on every host; group vars are untouched. csv: the columns, in this order, after the leading `host` column; default every hostvar name seen, sorted |
+| `exclude_fields` | Drop these hostvars (comma-separated) from every host **and every group** — a name left on a group would otherwise reach its members when the consumer resolves the inventory |
+
+`host`, `group` and `filter` are ANDed. A builtin understands exactly these
+five: any other key in its `config:` fails the load naming the key, and a name
+from before 0.32 (`filter_os`, `filter_datacenter`, `filter_group`, `columns`,
+`exclude_vars`) is answered with what it is called now — at load in a
+`config:`, and with a `400` in a request. A malformed static `filter` fails the
+load too.
+
+### Filtering by hostvars
+
+`filter` is a list of conditions on top-level hostvars, separated by `;` (a
+value may contain a comma). A POST body may send a JSON list of strings
+instead, one whole condition per entry. Every condition must hold:
+
+| Condition | Matches |
+|---|---|
+| `key=value` / `key!=value` | The var's text equals / differs. Strings as they are, numbers and booleans as JSON writes them (`16384`, `false`) |
+| `key~text` / `key!~text` | The var contains / doesn't contain `text`, case-insensitive |
+| `key>v`, `key>=v`, `key<v`, `key<=v` | Numeric when both sides are numbers, text otherwise — so ISO 8601 dates compare correctly. False when the var is missing |
+| `key=` / `key!=` | The var is missing, null, or an empty string, list or map / anything else |
+
+The old single-purpose filters are conditions now: `filter_os: X` is
+`filter: "os=X"`, `filter_datacenter: X` is `filter: "datacenter=X"`.
+
+```bash
+# Powered-off VMs in aa1 with at least 16 GiB, three fields only
+curl 'localhost:8182/api/v1/endpoints/ep-search?host=*.aa1.pqe&filter=vmware_power_state=poweredOff;vmware_memory_mb>=16384&fields=vmware_vcenter,vmware_num_cpu,vmware_memory_mb'
+
+# The same kind of search as a POST, with the conditions as a list
+curl -X POST localhost:8182/api/v1/endpoints/ep-search -H 'Content-Type: application/json' \
+     -d '{"filter": ["patching_last_patched<2026-07-01", "patching_patched=true"]}'
+```
+
+A malformed condition (no operator, no key, or no value after any operator but
+`=` and `!=`) answers **400** naming it, rather than an empty inventory that
+would read as "nothing matched". So does a setting that is not a string.
 
 A group that loses every host to a filter is dropped. **A `children` list is
 not rewritten when that happens**, so a parent can name a child group that the

@@ -6,8 +6,74 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **One set of selectors for `/dataset` and every builtin endpoint**:
+  `host`, `group`, `filter`, `fields` and `exclude_fields`, with the same
+  meaning on `GET /sources/{id}/dataset` (sources and views) and in a builtin
+  endpoint's `config:` or request (ansible, json, csv). A consumer learns one
+  vocabulary instead of two.
+  - **`filter`** selects hosts by their hostvars on the server: `;`-separated
+    conditions, all of which must hold — `key=value`, `!=`, `~` contains,
+    `!~`, and `>` `>=` `<` `<=`, numeric when both sides are numbers and text
+    otherwise, so ISO dates compare; `key=` matches a missing or empty var
+    (an empty string, list or map). A POST body may send it as a JSON list,
+    one whole condition per entry. A consumer that wanted "powered-off
+    VMs with 16 GiB or more" used to download the whole inventory and filter
+    it itself; now it asks for exactly that.
+  - **`host` takes patterns:** with `*` or `?`, every entry matches
+    case-insensitively (`host=*.aa1.pqe`). On `/dataset` a pattern only
+    selects — never a view's 404 for an unclaimed host — and `refresh=true`
+    refuses it with a `400`, since one read could otherwise gather hundreds
+    of hosts.
+  - **`group` takes several groups** on `/dataset` too (a host in any of them).
+  - **`exclude_fields` on `/dataset`**, stripping host and group vars alike,
+    and **`fields` on the json and ansible builtins**, as on `/dataset` and
+    csv: it keeps only the named hostvars.
+  - A malformed `filter` (no operator, no key, or `os~` with no value)
+    answers `400` naming the condition, never an empty result that would read
+    as "nothing matched"; a malformed static one fails the load. So does a
+    builtin setting sent as anything but a string. See
+    [docs/endpoints.md](docs/endpoints.md#builtin-transformers).
+
+### Changed
+
+- **Breaking (builtin endpoints that set `filter_os`, `filter_datacenter`,
+  `filter_group`, `columns` or `exclude_vars`):** those settings are gone,
+  replaced by the shared selectors — `filter: "os=X"`,
+  `filter: "datacenter=X"`, `group`, `fields`, `exclude_fields`. A builtin
+  now accepts only those five keys in its `config:`, and the load fails on
+  any other, naming what an old one is called now; a request that still
+  sends an old name gets a `400` naming the new one, rather than an
+  unfiltered inventory.
+- **Breaking (`/dataset` and `/status` callers that send both `host` and
+  `group`):** they are ANDed now, like every selector; `host` used to win and
+  `group` was ignored. `/status` takes several groups too, on sources and
+  views alike.
+- **YAML is read with `serde-saphyr` instead of `serde_yaml_ng`.**
+  `serde_yaml_ng` builds on `unsafe-libyaml`, which is unmaintained
+  (RUSTSEC-2024-0449) with no release that leaves it; `serde-saphyr` is a
+  pure-Rust YAML reader, and we only ever read YAML.
+  - **Static inventories** and their `group_vars`/`host_vars` files are read
+    on its parser by a converter that resolves scalars exactly as 0.31 did:
+    `yes`, `on` and `0644` stay text, `08001` is not a number. Checked on
+    1690 files (`pcd-ansible-inventory`, every instance config, the
+    examples): all read identically.
+  - One difference there: a local tag is dropped and its value kept, so
+    `!unsafe '{{ x }}'` reads as `{{ x }}`, not as `{"!unsafe": ...}`. An
+    inline `!vault` value fails the sync, as the docs always said; it used to
+    pass the ciphertext on.
+  - **Config files** keep their meaning (only `true`/`false` are booleans).
+    One looser case: a quoted number (`port: "80"`) now loads into a numeric
+    setting instead of failing.
+- **Dependencies:** `utoipa` 5.5 → 6.0, `russh` 0.63.2 → 0.64.1, `tokio`
+  1.53.1 → 1.53.3, `croner` 4.0.1, `sha2` 0.11.1, `serde_json` 1.0.154.
+
 ### Security
 
+- **A YAML error no longer prints the lines around the mistake**, only
+  where it is: in a config file or an inventory those lines can hold a
+  secret, and the error goes to the log and to `sync_health.last_error`.
 - **Clear 15 RustSec advisories** that had turned every PR red (`audit` and
   `deny`): `rustls` 0.23.45 → 0.23.46 (RUSTSEC-2026-0346 to 0349),
   `rustls-webpki` 0.103.15 → 0.103.16 (0382), `webpki-roots` 1.0.8 → 1.0.11
@@ -15,15 +81,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   0.4.5 (0385), and `zip` 8.6.0 → 9.0.5 (0367 to 0369, through
   `utoipa-swagger-ui` 10.0.1 → 10.0.2, a build dependency). Also off three
   yanked releases: `chacha20`, `der`, `wnaf`. Lockfile only.
-
-### Changed
-
-- **YAML is read with `serde-saphyr` instead of `serde_yaml_ng`.**
-  `serde_yaml_ng` builds on `unsafe-libyaml`, which is unmaintained
-  (RUSTSEC-2024-0449) with no release that leaves it; `serde-saphyr` is a
-  pure-Rust YAML reader, and we only ever read YAML. Nothing a config file or
-  a static inventory can say changes meaning: every production config and the
-  full ProQuest and CDI static inventories parse identically.
 
 ## [0.31.0] - 2026-09-17
 

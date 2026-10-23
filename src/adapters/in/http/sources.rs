@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use utoipa::{IntoParams, ToSchema};
 
@@ -19,6 +19,7 @@ use crate::adapters::r#in::http::views;
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
+use crate::domain::host_filter::HostFilter;
 use crate::domain::sync_health::SyncHealth;
 
 // Read from the sources cache: list, full dataset, and per-host status.
@@ -48,28 +49,84 @@ use crate::domain::sync_health::SyncHealth;
 // A filter matching nothing yields an empty selection, never an error: 404 on
 // these routes means the SOURCE is not in the cache, which both callers check
 // before getting here.
+// The non-empty, trimmed entries of a comma-separated parameter.
+pub(super) fn comma_names(raw: &str) -> impl Iterator<Item = &str> {
+    raw.split(',').map(str::trim).filter(|n| !n.is_empty())
+}
+
+// How the response shapes vars: on hosts, only `fields` when given, then
+// without `exclude_fields`; on groups, without `exclude_fields` — a var left
+// on a group reaches its members when the consumer resolves the inventory,
+// the same rule the builtin endpoints follow. Built once per request, and
+// borrowed through when neither is set, so the common read clones nothing.
+pub(super) struct VarShape<'p> {
+    keep: Option<HashSet<&'p str>>,
+    drop: HashSet<&'p str>,
+}
+
+impl<'p> VarShape<'p> {
+    pub(super) fn new(params: &'p DatasetParams) -> Self {
+        VarShape {
+            keep: params.fields.as_deref().map(|f| comma_names(f).collect()),
+            drop: params
+                .exclude_fields
+                .as_deref()
+                .map(|f| comma_names(f).collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    pub(super) fn host<'a>(&self, vars: &'a HostVars) -> Cow<'a, HostVars> {
+        if self.keep.is_none() && self.drop.is_empty() {
+            return Cow::Borrowed(vars);
+        }
+        Cow::Owned(
+            vars.iter()
+                .filter(|(key, _)| self.keep.as_ref().is_none_or(|k| k.contains(key.as_str())))
+                .filter(|(key, _)| !self.drop.contains(key.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
+    pub(super) fn group<'a>(&self, group: &'a Group) -> Cow<'a, Group> {
+        if self.drop.is_empty() {
+            return Cow::Borrowed(group);
+        }
+        let mut owned = group.clone();
+        if let Some(vars) = owned.vars.as_mut() {
+            vars.retain(|key, _| !self.drop.contains(key.as_str()));
+        }
+        Cow::Owned(owned)
+    }
+}
+
 fn resolve_hostnames<'a>(
     entry: &'a CacheEntry,
     host: Option<&str>,
     group: Option<&str>,
 ) -> Vec<&'a String> {
-    let mut hostnames: Vec<&String> = if let Some(host) = host {
-        host.split(',')
+    // `group` takes several names (a host in ANY of them), and `host` and
+    // `group` together are ANDed, like every other selector on this route.
+    let in_groups: Option<HashSet<&String>> = group.map(|groups| {
+        comma_names(groups)
+            .filter_map(|name| entry.dataset.groups.get(name))
+            .flat_map(|g| g.hosts.iter())
+            .collect()
+    });
+    let mut hostnames: Vec<&String> = match (host, &in_groups) {
+        (Some(host), _) => comma_names(host)
             .filter_map(|h| {
                 entry
                     .dataset
                     .hostvars
-                    .get_key_value(h.trim())
+                    .get_key_value(h)
                     .map(|(name, _)| name)
             })
-            .collect()
-    } else if let Some(group) = group {
-        match entry.dataset.groups.get(group) {
-            Some(g) => g.hosts.iter().collect(),
-            None => Vec::new(),
-        }
-    } else {
-        entry.dataset.hostvars.keys().collect()
+            .filter(|name| in_groups.as_ref().is_none_or(|set| set.contains(name)))
+            .collect(),
+        (None, Some(set)) => set.iter().copied().collect(),
+        (None, None) => entry.dataset.hostvars.keys().collect(),
     };
 
     hostnames.sort();
@@ -327,9 +384,13 @@ pub async fn list_cached_sources(
 // browser UIs like Swagger when rendered whole.
 #[derive(Deserialize, IntoParams)]
 pub struct DatasetParams {
-    /// Return only these hosts (comma-separated)
+    /// Return only these hosts (comma-separated names). With a `*` or `?`
+    /// anywhere in the list, every entry is a case-insensitive pattern
+    /// (`*.aa1.pqe`): an unmatched pattern is an empty result rather than a
+    /// 404 on a view, and `refresh=true` refuses patterns
     pub host: Option<String>,
-    /// Return only the hosts of this group
+    /// Return only the hosts of these groups (comma-separated, a host in any
+    /// of them); with `host`, both must hold. Only these groups are returned
     pub group: Option<String>,
     /// Max hosts to return (hosts are sorted by name for stable pages).
     /// Omitting it returns every host — Swagger prefills 50 from the example
@@ -344,6 +405,13 @@ pub struct DatasetParams {
     pub offset: Option<usize>,
     /// Return only these top-level hostvars keys (comma-separated)
     pub fields: Option<String>,
+    /// Drop these top-level hostvars keys (comma-separated), from hosts and groups
+    pub exclude_fields: Option<String>,
+    /// Keep only hosts whose hostvars meet every condition (`;`-separated):
+    /// `key<op>value` with op one of `=` `!=` `~` (contains) `!~` `>` `>=`
+    /// `<` `<=`. Orderings are numeric when both sides are numbers, text
+    /// otherwise (ISO dates compare). `key=` matches a missing or empty var.
+    pub filter: Option<String>,
     /// Bring the requested hosts up to date before answering, if the source's
     /// TTL says they are stale. Requires `host` and a source configured with
     /// `allow_on_demand_refresh`. A refresh that fails does not fail the read:
@@ -362,6 +430,45 @@ impl DatasetParams {
             && self.limit.is_none()
             && self.offset.is_none()
             && self.fields.is_none()
+            && self.exclude_fields.is_none()
+            && self.filter.is_none()
+    }
+
+    // `host` is either a list of exact names or, with a wildcard anywhere in
+    // it, a list of patterns. One parameter, two readings: exact names keep
+    // their routing (a view's 404 for an unclaimed host) and can be
+    // refreshed; patterns select, so they are matched like `filter`.
+    pub fn host_is_pattern(&self) -> bool {
+        self.host.as_deref().is_some_and(|h| h.contains(['*', '?']))
+    }
+
+    // The exact names to select by, or None when `host` is a pattern list
+    // (then the selection starts from the group, or the whole source).
+    pub fn exact_hosts(&self) -> Option<&str> {
+        if self.host_is_pattern() {
+            None
+        } else {
+            self.host.as_deref()
+        }
+    }
+
+    // The host filter these params describe: `host` when it holds patterns,
+    // and `filter`. A malformed condition is the caller's mistake,
+    // answered 400 with the condition named; so is asking to refresh hosts
+    // picked by a pattern.
+    pub fn host_filter(&self) -> Result<HostFilter, ApiError> {
+        if self.host_is_pattern() && self.refresh.unwrap_or(false) {
+            return Err(ApiError::bad_request(
+                "refresh=true needs exact host names: a pattern could gather hundreds of hosts from one read. POST the source's /sync for a wider refresh",
+            ));
+        }
+        let patterns = if self.host_is_pattern() {
+            self.host.as_deref().unwrap_or("")
+        } else {
+            ""
+        };
+        HostFilter::parse(patterns, self.filter.as_deref().unwrap_or(""))
+            .map_err(ApiError::bad_request)
     }
 }
 
@@ -382,9 +489,9 @@ const HEADER_REFRESHED_HOSTS: &str = "x-unified-api-refreshed-hosts";
         DatasetParams
     ),
     responses(
-        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With host/group/limit/offset/fields: a paginated envelope with total_hosts, offset, limit, hostvars and groups. The fields param filters hostvars to only the named top-level keys. With refresh=true the response also carries x-unified-api-refreshed (whether the refresh succeeded), x-unified-api-refreshed-hosts (which hosts were re-gathered) and, on failure, x-unified-api-refresh-error — the data is served either way."),
+        (status = 200, description = "Without query params: the raw Dataset (hostvars + groups), with an ETag header. With any of host/group/filter/fields/exclude_fields/limit/offset: a paginated envelope with total_hosts (the hosts every selector matched), offset, limit, hostvars and groups. host, group and filter select hosts and are ANDed; fields keeps only the named hostvars, exclude_fields drops the named vars from hosts and groups. A malformed filter, or a host pattern with refresh=true, is a 400. With refresh=true the response also carries x-unified-api-refreshed (whether the refresh succeeded), x-unified-api-refreshed-hosts (which hosts were re-gathered) and, on failure, x-unified-api-refresh-error — the data is served either way."),
         (status = 304, description = "If-None-Match matched the current ETag — nothing changed, no body"),
-        (status = 400, description = "refresh=true without ?host=: the hosts to refresh must be named", body = ErrorBody),
+        (status = 400, description = "refresh=true without ?host=: the hosts to refresh must be named; or a malformed `filter` condition, or refresh=true with a host pattern", body = ErrorBody),
         (status = 403, description = "API key not allowed to read this source, or refresh=true on a source without allow_on_demand_refresh (on a view, on the member that owns the named hosts)", body = ErrorBody),
         (status = 404, description = "Source not in cache. An unmatched host/group filter is an empty result, not a 404 — except on a view, where a NAMED host that no member claims is a 404, because the request cannot be routed at all", body = ErrorBody)
     )
@@ -410,6 +517,7 @@ pub async fn get_source_dataset(
     // The refresh runs BEFORE the entry is read and before any ETag is
     // computed: doing it after would answer a 304 for data the caller just
     // asked to have replaced.
+    let host_filter = params.host_filter()?;
     let refresh = if params.refresh.unwrap_or(false) {
         Some(refresh_before_reading(&state, &id, params.host.as_deref()).await?)
     } else {
@@ -480,6 +588,8 @@ pub async fn get_source_dataset(
         params.limit.hash(&mut hasher);
         params.offset.hash(&mut hasher);
         params.fields.hash(&mut hasher);
+        params.exclude_fields.hash(&mut hasher);
+        params.filter.hash(&mut hasher);
         // A refresh request and a plain one get distinct validators: a client
         // polling with refresh=true must not be handed a 304 that was minted
         // for a request that never went to the origin.
@@ -505,7 +615,16 @@ pub async fn get_source_dataset(
         .unwrap());
     }
 
-    let hostnames = resolve_hostnames(&entry, params.host.as_deref(), params.group.as_deref());
+    let mut hostnames = resolve_hostnames(&entry, params.exact_hosts(), params.group.as_deref());
+    if !host_filter.is_empty() {
+        hostnames.retain(|host| {
+            entry
+                .dataset
+                .hostvars
+                .get(*host)
+                .is_some_and(|vars| host_filter.matches(host, vars))
+        });
+    }
 
     let total_hosts = hostnames.len();
     let offset = params.offset.unwrap_or(0);
@@ -515,39 +634,25 @@ pub async fn get_source_dataset(
         .take(params.limit.unwrap_or(usize::MAX))
         .collect();
 
-    let field_set: Option<std::collections::HashSet<&str>> = params
-        .fields
-        .as_ref()
-        .map(|f| f.split(',').map(|s| s.trim()).collect());
-
+    let shape = VarShape::new(&params);
     let hostvars: HashMap<&String, Cow<HostVars>> = page
         .iter()
         .filter_map(|host| {
             let (k, v) = entry.dataset.hostvars.get_key_value(*host)?;
-            let vars = match &field_set {
-                Some(fields) => Cow::Owned(
-                    v.iter()
-                        .filter(|(key, _)| fields.contains(key.as_str()))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                ),
-                None => Cow::Borrowed(v),
-            };
-            Some((k, vars))
+            Some((k, shape.host(v)))
         })
         .collect();
 
-    // With a group filter only that group is returned; otherwise all groups
+    // With a group filter only those groups are returned; otherwise all groups
     // (membership lists are tiny next to hostvars, which carry the facts)
-    let groups: HashMap<&String, &Group> = match params.group {
-        Some(ref group) => entry
-            .dataset
-            .groups
-            .get_key_value(group)
-            .into_iter()
-            .collect(),
-        None => entry.dataset.groups.iter().collect(),
-    };
+    let wanted: Option<HashSet<&str>> = params.group.as_deref().map(|g| comma_names(g).collect());
+    let groups: HashMap<&String, Cow<Group>> = entry
+        .dataset
+        .groups
+        .iter()
+        .filter(|(name, _)| wanted.as_ref().is_none_or(|w| w.contains(name.as_str())))
+        .map(|(name, group)| (name, shape.group(group)))
+        .collect();
 
     // A borrowing struct serialized straight to bytes: no intermediate Value
     // tree (same reasoning as the plain path — a group filter can select most
@@ -560,7 +665,7 @@ pub async fn get_source_dataset(
         limit: Option<usize>,
         returned: usize,
         hostvars: HashMap<&'a String, Cow<'a, HostVars>>,
-        groups: HashMap<&'a String, &'a Group>,
+        groups: HashMap<&'a String, Cow<'a, Group>>,
     }
 
     let body = serde_json::to_vec(&DatasetPage {
@@ -702,9 +807,10 @@ pub async fn list_source_hosts(
 // Each Option<String> field appears as an optional parameter in Swagger
 #[derive(Deserialize, IntoParams)]
 pub struct StatusParams {
-    /// Filter by hostname, comma-separated (e.g. motoko.section9.net)
+    /// Only these hosts, comma-separated exact names (e.g. motoko.section9.net)
     pub host: Option<String>,
-    /// Filter by group name (e.g. magi)
+    /// Only the hosts of these groups, comma-separated, a host in any of them
+    /// (e.g. magi); with `host`, both must hold
     pub group: Option<String>,
 }
 

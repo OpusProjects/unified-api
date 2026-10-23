@@ -2,7 +2,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -11,10 +11,10 @@ use crate::AppState;
 use crate::adapters::r#in::http::error::ApiError;
 use crate::adapters::r#in::http::sources::{
     CachedSourceInfo, DatasetParams, GroupInfo, HostList, HostStatus, SourceStatus, StatusParams,
-    SyncHealthInfo, sanitize_header_value,
+    SyncHealthInfo, VarShape, comma_names, sanitize_header_value,
 };
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
-use crate::application::views::{MergedGroup, UnclaimedHosts, snapshot};
+use crate::application::views::{UnclaimedHosts, ViewSnapshot, snapshot};
 use crate::domain::dataset::HostVars;
 use crate::domain::view::View;
 
@@ -70,6 +70,7 @@ pub async fn dataset(
     // The refresh runs first and against a snapshot of its own: it writes into
     // a member's cache, so the snapshot that serves the response has to be
     // taken afterwards or it would answer with the data the refresh replaced.
+    let host_filter = params.host_filter()?;
     let refresh = if params.refresh.unwrap_or(false) {
         Some(refresh_before_reading(state, id, view, params.host.as_deref()).await?)
     } else {
@@ -90,9 +91,15 @@ pub async fn dataset(
     // before the conditional-request machinery, or `If-None-Match: *` would
     // answer 304 to a request the server cannot serve. The source routes check
     // the entry exists first for the same reason.
-    let selection = snap
-        .select(params.host.as_deref(), params.group.as_deref())
+    let mut selection = select(&snap, params.exact_hosts(), params.group.as_deref())
         .map_err(|unclaimed| unclaimed_error(id, view, unclaimed))?;
+
+    // Narrowed by name patterns and hostvars before pagination, so
+    // total_hosts counts the matches: the same order as on a source.
+    if !host_filter.is_empty() {
+        let vars = snap.hostvars(&selection);
+        selection.retain(|host| vars.get(host).is_some_and(|v| host_filter.matches(host, v)));
+    }
 
     // One validator for both the plain and the filtered shape, unlike a source,
     // whose plain path can derive a strong ETag from bytes it has already
@@ -108,6 +115,8 @@ pub async fn dataset(
         params.limit.hash(&mut hasher);
         params.offset.hash(&mut hasher);
         params.fields.hash(&mut hasher);
+        params.exclude_fields.hash(&mut hasher);
+        params.filter.hash(&mut hasher);
         params.refresh.hash(&mut hasher);
         format!("\"{:x}-{}\"", hasher.finish(), state.cache.generation())
     };
@@ -135,32 +144,47 @@ pub async fn dataset(
             .take(params.limit.unwrap_or(usize::MAX))
             .collect();
 
-        let field_set: Option<std::collections::HashSet<&str>> = params
-            .fields
-            .as_ref()
-            .map(|f| f.split(',').map(str::trim).collect());
-
+        let shape = VarShape::new(&params);
         let hostvars: HashMap<&str, Cow<HostVars>> = snap
             .hostvars(&page)
             .into_iter()
-            .map(|(host, vars)| {
-                let vars = match &field_set {
-                    Some(fields) => Cow::Owned(
-                        vars.iter()
-                            .filter(|(key, _)| fields.contains(key.as_str()))
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect(),
-                    ),
-                    None => Cow::Borrowed(vars),
-                };
-                (host, vars)
-            })
+            .map(|(host, vars)| (host, shape.host(vars)))
             .collect();
 
-        let mut groups = snap.groups();
-        if let Some(ref wanted) = params.group {
-            groups.retain(|name, _| *name == wanted.as_str());
-        }
+        let wanted: Option<HashSet<&str>> =
+            params.group.as_deref().map(|g| comma_names(g).collect());
+        let exclude: HashSet<&str> = params
+            .exclude_fields
+            .as_deref()
+            .map(|f| comma_names(f).collect())
+            .unwrap_or_default();
+        let groups: BTreeMap<&str, PageGroup> = snap
+            .groups()
+            .into_iter()
+            .filter(|(name, _)| wanted.as_ref().is_none_or(|w| w.contains(name)))
+            .map(|(name, group)| {
+                let vars = group.vars.map(|vars| {
+                    if exclude.is_empty() {
+                        Cow::Borrowed(vars)
+                    } else {
+                        Cow::Owned(
+                            vars.iter()
+                                .filter(|(key, _)| !exclude.contains(key.as_str()))
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
+                        )
+                    }
+                });
+                (
+                    name,
+                    PageGroup {
+                        hosts: group.hosts,
+                        children: group.children,
+                        vars,
+                    },
+                )
+            })
+            .collect();
 
         serde_json::to_vec(&ViewDatasetPage {
             source_id: id,
@@ -213,6 +237,39 @@ fn member_statuses(
 }
 
 // GET /api/v1/sources/{id}/status for a view.
+// `host` and `group` resolved as on a source: `group` takes several names (a
+// host in ANY of them), and the two together are ANDed. Each group is resolved
+// by the snapshot, which knows which member owns it; with no `host`, the
+// groups' members are the selection, so the whole view is never routed for a
+// group-only read.
+fn select<'a>(
+    snap: &'a ViewSnapshot<'a>,
+    host: Option<&str>,
+    group: Option<&str>,
+) -> Result<Vec<&'a str>, UnclaimedHosts> {
+    let Some(groups) = group else {
+        return snap.select(host, None);
+    };
+    let mut in_groups: Vec<&str> = Vec::new();
+    for name in comma_names(groups) {
+        if let Ok(members) = snap.select(None, Some(name)) {
+            in_groups.extend(members);
+        }
+    }
+    if host.is_none() {
+        // What the whole-view read would have kept of these: hosts the view
+        // serves, not every name a member's group happens to list.
+        in_groups.retain(|h| snap.serves(h));
+        in_groups.sort_unstable();
+        in_groups.dedup();
+        return Ok(in_groups);
+    }
+    let in_groups: HashSet<&str> = in_groups.into_iter().collect();
+    let mut selection = snap.select(host, None)?;
+    selection.retain(|h| in_groups.contains(h));
+    Ok(selection)
+}
+
 pub fn status(
     state: &Arc<AppState>,
     id: &str,
@@ -228,8 +285,7 @@ pub fn status(
         view,
     );
 
-    let selection = snap
-        .select(params.host.as_deref(), params.group.as_deref())
+    let selection = select(&snap, params.host.as_deref(), params.group.as_deref())
         .map_err(|unclaimed| unclaimed_error(id, view, unclaimed))?;
 
     // Group overrides resolved once per member, not once per host — the same
@@ -586,5 +642,14 @@ struct ViewDatasetPage<'a> {
     limit: Option<usize>,
     returned: usize,
     hostvars: HashMap<&'a str, Cow<'a, HostVars>>,
-    groups: BTreeMap<&'a str, MergedGroup<'a>>,
+    groups: BTreeMap<&'a str, PageGroup<'a>>,
+}
+
+// A view's group on a filtered page: MergedGroup's three keys, with
+// `exclude_fields` applied to its vars, as on a source.
+#[derive(Serialize)]
+struct PageGroup<'a> {
+    hosts: Vec<&'a str>,
+    children: Vec<&'a str>,
+    vars: Option<Cow<'a, HostVars>>,
 }

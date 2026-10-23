@@ -1009,7 +1009,7 @@ mod tests {
     // sync lands, health records. Every-second cron so real time stays short.
     #[tokio::test]
     async fn a_cron_scheduled_source_syncs_into_the_cache() {
-        let source: crate::domain::source::Source = serde_yaml_ng::from_str(concat!(
+        let source: crate::domain::source::Source = serde_saphyr::from_str(concat!(
             "name: cron\n",
             "project_id: p\n",
             "script_path: \"tests/adapters/out/connectors/inventory.py\"\n",
@@ -1061,7 +1061,7 @@ mod tests {
     // process is involved — the test exercises the cadence, not the enricher.
     #[tokio::test]
     async fn a_cron_scheduled_enricher_runs_and_records_health() {
-        let enricher: crate::domain::enricher::Enricher = serde_yaml_ng::from_str(concat!(
+        let enricher: crate::domain::enricher::Enricher = serde_saphyr::from_str(concat!(
             "name: cron-merge\n",
             "target_id: src-target\n",
             "source_id: src-extra\n",
@@ -1168,7 +1168,7 @@ mod tests {
     // waiting on a tick, which is where a task spends almost all of its life.
     #[tokio::test(start_paused = true)]
     async fn scheduler_tasks_drain_on_the_shutdown_signal() {
-        let source: crate::domain::source::Source = serde_yaml_ng::from_str(
+        let source: crate::domain::source::Source = serde_saphyr::from_str(
             "name: test\nproject_id: p\nscript_path: does-not-exist.py\nschedule: null\nttl_seconds: 60\nsync_interval_seconds: 3600\n",
         )
         .expect("source fixture");
@@ -1195,7 +1195,7 @@ mod tests {
     // drains. Real time — a 1-second interval plus sub-second jitter.
     #[tokio::test]
     async fn a_scheduled_enricher_runs_and_records_health() {
-        let enricher: crate::domain::enricher::Enricher = serde_yaml_ng::from_str(
+        let enricher: crate::domain::enricher::Enricher = serde_saphyr::from_str(
             "name: e\ntarget_id: src-t\nsource_id: src-s\nfields: [\"f\"]\nsync_interval_seconds: 1\n",
         )
         .expect("enricher fixture");
@@ -1271,7 +1271,7 @@ mod tests {
     // the first pull lands at the interval, health is recorded, drain works.
     #[tokio::test]
     async fn a_scheduled_project_pull_runs_and_records_health() {
-        let project: GitProject = serde_yaml_ng::from_str(
+        let project: GitProject = serde_saphyr::from_str(
             "name: p\ngit_url: \"https://example.com/r.git\"\nsync_interval_seconds: 1\n",
         )
         .expect("project fixture");
@@ -1316,7 +1316,7 @@ mod tests {
     // still lands and records health.
     #[tokio::test]
     async fn a_cron_scheduled_project_pull_runs_and_records_health() {
-        let project: GitProject = serde_yaml_ng::from_str(concat!(
+        let project: GitProject = serde_saphyr::from_str(concat!(
             "name: p\n",
             "git_url: \"https://example.com/r.git\"\n",
             "schedule: \"* * * * * *\"\n",
@@ -1365,7 +1365,7 @@ mod tests {
     #[tokio::test]
     async fn a_reload_replaces_the_running_task_generation() {
         fn source_syncing_every_second() -> crate::domain::source::Source {
-            serde_yaml_ng::from_str(concat!(
+            serde_saphyr::from_str(concat!(
                 "name: fast\n",
                 "project_id: p\n",
                 "script_path: \"tests/adapters/out/connectors/inventory.py\"\n",

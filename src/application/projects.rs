@@ -166,7 +166,7 @@ mod tests {
     }
 
     fn project() -> GitProject {
-        serde_yaml_ng::from_str("name: Test\ngit_url: \"https://example.com/repo.git\"\n")
+        serde_saphyr::from_str("name: Test\ngit_url: \"https://example.com/repo.git\"\n")
             .expect("project fixture")
     }
 
@@ -220,7 +220,7 @@ mod tests {
         let secrets = MockSecrets::new();
         let health = SyncHealthRegistry::new();
 
-        let project: GitProject = serde_yaml_ng::from_str(
+        let project: GitProject = serde_saphyr::from_str(
             "name: Test\ngit_url: \"https://example.com/repo.git\"\ntimeout_seconds: 30\n",
         )
         .expect("project fixture");
@@ -254,7 +254,7 @@ mod tests {
         let health = SyncHealthRegistry::new();
         let git = StubGit { fail_with: None };
 
-        let project: GitProject = serde_yaml_ng::from_str(
+        let project: GitProject = serde_saphyr::from_str(
             "name: Test\ngit_url: \"https://example.com/repo.git\"\ncredential_id: \"cred-ghost\"\n",
         )
         .expect("project fixture");
@@ -315,7 +315,7 @@ mod tests {
             fail_with: Some("pip could not find torch==999".to_string()),
             ..Default::default()
         };
-        let project: GitProject = serde_yaml_ng::from_str(
+        let project: GitProject = serde_saphyr::from_str(
             "name: Test\ngit_url: \"https://example.com/repo.git\"\npython_venv: true\n",
         )
         .expect("project fixture");

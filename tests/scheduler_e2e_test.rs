@@ -23,7 +23,7 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
 
 #[tokio::test]
 async fn a_scheduled_source_syncs_into_the_cache_and_readyz_follows() {
-    let source: unified_api::domain::source::Source = serde_yaml_ng::from_str(concat!(
+    let source: unified_api::domain::source::Source = serde_saphyr::from_str(concat!(
         "name: Scheduled\n",
         "project_id: p\n",
         // The sample connector the shipped config uses — real process spawn

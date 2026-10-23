@@ -40,7 +40,7 @@ async fn make_origin() -> (tempfile::TempDir, String) {
 fn project(url: &str) -> GitProject {
     // Building the domain type from YAML keeps the test honest about what
     // the config file actually looks like.
-    serde_yaml_ng::from_str(&format!("name: Test\ngit_url: \"{}\"\n", url)).unwrap()
+    serde_saphyr::from_str(&format!("name: Test\ngit_url: \"{}\"\n", url)).unwrap()
 }
 
 #[tokio::test]

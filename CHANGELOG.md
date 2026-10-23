@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Clear 15 RustSec advisories** that had turned every PR red (`audit` and
+  `deny`): `rustls` 0.23.45 → 0.23.46 (RUSTSEC-2026-0346 to 0349),
+  `rustls-webpki` 0.103.15 → 0.103.16 (0382), `webpki-roots` 1.0.8 → 1.0.11
+  (0381), `quinn-proto` 0.11.16 → 0.11.19 (0338 to 0342), `ctutils` 0.4.2 →
+  0.4.5 (0385), and `zip` 8.6.0 → 9.0.5 (0367 to 0369, through
+  `utoipa-swagger-ui` 10.0.1 → 10.0.2, a build dependency). Also off three
+  yanked releases: `chacha20`, `der`, `wnaf`. Lockfile only.
+
+### Changed
+
+- **YAML is read with `serde-saphyr` instead of `serde_yaml_ng`.**
+  `serde_yaml_ng` builds on `unsafe-libyaml`, which is unmaintained
+  (RUSTSEC-2024-0449) with no release that leaves it; `serde-saphyr` is a
+  pure-Rust YAML reader, and we only ever read YAML. Nothing a config file or
+  a static inventory can say changes meaning: every production config and the
+  full ProQuest and CDI static inventories parse identically.
+
 ## [0.31.0] - 2026-09-17
 
 ### Security

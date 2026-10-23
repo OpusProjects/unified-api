@@ -182,7 +182,7 @@ fn fixture(name: &str, member_ttl: u64, view_ttl: Option<u64>, allow: bool) -> F
         ),
     ]);
 
-    let mut view: View = serde_yaml_ng::from_str(VIEW_YAML).unwrap();
+    let mut view: View = serde_saphyr::from_str(VIEW_YAML).unwrap();
     view.ttl_seconds = view_ttl;
 
     let (app, state) = unified_api::AppBuilder::new()
@@ -613,7 +613,7 @@ async fn a_key_granted_only_the_view_can_read_it_and_not_its_members() {
         ("src-a".to_string(), member_source(&counter_a, 60, false)),
         ("src-b".to_string(), member_source(&counter_b, 60, false)),
     ]);
-    let view: View = serde_yaml_ng::from_str(VIEW_YAML).unwrap();
+    let view: View = serde_saphyr::from_str(VIEW_YAML).unwrap();
 
     let (app, state) = unified_api::AppBuilder::new()
         .sources(sources)
@@ -694,7 +694,7 @@ fn metrics_app(view_id: &str, name: &str, with_inventory: bool) -> axum::Router 
         ),
     ]);
 
-    let view: View = serde_yaml_ng::from_str(VIEW_YAML).unwrap();
+    let view: View = serde_saphyr::from_str(VIEW_YAML).unwrap();
     let (app, state) = unified_api::AppBuilder::new()
         .sources(sources)
         .views(HashMap::from([(view_id.to_string(), view)]))

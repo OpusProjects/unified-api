@@ -26,7 +26,7 @@ async fn get(app: axum::Router, path: &str) -> (StatusCode, String) {
 }
 
 fn source() -> unified_api::domain::source::Source {
-    serde_yaml_ng::from_str(
+    serde_saphyr::from_str(
         "name: Persisted\nproject_id: p\nscript_path: unused.py\nttl_seconds: 3600\n",
     )
     .expect("source fixture")

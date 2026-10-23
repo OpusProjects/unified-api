@@ -1555,7 +1555,7 @@ mod hosts_from_source {
         source.script_path = "gather_facts".to_string();
         source.config = HashMap::new();
         source.hosts_from_source = Some(
-            serde_yaml_ng::from_str(&format!(
+            serde_saphyr::from_str(&format!(
                 "source: \"{}\"\nconnect_via: ansible_host_then_hostname\n",
                 origin
             ))

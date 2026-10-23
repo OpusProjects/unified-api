@@ -505,7 +505,7 @@ mod tests {
     }
 
     fn script_enricher() -> Enricher {
-        serde_yaml_ng::from_str("name: spy\ntarget_id: src-a\nscript_path: /bin/true\n")
+        serde_saphyr::from_str("name: spy\ntarget_id: src-a\nscript_path: /bin/true\n")
             .expect("enricher fixture")
     }
 
@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn declarative_enricher() -> Enricher {
-        serde_yaml_ng::from_str(
+        serde_saphyr::from_str(
             "name: d\ntarget_id: src-a\nsource_id: src-b\nfields: [\"infinibox\"]\n",
         )
         .expect("enricher fixture")
@@ -960,7 +960,7 @@ mod tests {
     }
 
     fn enricher_without_fields() -> Enricher {
-        serde_yaml_ng::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\n")
+        serde_saphyr::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\n")
             .expect("enricher fixture")
     }
 
@@ -1063,7 +1063,7 @@ mod tests {
         );
 
         let enricher: Enricher =
-            serde_yaml_ng::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\nfields: []\n")
+            serde_saphyr::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\nfields: []\n")
                 .expect("enricher fixture");
 
         run_enricher(
@@ -1083,7 +1083,7 @@ mod tests {
     }
 
     fn enricher_yaml(extra: &str) -> Enricher {
-        serde_yaml_ng::from_str(&format!(
+        serde_saphyr::from_str(&format!(
             "name: d\ntarget_id: src-a\nsource_id: src-b\n{}",
             extra
         ))
@@ -1287,7 +1287,7 @@ mod tests {
         // Config validation refuses this at startup, but the domain type can
         // exist: the use case must answer with words, not a panic
         let enricher: Enricher =
-            serde_yaml_ng::from_str("name: bare\ntarget_id: src-a\n").expect("fixture");
+            serde_saphyr::from_str("name: bare\ntarget_id: src-a\n").expect("fixture");
         let outcome = run_enricher(
             &cache,
             &SpyEnricher::default(),
@@ -1320,7 +1320,7 @@ mod tests {
             ..Default::default()
         };
         // project_id exercises the checkout resolution branch on the way in
-        let enricher: Enricher = serde_yaml_ng::from_str(
+        let enricher: Enricher = serde_saphyr::from_str(
             "name: hung\ntarget_id: src-a\nscript_path: /bin/true\nproject_id: prj-x\ntimeout_seconds: 5\n",
         )
         .expect("fixture");

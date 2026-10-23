@@ -617,14 +617,14 @@ mod tests {
             ),
         );
 
-        let sources: HashMap<String, Source> = serde_yaml_ng::from_str(
+        let sources: HashMap<String, Source> = serde_saphyr::from_str(
             "src-d42:\n  name: d42\n  project_id: p\n  script_path: x\n  ttl_seconds: 7200\n\
              src-dc1:\n  name: dc1\n  project_id: p\n  script_path: x\n  ttl_seconds: 86400\n\
              src-dc2:\n  name: dc2\n  project_id: p\n  script_path: x\n  ttl_seconds: 30\n",
         )
         .unwrap();
 
-        let view: View = serde_yaml_ng::from_str(
+        let view: View = serde_saphyr::from_str(
             "name: All facts\nmembers:\n\
              \x20 - source: src-dc1\n    owns:\n      source: src-d42\n      groups: [\"datacenter_dc1\"]\n\
              \x20 - source: src-dc2\n    owns:\n      source: src-d42\n      groups: [\"datacenter_dc2\"]\n",
@@ -911,7 +911,7 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "src-dc1".to_string(),
-            serde_yaml_ng::from_str(&format!(
+            serde_saphyr::from_str(&format!(
                 "name: A\nproject_id: p\nscript_path: x\nttl_seconds: 60\n{}",
                 claim
             ))
@@ -945,7 +945,7 @@ mod tests {
     }
 
     fn advertised_view(fallback: &str) -> View {
-        serde_yaml_ng::from_str(&format!(
+        serde_saphyr::from_str(&format!(
             "name: v\nmembers:\n  - source: src-dc1\n    owns:\n      source: \"src-inv\"\n      advertised: true\n{}",
             fallback
         ))

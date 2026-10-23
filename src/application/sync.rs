@@ -779,7 +779,7 @@ mod tests {
     use crate::domain::dataset::Dataset;
 
     fn replace_source() -> Source {
-        serde_yaml_ng::from_str(
+        serde_saphyr::from_str(
             "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: replace\n",
         )
         .expect("source fixture")
@@ -1057,7 +1057,7 @@ mod tests {
     #[test]
     fn a_merge_sync_adopts_a_changed_ttl() {
         let cache = MemoryCache::new();
-        let source: Source = serde_yaml_ng::from_str(
+        let source: Source = serde_saphyr::from_str(
             "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 60\nsync_mode: merge\n",
         )
         .expect("source fixture");
@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     fn a_merge_sync_renews_the_dataset_clock() {
         let cache = MemoryCache::new();
-        let source: Source = serde_yaml_ng::from_str(
+        let source: Source = serde_saphyr::from_str(
             "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 1\nsync_mode: merge\n",
         )
         .expect("source fixture");
@@ -1218,7 +1218,7 @@ mod tests {
     fn a_later_full_sync_makes_the_entry_complete() {
         for mode in ["replace", "merge"] {
             let cache = MemoryCache::new();
-            let source: Source = serde_yaml_ng::from_str(&format!(
+            let source: Source = serde_saphyr::from_str(&format!(
                 "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: {}\n",
                 mode
             ))
@@ -1344,7 +1344,7 @@ mod concurrency_tests {
     }
 
     fn source() -> Source {
-        serde_yaml_ng::from_str(
+        serde_saphyr::from_str(
             "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: replace\n",
         )
         .expect("source fixture")

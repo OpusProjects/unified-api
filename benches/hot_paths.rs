@@ -42,7 +42,7 @@ fn dataset(hosts: usize, group: &str) -> Dataset {
 }
 
 fn source() -> Source {
-    serde_yaml_ng::from_str("name: S\nproject_id: p\nscript_path: x\nttl_seconds: 3600\n")
+    serde_saphyr::from_str("name: S\nproject_id: p\nscript_path: x\nttl_seconds: 3600\n")
         .expect("bench source")
 }
 
@@ -89,7 +89,7 @@ fn view_snapshot_union(c: &mut Criterion) {
         sources.insert(id.to_string(), source());
     }
 
-    let view: View = serde_yaml_ng::from_str(concat!(
+    let view: View = serde_saphyr::from_str(concat!(
         "name: bench\n",
         "members:\n",
         "  - source: src-dc1\n",

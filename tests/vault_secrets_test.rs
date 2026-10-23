@@ -74,7 +74,7 @@ async fn fake_vault() -> String {
 }
 
 fn credential(yaml: &str) -> Credential {
-    serde_yaml_ng::from_str(yaml).expect("credential fixture")
+    serde_saphyr::from_str(yaml).expect("credential fixture")
 }
 
 fn credentials() -> HashMap<String, Credential> {
@@ -101,7 +101,7 @@ fn vault_secrets(config_yaml: &str, mut creds: HashMap<String, Credential>) -> V
     for (id, cred) in credentials() {
         creds.entry(id).or_insert(cred);
     }
-    let config: VaultConfig = serde_yaml_ng::from_str(config_yaml).expect("vault config fixture");
+    let config: VaultConfig = serde_saphyr::from_str(config_yaml).expect("vault config fixture");
     VaultSecrets::new(config, creds.clone(), Box::new(EnvSecrets::new(creds)))
 }
 

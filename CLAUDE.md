@@ -18,8 +18,9 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 - axum (HTTP framework)
 - tokio (async runtime)
 - dashmap (concurrent in-memory cache)
-- serde + serde_json + serde_yaml_ng (serialization; `_ng` is the maintained
-  fork of the deprecated `serde_yaml`)
+- serde + serde_json + serde-saphyr (serialization; serde-saphyr is a pure-Rust
+  YAML reader — we only ever read YAML — chosen over the libyaml ports, whose
+  `unsafe-libyaml` core is unmaintained)
 - utoipa (OpenAPI/Swagger docs)
 - russh (native SSH connector)
 - metrics + metrics-exporter-prometheus (`/metrics`)

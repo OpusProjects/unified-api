@@ -783,7 +783,7 @@ async fn an_exhausted_hop_budget_still_serves_the_data() {
 #[tokio::test]
 async fn a_sync_records_the_edges_advertised_scope() {
     // Edge with a CONFIGURED source that advertises a claim
-    let edge_source: Source = serde_yaml_ng::from_str(concat!(
+    let edge_source: Source = serde_saphyr::from_str(concat!(
         "name: Edge\n",
         "project_id: p\n",
         "script_path: x\n",

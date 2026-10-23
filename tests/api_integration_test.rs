@@ -1704,7 +1704,7 @@ async fn responses_carry_a_request_id() {
 // Tests: enricher routes
 // =========================================================================
 fn app_with_declarative_enricher() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
-    let enricher: unified_api::domain::enricher::Enricher = serde_yaml_ng::from_str(
+    let enricher: unified_api::domain::enricher::Enricher = serde_saphyr::from_str(
         "name: Copy infinibox\ntarget_id: src-demo\nsource_id: src-storage\nfields: [\"infinibox\"]\n",
     )
     .expect("enricher fixture");
@@ -1804,11 +1804,11 @@ async fn running_an_unknown_enricher_is_a_404_naming_it() {
 #[tokio::test]
 async fn metrics_exposes_task_health_gauges() {
     let enricher: unified_api::domain::enricher::Enricher =
-        serde_yaml_ng::from_str("name: E\ntarget_id: src-demo\nscript_path: e.py\n").unwrap();
+        serde_saphyr::from_str("name: E\ntarget_id: src-demo\nscript_path: e.py\n").unwrap();
     let mut enrichers = std::collections::HashMap::new();
     enrichers.insert("en-gauges".to_string(), enricher);
     let project: unified_api::domain::project::GitProject =
-        serde_yaml_ng::from_str("name: P\ngit_url: \"https://example.com/r.git\"\n").unwrap();
+        serde_saphyr::from_str("name: P\ngit_url: \"https://example.com/r.git\"\n").unwrap();
     let mut projects = std::collections::HashMap::new();
     projects.insert("prj-gauges".to_string(), project);
 
@@ -1888,7 +1888,7 @@ async fn an_enrichers_trigger_reaches_the_script_inside_source_config() {
         "src-probe".to_string(),
         script_source("tests/adapters/out/connectors/inventory.py"),
     );
-    let enricher: unified_api::domain::enricher::Enricher = serde_yaml_ng::from_str(concat!(
+    let enricher: unified_api::domain::enricher::Enricher = serde_saphyr::from_str(concat!(
         "name: Probe\n",
         "target_id: src-probe\n",
         "script_path: \"tests/adapters/out/enrichers/env_probe.py\"\n",
@@ -1943,7 +1943,7 @@ async fn an_enrichers_trigger_reaches_the_script_inside_source_config() {
 // =========================================================================
 #[tokio::test]
 async fn scope_advertises_config_derived_ownership() {
-    let ssh_source: unified_api::domain::source::Source = serde_yaml_ng::from_str(concat!(
+    let ssh_source: unified_api::domain::source::Source = serde_saphyr::from_str(concat!(
         "name: Edge\n",
         "project_id: p\n",
         "script_path: gather_facts\n",
@@ -1963,7 +1963,7 @@ async fn scope_advertises_config_derived_ownership() {
         script_source("tests/adapters/out/connectors/inventory.py"),
     );
 
-    let view: unified_api::domain::view::View = serde_yaml_ng::from_str(concat!(
+    let view: unified_api::domain::view::View = serde_saphyr::from_str(concat!(
         "name: All\nmembers:\n",
         "  - source: src-edge\n    owns:\n      source: \"src-inv\"\n      groups: [\"datacenter_dc2\"]\n",
         "  - source: src-plain\n    owns:\n      source: \"src-inv\"\n      groups: [\"datacenter_dc1\"]\n",
@@ -2023,7 +2023,7 @@ fn app_for_group_var_enrichment() -> (axum::Router, std::sync::Arc<unified_api::
 
     let enrichers = HashMap::from([(
         "en-vars".to_string(),
-        serde_yaml_ng::from_str::<Enricher>(
+        serde_saphyr::from_str::<Enricher>(
             "name: vars\ntarget_id: src-target\nsource_id: src-vars\nfields: [\"cmdb_role\"]\n",
         )
         .expect("enricher fixture"),

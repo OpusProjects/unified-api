@@ -42,7 +42,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 russh = "0.64.1"
 serde = { version = "1", features = ["derive", "rc"] }   # rc: Serialize/Deserialize for Arc<T>
 serde_json = "1"
-serde_yaml_ng = "0.10"   # maintained drop-in fork of the deprecated serde_yaml
+serde-saphyr = "2"       # pure-Rust YAML reader (no unsafe-libyaml); we only ever read YAML
 subtle = "2"
 tokio = { version = "1", features = ["full"] }
 # The CORS middleware wraps tower-http's CorsLayer around the rest of the

@@ -223,7 +223,7 @@ mod tests {
     }
 
     fn view(yaml: &str) -> View {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        serde_saphyr::from_str(yaml).unwrap()
     }
 
     const TWO_DATACENTERS: &str = "\
@@ -268,8 +268,7 @@ members:
     #[test]
     fn an_explicitly_named_host_is_claimed_even_when_the_dataset_lacks_it() {
         let owns: Ownership =
-            serde_yaml_ng::from_str("source: src-d42\nhosts: [\"brandnew.dc2.example\"]\n")
-                .unwrap();
+            serde_saphyr::from_str("source: src-d42\nhosts: [\"brandnew.dc2.example\"]\n").unwrap();
         assert!(owns.claims(&dataset(), "brandnew.dc2.example"));
         assert!(
             owns.claimed_hosts(&dataset())
@@ -280,14 +279,14 @@ members:
     #[test]
     fn an_unknown_group_claims_nothing_rather_than_everything() {
         let owns: Ownership =
-            serde_yaml_ng::from_str("source: src-d42\ngroups: [\"datacenter_ghost\"]\n").unwrap();
+            serde_saphyr::from_str("source: src-d42\ngroups: [\"datacenter_ghost\"]\n").unwrap();
         assert!(!owns.claims(&dataset(), "web01.dc1.example"));
         assert!(owns.claimed_hosts(&dataset()).is_empty());
     }
 
     #[test]
     fn an_empty_pattern_is_a_catch_all() {
-        let owns: Ownership = serde_yaml_ng::from_str("source: src-d42\n").unwrap();
+        let owns: Ownership = serde_saphyr::from_str("source: src-d42\n").unwrap();
         assert!(owns.is_catch_all());
         assert!(owns.claims(&dataset(), "web01.dc1.example"));
         assert!(!owns.claims(&dataset(), "nowhere.example"));
@@ -313,7 +312,7 @@ members:
 
     #[test]
     fn claimed_hosts_is_the_union_of_groups_and_hosts() {
-        let owns: Ownership = serde_yaml_ng::from_str(
+        let owns: Ownership = serde_saphyr::from_str(
             "source: src-d42\ngroups: [\"datacenter_dc1\"]\nhosts: [\"db01.dc2.example\"]\n",
         )
         .unwrap();
@@ -325,7 +324,7 @@ members:
 
     #[test]
     fn a_misspelled_pattern_key_fails_to_parse_instead_of_claiming_everything() {
-        let err = serde_yaml_ng::from_str::<Ownership>("source: src-d42\ngrups: [\"a\"]\n")
+        let err = serde_saphyr::from_str::<Ownership>("source: src-d42\ngrups: [\"a\"]\n")
             .expect_err("a typo in the routing table must not deserialize");
         assert!(err.to_string().contains("grups"), "error was: {}", err);
     }
@@ -349,7 +348,7 @@ members:
 
     #[test]
     fn a_catch_all_member_makes_the_views_claim_catch_all() {
-        let view: View = serde_yaml_ng::from_str(concat!(
+        let view: View = serde_saphyr::from_str(concat!(
             "name: v\nmembers:\n",
             "  - source: src-a\n    owns:\n      source: src-inv\n",
         ))

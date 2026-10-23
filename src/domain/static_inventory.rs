@@ -51,10 +51,10 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
 
     check_not_vaulted("inventory file", &input.inventory)?;
 
-    let root: serde_yaml_ng::Value = serde_yaml_ng::from_str(&input.inventory)
+    let root: serde_json::Value = serde_saphyr::from_str(&input.inventory)
         .map_err(|e| format!("inventory file is not valid YAML: {}", e))?;
     let root = root
-        .as_mapping()
+        .as_object()
         .ok_or("inventory file must be a YAML mapping of groups")?;
 
     // Parse the group_vars / host_vars files up front, so a broken file is
@@ -65,7 +65,7 @@ pub fn parse(input: &StaticInventoryInput) -> Result<(Dataset, Vec<String>), Str
     // First pass: walk the group tree collecting structure.
     let mut walk = Walk::default();
     for (name, node) in root {
-        let name = key_as_string(name)?;
+        let name = name.clone();
         walk.group(&name, node)?;
     }
 
@@ -176,7 +176,7 @@ struct Walk {
 }
 
 impl Walk {
-    fn group(&mut self, name: &str, node: &serde_yaml_ng::Value) -> Result<(), String> {
+    fn group(&mut self, name: &str, node: &serde_json::Value) -> Result<(), String> {
         // Taken out of the map rather than built fresh: a group may be declared
         // more than once (under two parents, or twice under the same one), and
         // replacing what was there dropped every host the earlier declaration
@@ -189,15 +189,15 @@ impl Walk {
         });
 
         // A group may be null (empty) or a mapping with hosts/children/vars
-        if let Some(mapping) = node.as_mapping() {
+        if let Some(mapping) = node.as_object() {
             for (key, value) in mapping {
-                match key_as_string(key)?.as_str() {
+                match key.as_str() {
                     "hosts" => {
-                        let hosts = value.as_mapping().ok_or_else(|| {
+                        let hosts = value.as_object().ok_or_else(|| {
                             format!("group '{}': hosts must be a mapping of hostnames", name)
                         })?;
                         for (host, host_vars) in hosts {
-                            let host = key_as_string(host)?;
+                            let host = host.clone();
                             if host.contains('[') {
                                 return Err(format!(
                                     "host '{}' looks like an Ansible range pattern, which is not supported",
@@ -215,11 +215,11 @@ impl Walk {
                         }
                     }
                     "children" => {
-                        let children = value.as_mapping().ok_or_else(|| {
+                        let children = value.as_object().ok_or_else(|| {
                             format!("group '{}': children must be a mapping of groups", name)
                         })?;
                         for (child, child_node) in children {
-                            let child = key_as_string(child)?;
+                            let child = child.clone();
                             info.children.push(child.clone());
                             // Recursing re-enters `group` for the child, which
                             // merges into whatever that child already had — so
@@ -258,16 +258,15 @@ impl Walk {
 }
 
 // Convert a YAML vars mapping into HostVars (JSON values). Null = no vars.
-fn yaml_vars(value: &serde_yaml_ng::Value) -> Result<HostVars, String> {
+fn yaml_vars(value: &serde_json::Value) -> Result<HostVars, String> {
     if value.is_null() {
         return Ok(HashMap::new());
     }
-    let mapping = value.as_mapping().ok_or("vars must be a mapping")?;
+    let mapping = value.as_object().ok_or("vars must be a mapping")?;
     let mut vars = HostVars::new();
     for (key, val) in mapping {
-        let key = key_as_string(key)?;
-        let json = serde_json::to_value(val).map_err(|e| format!("var '{}': {}", key, e))?;
-        vars.insert(key, json);
+        let key = key.clone();
+        vars.insert(key, val.clone());
     }
     Ok(vars)
 }
@@ -284,7 +283,7 @@ fn parse_vars_files(
         let mut vars = HostVars::new();
         for (label, contents) in parts {
             check_not_vaulted(&format!("{}/{}", kind, label), contents)?;
-            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)
+            let value: serde_json::Value = serde_saphyr::from_str(contents)
                 .map_err(|e| format!("{}/{} is not valid YAML: {}", kind, label, e))?;
             let file_vars = yaml_vars(&value).map_err(|e| format!("{}/{}: {}", kind, label, e))?;
             vars.extend(file_vars);
@@ -304,12 +303,6 @@ fn check_not_vaulted(what: &str, contents: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-fn key_as_string(key: &serde_yaml_ng::Value) -> Result<String, String> {
-    key.as_str()
-        .map(str::to_string)
-        .ok_or_else(|| format!("expected a string key, got: {:?}", key))
 }
 
 #[cfg(test)]

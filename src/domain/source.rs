@@ -452,7 +452,7 @@ mod tests {
     }
 
     fn hfs(yaml: &str) -> HostsFromSource {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        serde_saphyr::from_str(yaml).unwrap()
     }
 
     #[test]
@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn an_explicit_advertise_scope_beats_the_derived_pattern() {
-        let source: Source = serde_yaml_ng::from_str(concat!(
+        let source: Source = serde_saphyr::from_str(concat!(
             "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
             "connector_type: \"ssh\"\n",
             "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n    groups: [\"derived\"]\n",
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn a_hosts_from_source_pattern_is_the_advertised_scope() {
-        let source: Source = serde_yaml_ng::from_str(concat!(
+        let source: Source = serde_saphyr::from_str(concat!(
             "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
             "connector_type: \"ssh\"\n",
             "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n",
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn an_empty_pattern_advertises_a_spelled_out_catch_all() {
-        let source: Source = serde_yaml_ng::from_str(concat!(
+        let source: Source = serde_saphyr::from_str(concat!(
             "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
             "connector_type: \"ssh\"\n",
             "hosts_from_source:\n  source: \"src-inv\"\n",
@@ -593,7 +593,7 @@ mod tests {
     #[test]
     fn an_ordinary_source_makes_no_claim() {
         let source: Source =
-            serde_yaml_ng::from_str("name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n")
+            serde_saphyr::from_str("name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n")
                 .expect("source fixture");
         assert!(source.advertised_scope().is_none());
     }

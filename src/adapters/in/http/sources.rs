@@ -19,8 +19,10 @@ use crate::adapters::r#in::http::views;
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};
 use crate::domain::cache_entry::CacheEntry;
 use crate::domain::dataset::{Group, HostVars};
+use crate::domain::group_trim;
 use crate::domain::host_filter::HostFilter;
 use crate::domain::sync_health::SyncHealth;
+use crate::domain::var_path::VarSelect;
 
 // Read from the sources cache: list, full dataset, and per-host status.
 // Write operations live in sync.rs, enrichers.rs, and hosts.rs.
@@ -60,42 +62,38 @@ pub(super) fn comma_names(raw: &str) -> impl Iterator<Item = &str> {
 // the same rule the builtin endpoints follow. Built once per request, and
 // borrowed through when neither is set, so the common read clones nothing.
 pub(super) struct VarShape<'p> {
-    keep: Option<HashSet<&'p str>>,
-    drop: HashSet<&'p str>,
+    select: VarSelect<'p>,
 }
 
 impl<'p> VarShape<'p> {
     pub(super) fn new(params: &'p DatasetParams) -> Self {
         VarShape {
-            keep: params.fields.as_deref().map(|f| comma_names(f).collect()),
-            drop: params
-                .exclude_fields
-                .as_deref()
-                .map(|f| comma_names(f).collect())
-                .unwrap_or_default(),
+            select: VarSelect::new(
+                params.fields.as_deref().map(comma_names),
+                params
+                    .exclude_fields
+                    .as_deref()
+                    .into_iter()
+                    .flat_map(comma_names),
+            ),
         }
     }
 
+    // Names may be dotted paths (`monitor.name`): see domain::var_path.
     pub(super) fn host<'a>(&self, vars: &'a HostVars) -> Cow<'a, HostVars> {
-        if self.keep.is_none() && self.drop.is_empty() {
+        if self.select.is_identity() {
             return Cow::Borrowed(vars);
         }
-        Cow::Owned(
-            vars.iter()
-                .filter(|(key, _)| self.keep.as_ref().is_none_or(|k| k.contains(key.as_str())))
-                .filter(|(key, _)| !self.drop.contains(key.as_str()))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        )
+        Cow::Owned(self.select.host(vars))
     }
 
     pub(super) fn group<'a>(&self, group: &'a Group) -> Cow<'a, Group> {
-        if self.drop.is_empty() {
+        if self.select.drops_nothing() {
             return Cow::Borrowed(group);
         }
         let mut owned = group.clone();
         if let Some(vars) = owned.vars.as_mut() {
-            vars.retain(|key, _| !self.drop.contains(key.as_str()));
+            self.select.group_vars(vars);
         }
         Cow::Owned(owned)
     }
@@ -403,21 +401,41 @@ pub struct DatasetParams {
     pub limit: Option<usize>,
     /// How many hosts to skip (use with limit to page)
     pub offset: Option<usize>,
-    /// Return only these top-level hostvars keys (comma-separated)
+    /// Return only these hostvars (comma-separated). A dotted name is a path
+    /// into objects (`monitor.name`); a top-level key of that exact name wins
     pub fields: Option<String>,
-    /// Drop these top-level hostvars keys (comma-separated), from hosts and groups
+    /// Drop these hostvars (comma-separated, dotted paths too), from hosts and
+    /// from group vars
     pub exclude_fields: Option<String>,
     /// Keep only hosts whose hostvars meet every condition (`;`-separated):
     /// `key<op>value` with op one of `=` `!=` `~` (contains) `!~` `>` `>=`
     /// `<` `<=`. Orderings are numeric when both sides are numbers, text
     /// otherwise (ISO dates compare). `key=` matches a missing or empty var.
+    /// A dotted key walks into objects (`monitor.status=UP`)
     pub filter: Option<String>,
+    /// Which groups come back: `all` (default) every group with its full
+    /// member list; `matching` only the groups of the returned hosts, members
+    /// cut to those hosts, plus the parents of kept groups; `none` no `groups`
+    /// key. On a large source the group lists dominate a narrow read
+    pub groups: Option<GroupsMode>,
     /// Bring the requested hosts up to date before answering, if the source's
     /// TTL says they are stale. Requires `host` and a source configured with
     /// `allow_on_demand_refresh`. A refresh that fails does not fail the read:
     /// the cached data is served and the `x-unified-api-refreshed` header says
     /// what happened.
     pub refresh: Option<bool>,
+}
+
+// `groups=`: how much group membership a dataset read carries.
+#[derive(Deserialize, ToSchema, Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupsMode {
+    #[default]
+    All,
+    Matching,
+    // `none` on the wire; not `None`, which would read as Option's
+    #[serde(rename = "none")]
+    Omit,
 }
 
 impl DatasetParams {
@@ -432,6 +450,7 @@ impl DatasetParams {
             && self.fields.is_none()
             && self.exclude_fields.is_none()
             && self.filter.is_none()
+            && self.groups.is_none()
     }
 
     // `host` is either a list of exact names or, with a wildcard anywhere in
@@ -590,6 +609,7 @@ pub async fn get_source_dataset(
         params.fields.hash(&mut hasher);
         params.exclude_fields.hash(&mut hasher);
         params.filter.hash(&mut hasher);
+        params.groups.hash(&mut hasher);
         // A refresh request and a plain one get distinct validators: a client
         // polling with refresh=true must not be handed a 304 that was minted
         // for a request that never went to the origin.
@@ -643,16 +663,51 @@ pub async fn get_source_dataset(
         })
         .collect();
 
-    // With a group filter only those groups are returned; otherwise all groups
-    // (membership lists are tiny next to hostvars, which carry the facts)
+    // With a group filter only those groups are returned. Which of them, and
+    // with how much of their membership, is `groups=`: by default all of them
+    // in full, which on a large source is most of a narrow read (441 KB of a
+    // 444 KB one-host read on a source of about 1,000 hosts) — `matching` keeps the groups
+    // of the returned page only, `none` drops the key.
     let wanted: Option<HashSet<&str>> = params.group.as_deref().map(|g| comma_names(g).collect());
-    let groups: HashMap<&String, Cow<Group>> = entry
-        .dataset
-        .groups
-        .iter()
-        .filter(|(name, _)| wanted.as_ref().is_none_or(|w| w.contains(name.as_str())))
-        .map(|(name, group)| (name, shape.group(group)))
-        .collect();
+    let in_scope = |name: &String| wanted.as_ref().is_none_or(|w| w.contains(name.as_str()));
+    let groups: Option<HashMap<&String, Cow<Group>>> = match params.groups.unwrap_or_default() {
+        GroupsMode::Omit => None,
+        GroupsMode::All => Some(
+            entry
+                .dataset
+                .groups
+                .iter()
+                .filter(|(name, _)| in_scope(name))
+                .map(|(name, group)| (name, shape.group(group)))
+                .collect(),
+        ),
+        GroupsMode::Matching => {
+            let on_page: HashSet<&str> = page.iter().map(|h| h.as_str()).collect();
+            let trimmed = group_trim::matching(
+                entry
+                    .dataset
+                    .groups
+                    .iter()
+                    .filter(|(name, _)| in_scope(name))
+                    .map(|(name, g)| (name.as_str(), g.hosts.as_slice(), g.children.as_slice())),
+                &on_page,
+            );
+            Some(
+                entry
+                    .dataset
+                    .groups
+                    .iter()
+                    .filter_map(|(name, group)| {
+                        let kept = trimmed.get(name.as_str())?;
+                        let mut owned = shape.group(group).into_owned();
+                        owned.hosts = kept.hosts.iter().map(|h| h.to_string()).collect();
+                        owned.children = kept.children.iter().map(|c| c.to_string()).collect();
+                        Some((name, Cow::Owned(owned)))
+                    })
+                    .collect(),
+            )
+        }
+    };
 
     // A borrowing struct serialized straight to bytes: no intermediate Value
     // tree (same reasoning as the plain path — a group filter can select most
@@ -665,7 +720,8 @@ pub async fn get_source_dataset(
         limit: Option<usize>,
         returned: usize,
         hostvars: HashMap<&'a String, Cow<'a, HostVars>>,
-        groups: HashMap<&'a String, Cow<'a, Group>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        groups: Option<HashMap<&'a String, Cow<'a, Group>>>,
     }
 
     let body = serde_json::to_vec(&DatasetPage {
@@ -762,6 +818,49 @@ pub struct HostList {
     pub hosts: Vec<String>,
 }
 
+// The selectors of /dataset that pick hosts, for a reader that wants only
+// their names: the cheap answer to "which hosts are X" — a few KB of names
+// instead of the hostvars that decided it.
+#[derive(Deserialize, IntoParams)]
+pub struct HostsParams {
+    /// Only these hosts (comma-separated names); with a `*` or `?` anywhere,
+    /// every entry is a case-insensitive pattern, as on /dataset
+    pub host: Option<String>,
+    /// Only the hosts of these groups (comma-separated, a host in any of them)
+    pub group: Option<String>,
+    /// Only hosts whose hostvars meet every condition, as on /dataset
+    /// (`;`-separated, dotted keys walk into objects: `monitor.status=UP`)
+    pub filter: Option<String>,
+}
+
+impl HostsParams {
+    pub fn is_plain(&self) -> bool {
+        self.host.is_none() && self.group.is_none() && self.filter.is_none()
+    }
+
+    fn host_is_pattern(&self) -> bool {
+        self.host.as_deref().is_some_and(|h| h.contains(['*', '?']))
+    }
+
+    pub fn exact_hosts(&self) -> Option<&str> {
+        if self.host_is_pattern() {
+            None
+        } else {
+            self.host.as_deref()
+        }
+    }
+
+    pub fn host_filter(&self) -> Result<HostFilter, ApiError> {
+        let patterns = if self.host_is_pattern() {
+            self.host.as_deref().unwrap_or("")
+        } else {
+            ""
+        };
+        HostFilter::parse(patterns, self.filter.as_deref().unwrap_or(""))
+            .map_err(ApiError::bad_request)
+    }
+}
+
 // The hostnames only — the cheap answer to "what is in this source", for a UI
 // picker or an operator. Without it, the alternatives were the full dataset or
 // passing a deliberately non-existent ?fields= value to empty out the vars.
@@ -769,9 +868,9 @@ pub struct HostList {
     get,
     path = "/api/v1/sources/{id}/hosts",
     tag = "Sources",
-    params(("id" = String, Path, description = "Source identifier")),
+    params(("id" = String, Path, description = "Source identifier"), HostsParams),
     responses(
-        (status = 200, description = "Hostnames in the cached dataset, sorted", body = HostList),
+        (status = 200, description = "Hostnames in the cached dataset, sorted; with host/group/filter only the hosts every selector matched, chosen exactly as on /dataset. A malformed filter is a 400", body = HostList),
         (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
         (status = 404, description = "Source not in cache", body = ErrorBody)
     )
@@ -780,20 +879,39 @@ pub async fn list_source_hosts(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthContext>,
     Path(id): Path<String>,
+    Query(params): Query<HostsParams>,
 ) -> Result<Json<HostList>, ApiError> {
     if !auth.permissions.allows_source(&id) {
         return Err(ApiError::source_forbidden(&id));
     }
+    let host_filter = params.host_filter()?;
     let config = state.config();
     if let Some(view) = config.views.get(&id) {
-        return Ok(Json(views::hosts(&state, &id, view)));
+        return views::hosts(&state, &id, view, &params, &host_filter).map(Json);
     }
     let entry = state
         .cache
         .get(&id)
         .ok_or_else(|| ApiError::source_not_cached(&id))?;
 
-    let mut hosts: Vec<String> = entry.dataset.hostvars.keys().cloned().collect();
+    let mut hosts: Vec<String> = if params.is_plain() {
+        entry.dataset.hostvars.keys().cloned().collect()
+    } else {
+        // Selected exactly as /dataset selects, so the two never disagree
+        // about which hosts a query names.
+        resolve_hostnames(&entry, params.exact_hosts(), params.group.as_deref())
+            .into_iter()
+            .filter(|host| {
+                host_filter.is_empty()
+                    || entry
+                        .dataset
+                        .hostvars
+                        .get(*host)
+                        .is_some_and(|vars| host_filter.matches(host, vars))
+            })
+            .cloned()
+            .collect()
+    };
     hosts.sort();
 
     Ok(Json(HostList {

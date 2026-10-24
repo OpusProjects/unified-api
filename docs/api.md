@@ -107,9 +107,9 @@ Reading cached inventory: what is configured, how fresh it is, and the datasets 
 | Route | Meaning |
 |---|---|
 | `GET /api/v1/sources` | Cached sources with freshness, host counts and sync health, then every configured [view](views.md) (`kind: "view"`) |
-| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=&filter=&fields=&exclude_fields=` — the same parameters as the [builtin endpoints](endpoints.md#builtin-transformers); `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
+| `GET /api/v1/sources/{id}/dataset` | The cached dataset (hostvars + groups); supports `ETag`/`If-None-Match`; paginate/filter with `?limit=&offset=&host=&group=&filter=&fields=&exclude_fields=&groups=` — the same selectors as the [builtin endpoints](endpoints.md#builtin-transformers); `?host=x&refresh=true` brings those hosts up to date first — see [on-demand refresh](on-demand-refresh.md) |
 | `GET /api/v1/sources/{id}/groups` | Group names with host counts and children — no facts |
-| `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted |
+| `GET /api/v1/sources/{id}/hosts` | Hostnames only, sorted; `?host=&group=&filter=` select them exactly as on `/dataset` |
 | `GET /api/v1/sources/{id}/status` | Per-host age/TTL/freshness; `?host=` names hosts, `?group=` any of several groups, ANDed. `total_hosts` counts the whole source, `returned` this response |
 | `GET /api/v1/sources/{id}/scope` | The ownership scope this source advertises — config-derived (an explicit `advertise_scope`, an SSH source's `hosts_from_source` pattern, or a view's member-ownership union), so it answers before anything has synced. `declared: false` = no claim |
 | `POST /api/v1/sources/{id}/sync` | Run the connector now. `?host=x` (comma-separated list) or `?group=y` scope the sync; `&refresh_origin=true` makes a federated source's origin re-gather first — see [on-demand refresh](on-demand-refresh.md) |
@@ -269,6 +269,56 @@ Combine them with `fields=` to fetch a few facts of the matching hosts only:
 
 ```
 GET /api/v1/sources/src-vmware/dataset?filter=vmware_power_state=poweredOff&fields=vmware_vcenter,vmware_num_cpu
+```
+
+#### Dotted paths
+
+`fields`, `exclude_fields` and the keys in `filter` may be **paths into
+objects**: `monitor.name` is the `name` key of the `monitor` object. The
+same holds on the [builtin endpoints](endpoints.md#builtin-transformers),
+where a csv column may be a path too.
+
+```
+GET /api/v1/sources/src-monitoring/dataset?filter=monitor.status=DOWN&fields=monitor.name,monitor.poller
+GET /api/v1/sources/src-monitoring/dataset?exclude_fields=monitor.services
+```
+
+- A name that is a top-level key — dots and all — is that key, so a request
+  written before paths existed selects what it always did.
+- Paths walk into objects only, never into lists: `monitor.services.name`
+  finds nothing (a filter sees a missing var).
+- Several paths under one root come back as one object:
+  `fields=monitor.name,monitor.status` → `{"monitor": {"name": …, "status": …}}`.
+
+#### How much group membership: `groups=`
+
+A dataset read carries the source's groups. By default (`groups=all`) that is
+every group with its full member list, whatever hosts were selected — and on
+a large source the lists are most of a narrow read:
+
+| ~1,000 hosts, 40 groups, `host=<one>` | Raw | gzip |
+|---|---|---|
+| `groups=all` (default) | 444,420 B | 24,892 B |
+| `groups=matching` | 3,516 B | 709 B |
+| `groups=none` | 2,489 B | 613 B |
+
+- `matching`: only the groups a returned host is in, each cut to the returned
+  hosts, plus every group that has a kept group among its children (walked
+  up, so grandparents stay), with `children` cut to kept groups. Group vars are
+  kept as they are (minus `exclude_fields`).
+- `none`: no `groups` key at all.
+- With `group=`, only those groups are candidates, as before.
+
+Measured on a dataset of that size, 2026-10-24.
+
+#### Names only: `/hosts` with selectors
+
+`GET /sources/{id}/hosts` takes `host=`, `group=` and `filter=`, chosen exactly
+as on `/dataset` (patterns, dotted keys, ANDed), and answers names only — the
+cheap answer to "which hosts are X":
+
+```
+GET /api/v1/sources/src-monitoring/hosts?filter=monitor.poller=poller-1
 ```
 
 A malformed `filter` answers `400` with the condition named.

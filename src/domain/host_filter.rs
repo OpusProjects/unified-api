@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::domain::dataset::HostVars;
+use crate::domain::var_path;
 
 // A host filter: which hosts of an inventory a reader wants, decided by the
 // host's NAME and by its hostvars. Shared by `GET /sources/{id}/dataset` (and
@@ -10,8 +11,8 @@ use crate::domain::dataset::HostVars;
 // Two parts, both optional, ANDed together:
 //   host   — comma-separated name patterns, `*` and `?` wildcards,
 //            case-insensitive; a host matching ANY pattern is kept
-//   filter — `;`-separated conditions on top-level hostvars, ALL must
-//            hold: `key<op>value` with op one of
+//   filter — `;`-separated conditions on hostvars, ALL must hold; a
+//            dotted key walks into objects (`monitor.status`): `key<op>value` with op one of
 //              =  !=   exact (a var's text form, see `text`)
 //              ~  !~   contains, case-insensitive
 //              >  >=  <  <=   numeric when both sides are numbers,
@@ -162,7 +163,9 @@ fn is_empty(value: Option<&serde_json::Value>) -> bool {
 
 impl Condition {
     fn holds(&self, vars: &HostVars) -> bool {
-        let var = vars.get(&self.key);
+        // A dotted key walks into objects (`monitor.status`); a top-level key
+        // of that exact name still wins. See domain::var_path.
+        let var = var_path::lookup(vars, &self.key);
         if self.value.is_empty() {
             return (self.op == Op::Eq) == is_empty(var);
         }

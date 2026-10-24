@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::endpoint::{BUILTIN_SETTINGS, EndpointLimit, renamed_setting};
 use crate::domain::host_filter::HostFilter;
+use crate::domain::var_path::{self, VarSelect};
 
 // Apply an endpoint's limit to the datasets it is about to render: a
 // constructed inventory. Everything the sources carry is still merged — the
@@ -233,15 +234,20 @@ fn merge_and_filter(
     // resolves the inventory, so stripping only hostvars would let an excluded
     // name through the group door. exclude_fields is how something is kept out of
     // an endpoint, and a filter with a way around it is not one.
-    if !fields.is_empty() || !exclude_fields.is_empty() {
+    //
+    // Names may be dotted paths into objects (`monitor.name`), as on the
+    // dataset route: see domain::var_path.
+    let select = VarSelect::new(
+        (!fields.is_empty()).then(|| fields.iter().map(String::as_str)),
+        exclude_fields.iter().map(String::as_str),
+    );
+    if !select.is_identity() {
         for vars in hostvars.values_mut() {
-            vars.retain(|name, _| {
-                (fields.is_empty() || fields.contains(name)) && !exclude_fields.contains(name)
-            });
+            *vars = select.host(vars);
         }
         for group in groups.values_mut() {
             if let Some(vars) = group.vars.as_mut() {
-                vars.retain(|name, _| !exclude_fields.contains(name));
+                select.group_vars(vars);
             }
         }
     }
@@ -407,7 +413,8 @@ pub fn render_csv(
         out.push_str(&csv_field(host));
         for column in &columns {
             out.push(',');
-            out.push_str(&csv_field(&csv_value(vars.get(column))));
+            // a column may be a dotted path, like `fields` itself
+            out.push_str(&csv_field(&csv_value(var_path::lookup(vars, column))));
         }
         out.push('\n');
     }
@@ -759,6 +766,37 @@ mod tests {
         assert_eq!(lines[1], "a-host,dc1,windows,");
         assert_eq!(lines[2], "b-host,,linux,64");
         assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn dotted_fields_shape_endpoints_and_name_csv_columns() {
+        let mut datasets = HashMap::new();
+        datasets.insert(
+            "src".to_string(),
+            dataset(
+                serde_json::json!({"h1": {"os": "linux", "mon": {"name": "h1", "status": "UP", "services": [1, 2]}}}),
+                serde_json::json!({"g": {"hosts": ["h1"], "vars": {"mon": {"poller": "p", "secret": "s"}}}}),
+            ),
+        );
+        let config: HashMap<String, String> = HashMap::new();
+        let params =
+            serde_json::json!({"fields": "mon.name,mon.status", "exclude_fields": "mon.secret"});
+        let (hostvars, groups) = merge_and_filter(&datasets, &config, &params);
+        assert_eq!(
+            serde_json::to_value(&hostvars["h1"]).unwrap(),
+            serde_json::json!({"mon": {"name": "h1", "status": "UP"}})
+        );
+        assert_eq!(
+            serde_json::to_value(groups["g"].vars.as_ref().unwrap()).unwrap(),
+            serde_json::json!({"mon": {"poller": "p"}})
+        );
+        // a csv column may be a path, and reads the value at it
+        let out = render_csv(
+            &datasets,
+            &config,
+            &serde_json::json!({"fields": "mon.status,os"}),
+        );
+        assert_eq!(out, "host,mon.status,os\nh1,UP,linux\n");
     }
 
     #[test]

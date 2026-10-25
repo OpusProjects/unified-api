@@ -97,6 +97,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The bundled config's sample project pointed at a repository that does not
+  exist, so every instance started on it logged a failed clone, and retried
+  it, every 30 minutes. It now clones unified-api itself, which holds the
+  sample scripts at the paths the sample sources name.
 - The image could not clone the bundled config's projects: their default
   directory (`projects`, under the root-owned `/app`) could not be created by
   the unprivileged user the process runs as, so every sync that needed a

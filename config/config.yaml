@@ -1,6 +1,13 @@
 server:
   host: "0.0.0.0"
   port: 8182
+  # The web UI on this same address: the image ships a build of unified-ui at
+  # /usr/share/unified-api/ui. Sign-in is the API's own login page (an API key,
+  # or LDAP: docs/ldap-login.md); with no api_keys.yaml the API is open and so
+  # is the UI. Remove the block for an API without a UI. See docs/ui.md.
+  ui:
+    enabled: true
+    assets_dir: "/usr/share/unified-api/ui"
 
 # Optional: snapshot the in-memory cache to disk so restarts start from the
 # last snapshot instead of empty. Remove the block for a purely in-memory cache.

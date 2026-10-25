@@ -255,6 +255,10 @@ login form and a session cookie rather than a header box.
 If no keys are configured at all, the API is open (`auth.rs:213`) and so is the
 UI, with the same loud warning at startup. No special case.
 
+People can also log in with a directory account instead of a key: see
+[LDAP login](ldap-login.md). The session is the same; only the check at the
+door differs.
+
 ## Writes: forms and CSRF
 
 The point of the console is to be able to press **sync** — a read-only version

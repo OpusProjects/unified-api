@@ -1,8 +1,10 @@
 pub mod cache;
 pub mod config_store;
 pub mod connector;
+pub mod directory;
 pub mod enricher;
 pub mod git;
 pub mod output;
+pub mod peer;
 pub mod secrets;
 pub mod venv;

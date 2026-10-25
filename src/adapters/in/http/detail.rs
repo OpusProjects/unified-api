@@ -81,6 +81,11 @@ pub struct Gathering {
     /// Credential ids this connector is given — names, never secrets
     pub credential_ids: Vec<String>,
     pub allow_on_demand_refresh: bool,
+    /// For a remote source, the instance it pulls from (its `config.url`).
+    /// The one config value shown: it is an address, not a secret, and
+    /// `GET /topology` already names it to every caller who may read the source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
     /// The KEYS of the connector's free-form `config:` map, without their
     /// values. A restricted key may read this page for a source it is granted,
     /// while the configuration API that holds the values is admin-only — so the
@@ -146,6 +151,7 @@ pub async fn get_source(
             schedule: source.schedule.clone(),
             credential_ids: source.credential_ids.clone(),
             allow_on_demand_refresh: source.allow_on_demand_refresh,
+            remote_url: crate::domain::topology::remote_url(source),
             config_keys: {
                 let mut keys: Vec<String> = source.config.keys().cloned().collect();
                 keys.sort();

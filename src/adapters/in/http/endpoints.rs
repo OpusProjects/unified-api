@@ -30,6 +30,30 @@ pub struct EndpointInfo {
     pub source_ids: Vec<String>,
     pub sources_ready: usize,
     pub sources_missing: Vec<String>,
+    /// How the sources' data becomes the response. Admin only, like a
+    /// source's `gathering`: a key granted an endpoint may read its output,
+    /// not how it is made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transform: Option<EndpointTransform>,
+}
+
+/// An endpoint's transformer, as configured. Exactly one of `output` (a
+/// builtin) and `script_path` is set.
+#[derive(Serialize, ToSchema)]
+pub struct EndpointTransform {
+    /// The builtin: `ansible`, `json` or `csv`
+    pub output: Option<String>,
+    pub script_path: Option<String>,
+    pub script_args: Vec<String>,
+    /// Project whose checkout holds the script
+    pub project_id: Option<String>,
+    /// Seconds a script may run before it is killed; null for a builtin,
+    /// which runs in-process and has no timeout
+    pub timeout_seconds: Option<u64>,
+    /// `limit.by_hosts_from_inventory`: only the hosts this source lists
+    pub limit_hosts_from: Option<String>,
+    /// The KEYS of the transformer's `config:` map, without their values
+    pub config_keys: Vec<String>,
 }
 
 #[utoipa::path(
@@ -65,12 +89,134 @@ pub async fn list_endpoints(
                 source_ids: ep.source_ids.clone(),
                 sources_ready,
                 sources_missing,
+                transform: auth.permissions.is_admin().then(|| EndpointTransform {
+                    output: ep.output.map(|o| o.name().to_string()),
+                    script_path: ep.script_path.clone(),
+                    script_args: ep.script_args.clone(),
+                    project_id: ep.project_id.clone(),
+                    // The same default the run arms, so the page shows the
+                    // timeout that actually applies.
+                    timeout_seconds: ep.script_path.as_ref().map(|_| {
+                        ep.timeout_seconds
+                            .unwrap_or_else(crate::domain::default_timeout_seconds)
+                    }),
+                    limit_hosts_from: ep
+                        .limit
+                        .as_ref()
+                        .and_then(|l| l.by_hosts_from_inventory.clone()),
+                    config_keys: {
+                        let mut keys: Vec<String> = ep.config.keys().cloned().collect();
+                        keys.sort();
+                        keys
+                    },
+                }),
             }
         })
         .collect();
 
     endpoints.sort_by(|a, b| a.endpoint_id.cmp(&b.endpoint_id));
     Json(endpoints)
+}
+
+/// How big an endpoint's default output is.
+#[derive(Serialize, ToSchema)]
+pub struct EndpointCounts {
+    /// Hosts in a call with no parameters of its own. Null for a script
+    /// endpoint: what it returns is the script's business, and counting its
+    /// inputs instead would pass off one number as another.
+    pub hosts: Option<usize>,
+    /// Groups in the same call; null for a script endpoint, likewise, and
+    /// for CSV, whose output has none.
+    pub groups: Option<usize>,
+    /// Sources with no data yet. While any is missing a call answers 503
+    /// rather than an inventory, so there is nothing to count either: hosts
+    /// and groups are null, never a misleading zero.
+    pub missing_sources: Vec<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/endpoints/{id}/counts",
+    tag = "Endpoints",
+    params(
+        ("id" = String, Path, description = "Endpoint identifier (e.g. ep-ansible-linux)")
+    ),
+    responses(
+        (status = 200, description = "Hosts and groups in the endpoint's default output, from the sources cached now; the output itself is not rendered. Null counts with missing_sources when a call would answer 503", body = EndpointCounts),
+        (status = 400, description = "The builtin's configured settings are malformed, as a call would be told", body = ErrorBody),
+        (status = 403, description = "API key not allowed to run this endpoint", body = ErrorBody),
+        (status = 404, description = "Endpoint not configured", body = ErrorBody)
+    )
+)]
+pub async fn endpoint_counts(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Result<Json<EndpointCounts>, ApiError> {
+    // Whoever may call the endpoint may know how big its answer is.
+    if !auth.permissions.allows_endpoint(&id) {
+        return Err(ApiError::forbidden(format!(
+            "this API key is not allowed to run endpoint '{}'",
+            id
+        )));
+    }
+    let config = state.config();
+    let endpoint = config
+        .endpoints
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("endpoint '{}' is not configured", id)))?;
+
+    // What a call would merge right now: the sources cached at this moment.
+    let mut datasets: HashMap<String, Arc<Dataset>> = HashMap::new();
+    let mut missing_sources: Vec<String> = Vec::new();
+    for source_id in &endpoint.source_ids {
+        match state.cache.get(source_id) {
+            Some(entry) => {
+                datasets.insert(source_id.clone(), entry.dataset.clone());
+            }
+            None => missing_sources.push(source_id.clone()),
+        }
+    }
+    missing_sources.sort();
+
+    // Settings the builtin would refuse (a malformed filter, a renamed key)
+    // fail a call with 400; the counts answer the same rather than a zero.
+    if endpoint.output.is_some() {
+        crate::application::output::check_params(&endpoint.config, &serde_json::json!({}))
+            .map_err(ApiError::bad_request)?;
+    }
+
+    // A script's output, or a call that would fail for want of a source:
+    // nothing to count.
+    if endpoint.output.is_none() || !missing_sources.is_empty() {
+        return Ok(Json(EndpointCounts {
+            hosts: None,
+            groups: None,
+            missing_sources,
+        }));
+    }
+
+    let datasets = match &endpoint.limit {
+        Some(limit) => crate::application::output::apply_limit(&datasets, limit),
+        None => datasets,
+    };
+
+    // The merge is CPU over the whole inventory: off the async workers, as
+    // a render is.
+    let settings = endpoint.config.clone();
+    let (hosts, groups) = tokio::task::spawn_blocking(move || {
+        crate::application::output::counts(&datasets, &settings)
+    })
+    .await
+    .map_err(|join_error| ApiError::internal(format!("counting failed: {}", join_error)))?;
+
+    // CSV is one row per host: its output has no groups to count.
+    let csv = endpoint.output == Some(crate::domain::endpoint::OutputFormat::Csv);
+    Ok(Json(EndpointCounts {
+        hosts: Some(hosts),
+        groups: (!csv).then_some(groups),
+        missing_sources,
+    }))
 }
 
 #[utoipa::path(

@@ -63,6 +63,12 @@ pub struct RuntimeConfig {
     // then re-applies onto it (application::config::apply calls resize).
     pub refresh_timeout_seconds: u64,
     pub refresh_max_concurrent: usize,
+    // LDAP login for the browsable API. Read per login, so the directory and
+    // the access rules reload; a change also ends the sessions opened under
+    // the old rules (application::config::apply).
+    pub ldap: Option<crate::domain::ldap::LdapConfig>,
+    // `server.ui.home`: where a sign-in with no page to return to lands.
+    pub ui_home: String,
 }
 
 // Bumped on every reload, and watched by the scheduler: the tasks of the
@@ -157,6 +163,11 @@ pub struct AppState {
     // `ui.enabled` is false — the routes that would create one are not in the
     // router at all.
     pub sessions: Arc<crate::adapters::r#in::http::session::SessionStore>,
+    // Checks LDAP logins. Unused unless `server.ui.ldap` is configured.
+    pub directory: Arc<dyn ports::directory::DirectoryPort>,
+    // Asks other unified-api instances to describe themselves, for the
+    // federation map. Read-only and never on the data path.
+    pub peers: Arc<dyn ports::peer::PeerPort>,
 
     // The browsable HTML API's settings. Static like `projects_dir`, and for
     // the same reason: it decides which middlewares and routes are in the
@@ -179,6 +190,12 @@ pub struct AppState {
     pub enrich_health: Arc<SyncHealthRegistry>,
     pub project_health: Arc<SyncHealthRegistry>,
     pub snapshot_health: Arc<SyncHealthRegistry>,
+    // When this process's app was built: how long it has been running, for
+    // the Configuration page ("did it restart?").
+    pub started: std::time::Instant,
+    // Recent failed LDAP logins and the cap on concurrent ones (see
+    // application::login::LoginThrottle).
+    pub login_throttle: Arc<crate::application::login::LoginThrottle>,
     // Coalescing and limits for reads that are allowed to refresh before
     // answering. In-process state like sync_health: no outside world behind it.
     pub refresh: Arc<RefreshCoordinator>,

@@ -166,7 +166,8 @@ is already running.
 **Needs a restart** — reported, never silently ignored:
 
 `server.host`, `server.port`,
-`cache.persistence`, `projects.dir`, `config_api.enabled`.
+`cache.persistence`, `projects.dir`, `config_api.enabled`, `server.ui.enabled`,
+`server.ui.session_ttl_seconds`.
 
 A write that touches one of them still lands on disk; the response names it:
 

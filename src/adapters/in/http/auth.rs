@@ -146,6 +146,27 @@ pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedAp
     Ok(keys)
 }
 
+// LDAP login without a single API key is refused outright. With no keys the
+// middleware below runs the API OPEN (every caller admin) and never consults
+// a session, so an "LDAP-only" instance would show a sign-in page that
+// anyone could walk past. Checked where keys are resolved: at start-up (the
+// process will not run) and before a reload is committed (it is refused).
+pub fn ldap_requires_keys(
+    cfg: &crate::config::AppConfig,
+    keys: &[ResolvedApiKey],
+) -> Result<(), String> {
+    if cfg.server.ui.ldap.is_some() && keys.is_empty() {
+        return Err(
+            "server.ui.ldap is configured but no API key is: without one \
+                    the API runs with no authentication at all, and the LDAP sign-in \
+                    would protect nothing. Declare at least one key in api_keys.yaml \
+                    (an admin key also stays the way in when the directory is down)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 // A browser session's identity, published on the response for the HTML layer.
 #[derive(Clone)]
 pub struct BrowserIdentity {
@@ -162,6 +183,17 @@ pub struct AuthContext {
     // None when the API runs open (no keys configured)
     pub key_name: Option<String>,
     pub permissions: Permissions,
+    pub method: AuthMethod,
+}
+
+// How the caller proved who they are: what the Users page shows as "you",
+// and what decides which change revokes them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AuthMethod {
+    // No keys configured: everyone is admin.
+    Open,
+    ApiKey,
+    Ldap,
 }
 
 // The registry, injected as a router Extension. The middleware clones the
@@ -236,6 +268,7 @@ pub async fn require_api_key(
         request.extensions_mut().insert(AuthContext {
             key_name: None,
             permissions: Permissions::Admin,
+            method: AuthMethod::Open,
         });
         let mut response = next.run(request).await;
         // The console works here too. There is no ambient credential on an
@@ -307,9 +340,16 @@ pub async fn require_api_key(
             key_name: auth.key_name.clone(),
             csrf: auth.csrf,
         };
+        // On the request as well: `GET /auth` hands the token to a script
+        // (the UI), which has no HTML form to read it from.
+        request.extensions_mut().insert(identity.clone());
         request.extensions_mut().insert(AuthContext {
             key_name: Some(auth.key_name),
             permissions: auth.permissions,
+            method: match auth.kind {
+                crate::adapters::r#in::http::session::SessionKind::ApiKey => AuthMethod::ApiKey,
+                crate::adapters::r#in::http::session::SessionKind::Directory => AuthMethod::Ldap,
+            },
         });
         let mut response = next.run(request).await;
         // On the RESPONSE, not the request: the HTML layer runs OUTSIDE this
@@ -334,6 +374,7 @@ pub async fn require_api_key(
             request.extensions_mut().insert(AuthContext {
                 key_name: Some(key.name.clone()),
                 permissions: key.permissions.clone(),
+                method: AuthMethod::ApiKey,
             });
             Ok(next.run(request).await)
         }
@@ -344,6 +385,36 @@ pub async fn require_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // An LDAP-only instance would run open (no key = no authentication), so
+    // the combination is refused; one key is enough to close it.
+    #[test]
+    fn ldap_without_any_api_key_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  ui:\n    enabled: true\n    ldap:\n      \
+             url: \"ldaps://ldap.example.com\"\n      bind_credential: cred-ldap\n      search_base: \"DC=x\"\n      \
+             access:\n        - name: ops\n          groups: [DL-ops]\n          role: admin\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("credentials.yaml"),
+            "cred-ldap:\n  name: \"LDAP\"\n  type: username_password\n  env_prefix: \"LDAP\"\n",
+        )
+        .unwrap();
+        let cfg = crate::config::load_config(dir.path().to_str().unwrap()).unwrap();
+
+        let err = ldap_requires_keys(&cfg, &[]).expect_err("no key with LDAP is refused");
+        assert!(err.contains("no authentication"), "{err}");
+
+        let key = ResolvedApiKey {
+            name: "admin".to_string(),
+            secret: "s".to_string(),
+            permissions: Permissions::Admin,
+        };
+        assert!(ldap_requires_keys(&cfg, &[key]).is_ok());
+    }
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;

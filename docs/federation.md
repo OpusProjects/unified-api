@@ -207,6 +207,52 @@ Failure modes, all loud:
 
 ---
 
+## Seeing the federation: `GET /api/v1/topology`
+
+Every instance can describe the federation from where it stands:
+
+```bash
+curl -s -H "X-API-Key: $KEY" https://central.example.com/api/v1/topology?depth=2 | jq
+```
+
+```json
+{
+  "version": "0.34.0",
+  "sources": 30,
+  "peers": [
+    {
+      "url": "https://unified-api-dc1.example.com:8443",
+      "sources": [
+        { "source_id": "src-dc1", "remote_source": "src-fleet", "cached": true,
+          "hosts": 437, "age_seconds": 120, "consecutive_failures": 0 }
+      ],
+      "instance": { "version": "0.34.0", "sources": 3, "peers": [] }
+    }
+  ]
+}
+```
+
+- **Peers come from configuration**: every `connector_type: remote` source,
+  grouped by its `config.url`. No registry to keep in sync.
+- **Each peer is asked in turn**, with the token credential its sources
+  already use, and nests its own answer under `instance`. `depth` (default 2,
+  at most 3) bounds the hops, so a loop of instances federating each other
+  ends.
+- **A peer that cannot be asked keeps its place** with `error` set
+  (`unreachable`, `did not answer in time`, a refused key). A peer older than
+  this route answers with its version only, and its own peers stay unknown.
+- **Any key may ask; each sees the peers behind the sources it may read.** An
+  edge answers its central's restricted key, and nothing about sources outside
+  that key's scope.
+- Each peer has 8 seconds to answer, plus 8 more for each level it will ask
+  below it: the map is a page someone is waiting on, not a sync, and a middle
+  peer still waiting on a dead one further away must not be mistaken for dead
+  itself. An older peer's fallback (its index) counts within the same time.
+- A restricted key sees each peer's version, not the peer's own peers: those
+  were asked with this instance's key, not the caller's.
+
+The UI's Topology page draws this as a tree.
+
 ## Operational notes
 
 How the arrangement behaves once it is running, and what it costs to change its shape.

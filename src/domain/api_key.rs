@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // Configuration shape of one API key — api_keys.yaml.
 //
@@ -35,7 +35,7 @@ pub struct ApiKeyDef {
 
 // `rename_all = "lowercase"` lets the YAML say `role: admin` instead of
 // `role: Admin` — config files shouldn't care about Rust naming style.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ApiKeyRole {
     Admin,

@@ -27,6 +27,14 @@ pub struct ProjectInfo {
     /// Seconds between periodic re-pulls (absent/0 = only boot and on demand)
     pub sync_interval_seconds: Option<u64>,
     pub sync_on_boot: bool,
+    /// Cron expression (UTC) for re-pulls, the alternative to an interval
+    pub schedule: Option<String>,
+    /// Seconds one clone or pull may take before it is killed
+    pub timeout_seconds: u64,
+    /// What reads its scripts from this checkout: the ids whose `project_id`
+    /// names it. A project nothing uses can go; one with users cannot,
+    /// without breaking them.
+    pub used_by: ProjectUsers,
     /// Whether anything is still managing to pull this checkout — last
     /// attempt, last success, last error, consecutive failures. Absent until a
     /// sync has run through this process (boot, interval or on demand). This
@@ -34,6 +42,28 @@ pub struct ProjectInfo {
     /// visible: `checkout_present` stays true while every pull fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_health: Option<SyncHealthInfo>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ProjectUsers {
+    pub sources: Vec<String>,
+    pub endpoints: Vec<String>,
+    pub enrichers: Vec<String>,
+}
+
+// Sorted ids of everything in `items` whose project is `project`.
+fn users_of<'a, T: 'a>(
+    items: impl IntoIterator<Item = (&'a String, &'a T)>,
+    project: &str,
+    project_of: impl Fn(&T) -> Option<&str>,
+) -> Vec<String> {
+    let mut ids: Vec<String> = items
+        .into_iter()
+        .filter(|(_, item)| project_of(item) == Some(project))
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.sort();
+    ids
 }
 
 #[utoipa::path(
@@ -72,11 +102,20 @@ pub async fn list_projects(
         projects.push(ProjectInfo {
             project_id: id.clone(),
             name: project.name.clone(),
-            git_url: project.git_url.clone(),
+            // Shown, so never with a token someone wrote into it; git itself
+            // clones from the configured value.
+            git_url: crate::domain::topology::without_userinfo(&project.git_url),
             branch: project.branch.clone(),
             checkout_present,
             sync_interval_seconds: project.sync_interval_seconds,
             sync_on_boot: project.sync_on_boot,
+            schedule: project.schedule.clone(),
+            timeout_seconds: project.timeout_seconds,
+            used_by: ProjectUsers {
+                sources: users_of(&config.sources, id, |s| Some(s.project_id.as_str())),
+                endpoints: users_of(&config.endpoints, id, |e| e.project_id.as_deref()),
+                enrichers: users_of(&config.enrichers, id, |e| e.project_id.as_deref()),
+            },
             sync_health: state.project_health.get(id).map(Into::into),
         });
     }

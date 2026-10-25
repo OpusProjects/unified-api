@@ -254,19 +254,78 @@ pub fn is_config_file(name: &str) -> bool {
 // keys is how a pipeline comes to believe it changed a port it did not
 // change — so they are diffed and NAMED in the reload report instead.
 // The browsable API's settings.
-#[derive(Deserialize, Default, Clone, PartialEq, Debug)]
+#[derive(Deserialize, Clone, PartialEq, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    // How long a browser session lives. Read per login, so it reloads.
+    // How long a browser session lives. Fixed when the routes are built (the
+    // login handler receives it as an extension), so it is restart-only and
+    // listed in RestartOnlySettings: a reload that changes it says so.
     #[serde(default = "default_session_ttl_seconds")]
     pub session_ttl_seconds: u64,
+
+    // Log in with a directory account instead of pasting an API key. Read per
+    // login from the configuration snapshot, so changing the server or the
+    // access rules is a reload — which also ends the LDAP sessions opened
+    // under the old rules (application::config::apply).
+    #[serde(default)]
+    pub ldap: Option<crate::domain::ldap::LdapConfig>,
+
+    // Where a sign-in lands when nothing asked for a page: someone opening
+    // /api/v1/login directly, or signing in again after signing out. Unset,
+    // it is "/" when this instance serves the UI (`assets_dir`) and the API's
+    // own browsable pages otherwise. Read per login, so it reloads.
+    #[serde(default)]
+    pub home: Option<String>,
+
+    // A built unified-ui (the directory holding its index.html), served at
+    // "/": the UI and the API on one address, no proxy in front. The image
+    // ships one and sets this. Restart-only: the router is built once.
+    #[serde(default)]
+    pub assets_dir: Option<String>,
+}
+
+impl UiConfig {
+    pub fn home(&self) -> &str {
+        match (&self.home, &self.assets_dir) {
+            (Some(home), _) => home,
+            (None, Some(_)) => "/",
+            (None, None) => "/api/v1/",
+        }
+    }
 }
 
 fn default_session_ttl_seconds() -> u64 {
     3600
+}
+
+// A path on THIS origin, and nothing a browser could read as another host:
+// `//evil.example` is protocol-relative, a backslash is read as a slash, and
+// browsers strip tabs and newlines before reading a URL, so "/\t/evil" would
+// arrive as "//evil". Shared by the login's `next` and `server.ui.home`, so
+// the redirect after a login can never be turned into an open redirect.
+pub fn is_local_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && !path.contains('\\')
+        && !path.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+// By hand rather than derived: a derived Default gives a session TTL of zero
+// (serde's default only applies when parsing), so a UiConfig built in code
+// issued sessions that were expired the moment they were created.
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            session_ttl_seconds: default_session_ttl_seconds(),
+            ldap: None,
+            home: None,
+            assets_dir: None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -278,6 +337,8 @@ pub struct RestartOnlySettings {
     pub projects_dir: String,
     pub config_api_enabled: bool,
     pub ui_enabled: bool,
+    pub session_ttl_seconds: u64,
+    pub ui_assets_dir: Option<String>,
 }
 
 impl RestartOnlySettings {
@@ -294,6 +355,8 @@ impl RestartOnlySettings {
             projects_dir: cfg.projects_config.dir.clone(),
             config_api_enabled: cfg.config_api.enabled,
             ui_enabled: cfg.server.ui.enabled,
+            session_ttl_seconds: cfg.server.ui.session_ttl_seconds,
+            ui_assets_dir: cfg.server.ui.assets_dir.clone(),
         }
     }
 
@@ -319,6 +382,14 @@ impl RestartOnlySettings {
             "config_api.enabled",
         );
         check(self.ui_enabled != other.ui_enabled, "server.ui.enabled");
+        check(
+            self.session_ttl_seconds != other.session_ttl_seconds,
+            "server.ui.session_ttl_seconds",
+        );
+        check(
+            self.ui_assets_dir != other.ui_assets_dir,
+            "server.ui.assets_dir",
+        );
         keys
     }
 }
@@ -818,6 +889,115 @@ impl AppConfig {
             }
         }
 
+        if let Some(ldap) = &self.server.ui.ldap {
+            errors.extend(self.ldap_errors(ldap));
+        }
+
+        if let Some(home) = &self.server.ui.home
+            && !is_local_path(home)
+        {
+            errors.push(format!(
+                "server.ui.home '{home}' must be a path on this server, such as \"/\" — \
+                 a sign-in redirects there, and another host would make it an open redirect"
+            ));
+        }
+
+        // The UI signs in through the API's own login page and its session
+        // cookie, which exist only with the browsable UI on.
+        if self.server.ui.assets_dir.is_some() && !self.server.ui.enabled {
+            errors.push(
+                "server.ui.assets_dir is set but server.ui.enabled is false — the UI \
+                 signs in through the login page, which only exists with the UI enabled"
+                    .to_string(),
+            );
+        }
+
+        errors
+    }
+
+    // Everything about `server.ui.ldap` that can be known without contacting
+    // the directory, so a bad push fails validation instead of every login.
+    fn ldap_errors(&self, ldap: &crate::domain::ldap::LdapConfig) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // The login form and the session are the browsable API's; without it
+        // there is nothing for LDAP to log anybody into.
+        if !self.server.ui.enabled {
+            errors.push(
+                "server.ui.ldap is set but server.ui.enabled is false — LDAP login is \
+                 part of the browsable UI"
+                    .to_string(),
+            );
+        }
+
+        let url = ldap.url.to_ascii_lowercase();
+        if url.starts_with("ldap://") {
+            if !ldap.starttls {
+                errors.push(format!(
+                    "server.ui.ldap.url '{}' is plain LDAP — every password would cross \
+                     the network in the clear; use ldaps:// or set starttls: true",
+                    ldap.url
+                ));
+            }
+        } else if url.starts_with("ldaps://") {
+            if ldap.starttls {
+                errors.push(
+                    "server.ui.ldap: starttls applies to ldap:// URLs; an ldaps:// \
+                     connection is already TLS"
+                        .to_string(),
+                );
+            }
+        } else {
+            errors.push(format!(
+                "server.ui.ldap.url '{}' must start with ldaps:// or ldap://",
+                ldap.url
+            ));
+        }
+
+        if !self.credentials.contains_key(&ldap.bind_credential) {
+            errors.push(format!(
+                "server.ui.ldap.bind_credential references unknown credential '{}'",
+                ldap.bind_credential
+            ));
+        }
+        if !ldap.user_filter.contains("{username}") {
+            errors.push(format!(
+                "server.ui.ldap.user_filter '{}' has no {{username}} placeholder — it \
+                 would match the same entry whoever logs in",
+                ldap.user_filter
+            ));
+        }
+        if ldap.access.is_empty() {
+            errors.push(
+                "server.ui.ldap.access is empty — nobody could log in; name the groups \
+                 or users who may"
+                    .to_string(),
+            );
+        }
+        for rule in &ldap.access {
+            if rule.groups.is_empty() && rule.users.is_empty() {
+                errors.push(format!(
+                    "server.ui.ldap.access '{}' names no groups and no users",
+                    rule.name
+                ));
+            }
+            for id in &rule.sources {
+                if !self.sources.contains_key(id) && !self.views.contains_key(id) {
+                    errors.push(format!(
+                        "server.ui.ldap.access '{}' references unknown source '{}'",
+                        rule.name, id
+                    ));
+                }
+            }
+            for id in &rule.endpoints {
+                if !self.endpoints.contains_key(id) {
+                    errors.push(format!(
+                        "server.ui.ldap.access '{}' references unknown endpoint '{}'",
+                        rule.name, id
+                    ));
+                }
+            }
+        }
         errors
     }
 
@@ -1413,6 +1593,70 @@ mod tests {
         let result = load_config(dir.path().to_str().unwrap());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("not an ssh source"), "{}", err);
+    }
+
+    // The LDAP block is checked before anyone tries to log in: a plaintext
+    // URL, a service account that does not exist, or a UI that is off are
+    // all configuration errors, not login failures.
+    #[test]
+    fn validate_ldap_rules() {
+        let check = |ui: &str, credentials: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(
+                dir.path().join("config.yaml"),
+                format!("server:\n  host: \"127.0.0.1\"\n  port: 9090\n  ui:\n{ui}"),
+            )
+            .unwrap();
+            fs::write(dir.path().join("credentials.yaml"), credentials).unwrap();
+            load_config(dir.path().to_str().unwrap())
+                .err()
+                .map(|e| e.to_string())
+        };
+        let cred =
+            "cred-ldap:\n  name: \"LDAP\"\n  type: username_password\n  env_prefix: \"LDAP\"\n";
+        let ldap = |url: &str, extra: &str| {
+            format!(
+                "    enabled: true\n    ldap:\n      url: \"{url}\"\n      bind_credential: cred-ldap\n      \
+                 search_base: \"DC=x\"\n      access:\n        - name: ops\n          groups: [DL-ops]\n          \
+                 role: admin\n{extra}"
+            )
+        };
+
+        assert_eq!(check(&ldap("ldaps://ldap.example.com", ""), cred), None);
+        assert_eq!(
+            check(
+                &ldap("ldap://ldap.example.com", "      starttls: true\n"),
+                cred
+            ),
+            None
+        );
+
+        let err = check(&ldap("ldap://ldap.example.com", ""), cred).expect("plaintext refused");
+        assert!(err.contains("in the clear"), "{err}");
+
+        let err = check(&ldap("ldaps://ldap.example.com", ""), "").expect("unknown credential");
+        assert!(err.contains("unknown credential 'cred-ldap'"), "{err}");
+
+        let off = ldap("ldaps://ldap.example.com", "").replace("enabled: true", "enabled: false");
+        let err = check(&off, cred).expect("ui off");
+        assert!(err.contains("server.ui.enabled is false"), "{err}");
+
+        // A UI to serve needs the login page it signs in through.
+        let err = check("    enabled: false\n    assets_dir: \"/srv/ui\"\n", "")
+            .expect("assets without the UI refused");
+        assert!(err.contains("server.ui.assets_dir"), "{err}");
+        assert_eq!(
+            check("    enabled: true\n    assets_dir: \"/srv/ui\"\n", ""),
+            None
+        );
+
+        // Where a login lands must stay on this server: it is a redirect.
+        assert_eq!(check("    enabled: true\n    home: \"/\"\n", ""), None);
+        for home in ["https://evil.example", "//evil.example", "inventory"] {
+            let err = check(&format!("    enabled: true\n    home: \"{home}\"\n"), "")
+                .expect("an off-site home refused");
+            assert!(err.contains("server.ui.home"), "{err}");
+        }
     }
 
     #[test]

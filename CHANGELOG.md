@@ -6,6 +6,118 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A web UI, served by unified-api itself on the same address
+  (`server.ui.assets_dir`): sources, endpoints, projects, credentials, the
+  federation topology, metrics and the configuration, with a host search
+  across all of it. It is [unified-ui](https://github.com/OpusProjects/unified-ui)
+  v0.1.0, built into the image at `/usr/share/unified-api/ui`; each release
+  pins the unified-ui version it ships (`UI_REF` in `docker/Dockerfile`). An
+  unknown API path stays a JSON 404, and `/metrics` is the Metrics page only
+  for a browser asking for HTML. See `docs/ui.md`.
+- LDAP login for the browsable UI (`server.ui.ldap` in `config.yaml`): people log
+  in with their directory account, and `access` rules map groups or usernames to
+  `admin` or to a restricted list of sources and endpoints, as `api_keys.yaml`
+  does. The service account resolves from `credentials.yaml` (env, file or
+  Vault). Plain `ldap://` without StartTLS, an unknown credential or an empty
+  rule list fail validation, and LDAP with no API key at all refuses to start
+  (or to reload): without a key the API runs open and the sign-in would
+  protect nothing. A reload that changes the block ends the LDAP sessions. API
+  key login keeps working beside it. See `docs/ldap-login.md`.
+- `GET /api/v1/auth`: who the caller is and how they authenticated; for an admin,
+  also the LDAP configuration with its access rules and the API keys by name and
+  scope, never a secret. Linked from the API index as `auth`.
+- Process metrics on `/metrics` under the standard Prometheus names:
+  `process_resident_memory_bytes`, `process_virtual_memory_bytes`,
+  `process_cpu_seconds_total`, `process_threads`, `process_open_fds` and
+  `process_max_fds`. Read from `/proc` at scrape time (Linux), with no new
+  dependency. The cache lives in memory, so resident memory is the number to
+  alert on before a pod meets its limit.
+- `unified_api_hosts_unique` on `/metrics`: unique hostnames across every
+  cached source. Summing `unified_api_source_hosts` counts a host once per
+  source that lists it; this counts it once, ignoring case.
+- `GET /api/v1/topology`: the federation seen from this instance. Its remote
+  sources grouped by the URL they read (one entry per peer instance, with each
+  source's cache and pull health), and each peer asked to describe itself in
+  turn, with the key those sources already use: a central's map shows its
+  edges. `?depth=` (default 2, at most 3) bounds the hops; a peer that will ask
+  further gets 8 seconds per level below it, so one dead instance two hops away
+  cannot hide a healthy one in between. Any key may ask and sees the peers
+  behind the sources it may read; a restricted key sees each peer's version
+  only. A peer that cannot be asked shows the reason; one older than this route
+  reports its version only.
+- `?next=` on the login form: after logging in, the browser returns to the page
+  that sent it, as long as that page is on this origin.
+- `server.ui.home`: where a login with no `?next=` lands (default `/` when
+  this instance serves the UI, `/api/v1/` otherwise). Logout takes the same
+  `next` and hands it to the login page, so signing out and back in from the
+  UI returns to the UI.
+- `GET /api/v1/hosts/search?q=`: find a host by any part of its name across
+  every source and view the key may read, from the cache. Each host comes with
+  the sources (or views) holding it and the age of their data, and the
+  endpoints whose output includes it, by their sources, limit and own settings.
+  Best match first; `limit` (default 20, at most 100) and the total matched.
+- `GET /api/v1/endpoints/{id}/counts`: hosts and groups in an endpoint's
+  default output, from the same merge and filters a call runs, without
+  rendering it. Null counts and `missing_sources` while a call would answer
+  503; null for a script endpoint, and groups null for CSV.
+- `GET /api/v1/credentials` (admin): each credential's type, where its secrets
+  are read from (env var names, file, Vault path), whether they resolve right
+  now, and what uses it (sources, projects, the LDAP login). Never a value.
+- `GET /api/v1/settings` (admin): the configuration in force, defaults
+  included, grouped as `config.yaml` is: server, UI, cache snapshot, projects,
+  secrets and Vault (address, mount, how it signs in; never a token), the
+  config API, the running version and uptime, the snapshot's last save, and
+  any keys a reload left waiting for a restart.
+- `GET /api/v1/endpoints`: an admin also gets each endpoint's `transform`
+  (builtin or script, project, arguments, timeout, limit, config key names).
+- `GET /api/v1/projects`: `schedule`, `timeout_seconds` and `used_by` (the
+  sources, endpoints and enrichers whose `project_id` names the project).
+- `GET /api/v1/sources/{id}`: an admin also gets `remote_url`, the instance a
+  remote source pulls from.
+- The API index links `credentials` and `settings`.
+- `server.ui.ldap.username_attribute` (default `sAMAccountName`): the
+  directory attribute holding an account's own name. Access rules' `users:` and
+  the session name use it rather than what was typed.
+- LDAP login limits: after 5 wrong passwords in 15 minutes an account is
+  refused (429) without asking the directory, at most 4 directory logins run at
+  once, and every failed login answers after the same total time, so timing
+  does not reveal which usernames exist.
+- `/metrics` with `server.metrics_require_auth` also accepts a signed-in
+  browser session, as every other route does.
+
+### Changed
+
+- **Breaking (anyone running the image on its bundled config):** the bundled
+  `config/config.yaml` now turns the UI on (`server.ui.enabled: true` and
+  `assets_dir`). `/` serves the UI instead of redirecting to `/swagger-ui/`,
+  and a browser opening an `/api/v1/` route gets the browsable HTML page. A
+  deployment with its own configuration is unaffected.
+
+### Fixed
+
+- The image could not clone the bundled config's projects: their default
+  directory (`projects`, under the root-owned `/app`) could not be created by
+  the unprivileged user the process runs as, so every sync that needed a
+  script failed with `Permission denied`. The image now creates it, owned by
+  that user.
+- `process_cpu_seconds_total` counted only the main thread (from
+  `/proc/self/schedstat`), so it read close to zero while the runtime's worker
+  threads did the work. It now reads the whole process's user and system time
+  from `/proc/self/stat`. `process_open_fds` no longer counts the descriptor
+  used to count them.
+- `server.ui.session_ttl_seconds` was documented as reloadable but is fixed
+  when the routes are built: a reload that changes it now reports it in
+  `restart_required`, as `server.ui.enabled` already was.
+
+- After a refused login (wrong key or password), the re-rendered form carried no
+  login challenge, so the corrected attempt was rejected as an expired form until
+  the page was reloaded. A refusal now issues a fresh challenge.
+- A `UiConfig` built in code (rather than parsed) had a session TTL of zero, so
+  every session it issued was already expired. Parsed configuration was not
+  affected.
+
 ## [0.33.0] - 2026-10-24
 
 ### Added

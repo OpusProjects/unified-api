@@ -29,6 +29,7 @@ and every one of them sees the same inventory.
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **Refresh**: a read can bring the hosts it names up to date, bounded by the source's TTL
 - **Configuration API**: a pipeline pushes the config directory and reloads it live, no restart
+- **Web UI**: sources, endpoints, topology, metrics and host search in a browser, same address
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
 - **Single static binary**: axum + tokio, hexagonal architecture, ~11k lines
 
@@ -56,6 +57,7 @@ and every one of them sees the same inventory.
 | [Troubleshooting](docs/troubleshooting.md) | Symptom first: what to check when data is stale or a read refuses |
 | [TTL](docs/caching.md) | The three-level freshness model, sync modes and TTL overrides |
 | [Views](docs/views.md) | Several sources as one id, and how a host is routed to its owner |
+| [Web UI](docs/ui.md) | The UI the image serves: turning it on, signing in, what is served where |
 
 ---
 

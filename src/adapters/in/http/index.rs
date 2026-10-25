@@ -81,6 +81,14 @@ pub struct ApiIndex {
     /// Admin-only, and only when config_api.enabled is on
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<&'static str>,
+    /// Who this caller is, and how anyone can log in
+    pub auth: &'static str,
+    /// The instances this one pulls from, and theirs
+    pub topology: &'static str,
+    /// Configured credentials and whether they resolve (admin-only)
+    pub credentials: &'static str,
+    /// The configuration in force, defaults included (admin-only)
+    pub settings: &'static str,
     pub health: &'static str,
     pub ready: &'static str,
     pub metrics: &'static str,
@@ -114,6 +122,10 @@ pub async fn api_index(
         // Same condition the config handlers enforce: the routes exist in the
         // router either way, and answer 403 when no store is configured.
         config: (admin && state.config_store.is_some()).then_some("/api/v1/config"),
+        auth: "/api/v1/auth",
+        topology: "/api/v1/topology",
+        credentials: "/api/v1/credentials",
+        settings: "/api/v1/settings",
         health: "/healthz",
         ready: "/readyz",
         metrics: "/metrics",

@@ -346,6 +346,9 @@ fn keys_for(
         )
     })?;
 
+    super::auth::ldap_requires_keys(cfg, &keys)
+        .map_err(|e| ApiError::new(StatusCode::CONFLICT, format!("refusing to reload: {e}")))?;
+
     if keys.is_empty() && !current.0.is_empty() {
         return Err(ApiError::new(
             StatusCode::CONFLICT,

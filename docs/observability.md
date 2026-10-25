@@ -131,6 +131,7 @@ probes — scrapers don't carry the API key):
 | `unified_api_source_fresh` | `source` | 1 while the dataset is within its TTL, 0 once expired — and 0 for a source that has only ever received host- or group-scoped syncs, which have no full gather for the TTL to be measured against |
 | `unified_api_source_hosts` | `source` | Hosts in the cached dataset |
 | `unified_api_source_groups` | `source` | Groups in the cached dataset |
+| `unified_api_hosts_unique` | — | Unique hostnames across every cached source. Summing `unified_api_source_hosts` counts a host once per source that lists it; this counts it once. Case-insensitive (`AASQL101` = `aasql101`), but nothing else is folded: `web01` and `web01.example.com` are two, so a source that lists VM names or a second domain inflates it |
 | `unified_api_source_sync_consecutive_failures` | `source` | Failed syncs since the last success — 0 while healthy. Appears once the source has attempted a sync in this process |
 | `unified_api_source_sync_last_attempt_age_seconds` | `source` | Seconds since a sync was last **attempted**, successful or not. Growing past the sync interval = the scheduler task is not running at all |
 | `unified_api_source_sync_last_success_age_seconds` | `source` | Seconds since the last successful sync. Absent until one has succeeded |
@@ -149,6 +150,11 @@ probes — scrapers don't carry the API key):
 | `unified_api_snapshot_consecutive_failures` | — | Failed cache snapshot writes since one last succeeded (a full disk, revoked permissions, a vanished volume) |
 | `unified_api_snapshot_last_success_age_seconds` | — | Seconds since a snapshot was last written |
 | `unified_api_scheduler_task_panics_total` | `task` | Panics caught and restarted by the task supervisor (`sync:<id>`, `enrich:<id>`, `project:<id>`). Any non-zero value is a bug worth reporting |
+| `process_resident_memory_bytes` | — | Resident memory. The whole inventory cache lives in it, so this is the number that says a pod is approaching its memory limit. Linux only, read from `/proc` at scrape time, like the `process_*` rows below |
+| `process_virtual_memory_bytes` | — | Virtual memory size |
+| `process_cpu_seconds_total` | — | User plus system CPU time of every thread since the process started (`/proc/self/stat`); `rate()` gives cores in use. Exported as a gauge (the exporter's counters are whole numbers), which `rate()` treats the same |
+| `process_threads` | — | OS threads |
+| `process_open_fds` / `process_max_fds` | — | File descriptors open, and the soft limit. Absent when the limit is `unlimited` |
 
 A view holds no cache entry of its own, so it has none of the `unified_api_source_*`
 series — its members do. The names are separate rather than reusing the source

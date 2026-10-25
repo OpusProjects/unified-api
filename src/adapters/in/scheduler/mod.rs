@@ -1417,6 +1417,8 @@ mod tests {
             shutdown_grace_seconds: previous.shutdown_grace_seconds,
             refresh_timeout_seconds: previous.refresh_timeout_seconds,
             refresh_max_concurrent: previous.refresh_max_concurrent,
+            ldap: previous.ldap.clone(),
+            ui_home: previous.ui_home.clone(),
         }));
         state.reload.bump();
 

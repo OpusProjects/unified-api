@@ -1257,6 +1257,15 @@ async fn list_endpoints_shows_readiness() {
     let eps: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
     assert_eq!(eps[0]["sources_ready"], 0);
     assert_eq!(eps[0]["sources_missing"].as_array().unwrap().len(), 2);
+    // An open instance treats every caller as admin: the transformer shows,
+    // with the timeout a script actually gets.
+    let transform = &eps[0]["transform"];
+    assert_eq!(
+        transform["script_path"],
+        "tests/adapters/out/output/ansible_inventory.py"
+    );
+    assert_eq!(transform["output"], serde_json::Value::Null);
+    assert_eq!(transform["timeout_seconds"], 300);
 
     // Sync src-test
     let (_, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
@@ -2063,4 +2072,109 @@ async fn without_host_args_a_host_scoped_sync_calls_the_script_unchanged() {
     // The full listing still places it in legacy, so nothing moved
     assert_eq!(group_hosts(&dataset, "legacy").len(), 2);
     assert!(dataset["groups"].get("modern").is_none());
+}
+
+// A key granted an endpoint reads its output and readiness, not how it is
+// made: the transformer is admin-only, like a source's gathering.
+#[tokio::test]
+async fn list_endpoints_hides_the_transform_from_a_restricted_key() {
+    use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
+    let mut endpoints = HashMap::new();
+    endpoints.insert(
+        "ep-test".to_string(),
+        OutputEndpoint {
+            name: "Test Endpoint".to_string(),
+            source_ids: vec!["src-test".to_string()],
+            output: None,
+            script_path: Some("tests/adapters/out/output/ansible_inventory.py".to_string()),
+            script_args: vec![],
+            project_id: None,
+            config: HashMap::new(),
+            limit: None,
+            timeout_seconds: None,
+        },
+    );
+    let app = unified_api::AppBuilder::new()
+        .sources(HashMap::new())
+        .endpoints(endpoints)
+        .api_keys(vec![ResolvedApiKey {
+            name: "awx".to_string(),
+            secret: "awx".to_string(),
+            permissions: Permissions::Scoped {
+                sources: std::collections::HashSet::new(),
+                endpoints: ["ep-test".to_string()].into_iter().collect(),
+            },
+        }])
+        .build();
+    let resp = app
+        .oneshot(
+            Request::get("/api/v1/endpoints")
+                .header("x-api-key", "awx")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let eps: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(eps.len(), 1);
+    assert!(eps[0].get("transform").is_none());
+}
+
+// The counts are the size of what a call returns, not of the inputs: the
+// same merge, so they must match the rendered output exactly. A script's
+// output is its own business, so it gets no numbers rather than wrong ones.
+#[tokio::test]
+async fn endpoint_counts_match_the_default_output() {
+    use unified_api::domain::endpoint::OutputFormat;
+    let mut sources = HashMap::new();
+    sources.insert("src-test".to_string(), test_source("default"));
+    let endpoint = |output: Option<OutputFormat>| OutputEndpoint {
+        name: "Test".to_string(),
+        source_ids: vec!["src-test".to_string()],
+        output,
+        script_path: output
+            .is_none()
+            .then(|| "tests/adapters/out/output/ansible_inventory.py".to_string()),
+        script_args: vec![],
+        project_id: None,
+        config: HashMap::new(),
+        limit: None,
+        timeout_seconds: None,
+    };
+    let mut endpoints = HashMap::new();
+    endpoints.insert("ep-json".to_string(), endpoint(Some(OutputFormat::Json)));
+    endpoints.insert("ep-script".to_string(), endpoint(None));
+    let (app, _) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .endpoints(endpoints)
+        .build_with_state();
+    // Before the sync a call would answer 503: no numbers, and why.
+    let (_, body) = request(app.clone(), "GET", "/api/v1/endpoints/ep-json/counts").await;
+    let counts: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts["hosts"], serde_json::Value::Null);
+    assert_eq!(counts["missing_sources"], serde_json::json!(["src-test"]));
+
+    let (status, _) = request(app.clone(), "POST", "/api/v1/sources/src-test/sync").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = request(app.clone(), "GET", "/api/v1/endpoints/ep-json/counts").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let counts: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let (_, body) = request(app.clone(), "GET", "/api/v1/endpoints/ep-json").await;
+    let output: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let hosts = output["hostvars"].as_object().unwrap().len();
+    assert!(hosts > 0, "the sample source has hosts");
+    assert_eq!(counts["hosts"], hosts);
+    assert_eq!(
+        counts["groups"],
+        output["groups"].as_object().unwrap().len()
+    );
+
+    let (_, body) = request(app.clone(), "GET", "/api/v1/endpoints/ep-script/counts").await;
+    let counts: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts["hosts"], serde_json::Value::Null);
+
+    let (status, _) = request(app, "GET", "/api/v1/endpoints/ep-ghost/counts").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

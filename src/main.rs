@@ -68,6 +68,11 @@ async fn main() {
         }
     };
 
+    if let Err(e) = unified_api::adapters::r#in::http::auth::ldap_requires_keys(&cfg, &api_keys) {
+        error!("Refusing to start: {}", e);
+        std::process::exit(1);
+    }
+
     // Make an unauthenticated deployment loud, not a buried auth=false field
     if api_keys.is_empty() {
         warn!(

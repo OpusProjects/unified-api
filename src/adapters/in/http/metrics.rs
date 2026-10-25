@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
@@ -8,6 +9,7 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use crate::AppState;
 use crate::adapters::r#in::http::auth::{ApiKeys, match_token, presented_token};
 use crate::adapters::r#in::http::error::ApiError;
+use crate::domain::dataset::Dataset;
 
 // The metrics recorder is a process-wide global (like the tracing subscriber),
 // so it can only be installed once. OnceLock makes repeated AppBuilder::build()
@@ -92,27 +94,187 @@ pub async fn track_requests(
          scrape-time gauges (see docs/observability.md). Public by default; \
          `server.metrics_require_auth: true` requires the API key, since the \
          exposition labels every source id and host count", content_type = "text/plain"),
-        (status = 401, description = "server.metrics_require_auth is on and no valid API key \
-         was presented", body = crate::adapters::r#in::http::error::ErrorBody)
+        (status = 401, description = "server.metrics_require_auth is on and neither a valid API \
+         key nor a signed-in session was presented", body = crate::adapters::r#in::http::error::ErrorBody)
     )
 )]
 pub async fn metrics(
     State(state): State<Arc<AppState>>,
     axum::Extension(registry): axum::Extension<ApiKeys>,
+    sessions: Option<axum::Extension<crate::adapters::r#in::http::session::Sessions>>,
     headers: HeaderMap,
 ) -> Result<String, ApiError> {
     if state.config().metrics_require_auth {
         let keys = registry.0.load();
         if !keys.is_empty() {
-            let token = presented_token(&headers).ok_or_else(ApiError::missing_api_key)?;
-            match_token(token, &keys).ok_or_else(ApiError::invalid_api_key)?;
+            match presented_token(&headers) {
+                Some(token) => {
+                    match_token(token, &keys).ok_or_else(ApiError::invalid_api_key)?;
+                }
+                // No key in a header: a browser signed in to this instance
+                // reads it with its session, like any other route. A read,
+                // so no CSRF token is asked for.
+                None => {
+                    use crate::adapters::r#in::http::session::{COOKIE_NAME, cookie_value};
+                    let signed_in = sessions.is_some_and(|axum::Extension(sessions)| {
+                        headers
+                            .get(axum::http::header::COOKIE)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|cookies| cookie_value(cookies, COOKIE_NAME))
+                            .and_then(|token| sessions.0.get(token))
+                            .is_some()
+                    });
+                    if !signed_in {
+                        return Err(ApiError::missing_api_key());
+                    }
+                }
+            }
         }
     }
 
     record_source_gauges(&state);
     record_task_health_gauges(&state);
     record_config_gauges(&state);
+    record_process_gauges();
     Ok(handle().render())
+}
+
+// Every hostname of every source, counted once, ignoring case: DNS does
+// not distinguish `AASQL101` from `aasql101`, and sources disagree on it.
+// Only a name that actually has capitals is copied to lowercase it; the rest
+// stay borrowed.
+//
+// Case is the only folding done here. Merging `web01` into
+// `web01.example.com`, or one domain into another, would need a rule that
+// holds for every estate, and none does: `accesscontrol1` exists as three
+// different machines in three datacenters.
+fn unique_hosts(datasets: &[&Dataset]) -> usize {
+    datasets
+        .iter()
+        .flat_map(|dataset| dataset.hostvars.keys())
+        .map(|name| {
+            if name.bytes().any(|b| b.is_ascii_uppercase()) {
+                Cow::Owned(name.to_ascii_lowercase())
+            } else {
+                Cow::Borrowed(name.as_str())
+            }
+        })
+        .collect::<HashSet<Cow<str>>>()
+        .len()
+}
+
+// The process's own resource use, under the standard Prometheus names
+// (process_resident_memory_bytes, process_cpu_seconds_total, ...) so stock
+// dashboards and alerts work unchanged.
+//
+// Memory matters more here than in most services: the whole inventory cache
+// lives in it, so resident memory is the number that says when a pod is
+// about to meet its limit.
+//
+// Read from /proc at scrape time rather than through a collector crate: the
+// files are a few hundred bytes, the reads are cheap enough for a blocking
+// call on a scrape, and it adds nothing to the dependency tree. Linux only:
+// that is where this runs (containers), and elsewhere the series are simply
+// absent rather than wrong.
+#[cfg(target_os = "linux")]
+fn record_process_gauges() {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        let stats = parse_proc_status(&status);
+        if let Some(rss) = stats.resident_bytes {
+            metrics::gauge!("process_resident_memory_bytes").set(rss as f64);
+        }
+        if let Some(virt) = stats.virtual_bytes {
+            metrics::gauge!("process_virtual_memory_bytes").set(virt as f64);
+        }
+        if let Some(threads) = stats.threads {
+            metrics::gauge!("process_threads").set(threads as f64);
+        }
+    }
+
+    // A gauge under a counter's name: the exporter's counters are integers,
+    // and CPU time in whole seconds would make rate() useless at the scale of
+    // a quiet service. rate() works the same on either type.
+    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat")
+        && let Some(seconds) = parse_stat_cpu_seconds(&stat)
+    {
+        metrics::gauge!("process_cpu_seconds_total").set(seconds);
+    }
+
+    // Less the one read_dir itself holds open while it lists the directory.
+    if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
+        metrics::gauge!("process_open_fds").set(entries.count().saturating_sub(1) as f64);
+    }
+    if let Ok(limits) = std::fs::read_to_string("/proc/self/limits")
+        && let Some(max) = parse_max_open_files(&limits)
+    {
+        metrics::gauge!("process_max_fds").set(max as f64);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn record_process_gauges() {}
+
+#[derive(Debug, Default, PartialEq)]
+struct ProcStatus {
+    resident_bytes: Option<u64>,
+    virtual_bytes: Option<u64>,
+    threads: Option<u64>,
+}
+
+// `/proc/self/status` reports memory in kB ("VmRSS:   123456 kB"), which
+// sidesteps the page size that /proc/self/statm would need.
+fn parse_proc_status(text: &str) -> ProcStatus {
+    let mut stats = ProcStatus::default();
+    for line in text.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let number = rest
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<u64>().ok());
+        match key {
+            "VmRSS" => stats.resident_bytes = number.map(|kb| kb * 1024),
+            "VmSize" => stats.virtual_bytes = number.map(|kb| kb * 1024),
+            "Threads" => stats.threads = number,
+            _ => {}
+        }
+    }
+    stats
+}
+
+// User plus system CPU time of the whole process, every thread, from
+// `/proc/self/stat` (fields 14 and 15). Not /proc/self/schedstat: that file
+// is per TASK, so it counts only the main thread, while the work runs on the
+// runtime's worker threads, and the rate read close to zero under load.
+//
+// The values are in clock ticks of USER_HZ, which Linux fixes at 100 for
+// everything it reports under /proc regardless of the kernel's own tick rate.
+// The process name (field 2) is in parentheses and may itself contain spaces
+// or parentheses, so the fields are counted from after the LAST ')'.
+const USER_HZ: f64 = 100.0;
+
+fn parse_stat_cpu_seconds(text: &str) -> Option<f64> {
+    let after_name = &text[text.rfind(')')? + 1..];
+    // Field 3 (state) is the first after the name: utime is field 14 and
+    // stime field 15, so 11 and 12 here.
+    let mut fields = after_name.split_whitespace().skip(11);
+    let utime: u64 = fields.next()?.parse().ok()?;
+    let stime: u64 = fields.next()?.parse().ok()?;
+    Some((utime + stime) as f64 / USER_HZ)
+}
+
+// The soft limit from the "Max open files" row of /proc/self/limits.
+// "unlimited" has no number to report, so the series is left out.
+fn parse_max_open_files(text: &str) -> Option<u64> {
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("Max open files"))?;
+    row.trim_start_matches("Max open files")
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 // Which build and which configuration this process is running — the first
@@ -184,6 +346,9 @@ fn record_source_gauges(state: &AppState) {
     // Driven by the cache, not by config: an entry can outlive its config
     // entry (source removed from YAML, cache still serving it) and that is
     // exactly the state an operator wants to see.
+    // Kept until the loop ends, so the unique count below can borrow every
+    // hostname instead of copying ~tens of thousands of strings per scrape.
+    let mut entries = Vec::with_capacity(cached.len());
     for source_id in cached {
         let Some(entry) = state.cache.get(&source_id) else {
             // Evicted between keys() and get() — it will show up next scrape
@@ -200,7 +365,18 @@ fn record_source_gauges(state: &AppState) {
             .set(entry.dataset.hostvars.len() as f64);
         metrics::gauge!("unified_api_source_groups", "source" => source_id.clone())
             .set(entry.dataset.groups.len() as f64);
+        entries.push(entry);
     }
+
+    // The number of unique machines the inventory knows. Summing
+    // unified_api_source_hosts counts a host once per source it appears in
+    // (Device42, vCenter, monitoring and SSH facts all list the same box), so
+    // the sum overstates the estate several times over. This is the union of
+    // hostnames across every cached source: exact names, so a host listed as
+    // `web01` in one source and `web01.example.com` in another still counts
+    // twice, which is a naming difference worth seeing rather than hiding.
+    let datasets: Vec<&Dataset> = entries.iter().map(|entry| entry.dataset.as_ref()).collect();
+    metrics::gauge!("unified_api_hosts_unique").set(unique_hosts(&datasets) as f64);
 
     record_view_gauges(state);
 }
@@ -322,4 +498,66 @@ fn record_task_health_gauges(state: &AppState) {
 // sync runs (metrics recorded before install are silently dropped).
 pub fn init() {
     handle();
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+
+    // The estate, not the sum: a host listed by three sources is one host,
+    // whatever case each source writes it in.
+    #[test]
+    fn a_host_in_several_sources_counts_once() {
+        let parse = |json: &str| serde_json::from_str::<Dataset>(json).unwrap();
+        let d42 = parse(r#"{"hostvars": {"web01": {}, "db01": {}}}"#);
+        let vmware = parse(r#"{"hostvars": {"web01": {}, "app01": {}}}"#);
+        let facts = parse(r#"{"hostvars": {"WEB01": {}, "web01.example.com": {}}}"#);
+        // web01 (in any case), db01, app01, and the FQDN spelling as its own
+        // name: only case is folded, never domains
+        assert_eq!(unique_hosts(&[&d42, &vmware, &facts]), 4);
+        assert_eq!(unique_hosts(&[]), 0);
+    }
+
+    #[test]
+    fn status_memory_is_reported_in_bytes() {
+        let status = "Name:\tunified-api\nVmSize:\t  2048 kB\nVmRSS:\t   512 kB\nThreads:\t17\n";
+        assert_eq!(
+            parse_proc_status(status),
+            ProcStatus {
+                resident_bytes: Some(512 * 1024),
+                virtual_bytes: Some(2048 * 1024),
+                threads: Some(17),
+            }
+        );
+    }
+
+    #[test]
+    fn stat_cpu_time_is_user_plus_system_in_seconds() {
+        // A name with spaces and a ')' of its own must not shift the fields.
+        let line = "4242 (tokio rt) worker)) S 1 4242 4242 0 -1 4194560 100 0 0 0 \
+                    250 150 0 0 20 0 9 0 12345 0 0";
+        assert_eq!(parse_stat_cpu_seconds(line), Some(4.0));
+        assert_eq!(parse_stat_cpu_seconds(""), None);
+        assert_eq!(parse_stat_cpu_seconds("1 (x) S"), None);
+    }
+
+    #[test]
+    fn max_open_files_takes_the_soft_limit() {
+        let limits = "Limit                     Soft Limit           Hard Limit           Units\n\
+                      Max open files            1024                 524288               files\n";
+        assert_eq!(parse_max_open_files(limits), Some(1024));
+        let unlimited =
+            "Max open files            unlimited            unlimited            files\n";
+        assert_eq!(parse_max_open_files(unlimited), None);
+    }
+
+    // On the platform this ships on, the real files parse into real numbers.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn this_process_reports_its_own_memory() {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        assert!(parse_proc_status(&status).resident_bytes.unwrap() > 0);
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        assert!(parse_stat_cpu_seconds(&stat).is_some());
+    }
 }

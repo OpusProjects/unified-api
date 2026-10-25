@@ -54,6 +54,8 @@ pub struct AppBuilder {
     config_store: Option<Arc<dyn ports::config_store::ConfigStorePort>>,
     live_settings: Option<config::RestartOnlySettings>,
     api_keys: Vec<ResolvedApiKey>,
+    directory: Arc<dyn ports::directory::DirectoryPort>,
+    peers: Arc<dyn ports::peer::PeerPort>,
     project_health: Arc<domain::sync_health::SyncHealthRegistry>,
     cors_allowed_origins: Vec<String>,
     readyz_require_all_sources: bool,
@@ -81,6 +83,10 @@ impl AppBuilder {
             config_store: None,
             live_settings: None,
             api_keys: Vec::new(),
+            // The real adapter even in tests: it is only called when a test
+            // configures LDAP, and those tests swap in a double.
+            directory: Arc::new(adapters::out::directory::ldap::LdapDirectory),
+            peers: Arc::new(adapters::out::peers::http::HttpPeers::new()),
             project_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             cors_allowed_origins: Vec::new(),
             readyz_require_all_sources: false,
@@ -133,6 +139,16 @@ impl AppBuilder {
         self
     }
 
+    pub fn directory(mut self, directory: Arc<dyn ports::directory::DirectoryPort>) -> Self {
+        self.directory = directory;
+        self
+    }
+
+    pub fn peers(mut self, peers: Arc<dyn ports::peer::PeerPort>) -> Self {
+        self.peers = peers;
+        self
+    }
+
     pub fn secrets(mut self, secrets: Arc<dyn SecretsPort>) -> Self {
         self.secrets = secrets;
         self
@@ -175,6 +191,9 @@ impl AppBuilder {
         self.refresh_max_concurrent = cfg.server.refresh_max_concurrent;
         self.shutdown_grace_seconds = cfg.server.shutdown_grace_seconds;
         self.max_body_bytes = cfg.server.max_body_bytes;
+        // What this process is built from, kept whether or not the config
+        // API is on: GET /settings shows the restart-only values in force.
+        self.live_settings = Some(config::RestartOnlySettings::from_config(cfg));
         self
     }
 
@@ -289,6 +308,8 @@ impl AppBuilder {
                 shutdown_grace_seconds: self.shutdown_grace_seconds,
                 refresh_timeout_seconds: self.refresh_timeout_seconds,
                 refresh_max_concurrent: self.refresh_max_concurrent,
+                ldap: self.ui.ldap.clone(),
+                ui_home: self.ui.home().to_string(),
             })),
             config_store: self.config_store,
             live_settings: std::sync::RwLock::new(self.live_settings),
@@ -297,11 +318,15 @@ impl AppBuilder {
             projects_dir: self.projects_dir,
             ui: self.ui,
             sessions: std::sync::Arc::new(crate::adapters::r#in::http::session::SessionStore::new()),
+            directory: self.directory,
+            peers: self.peers,
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             advertised_scopes: Arc::new(domain::source::AdvertisedScopeRegistry::new()),
             enrich_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             project_health: self.project_health,
             snapshot_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
+            started: std::time::Instant::now(),
+            login_throttle: Arc::new(crate::application::login::LoginThrottle::default()),
             refresh: Arc::new(application::refresh::RefreshCoordinator::new(
                 self.refresh_max_concurrent,
                 self.refresh_timeout_seconds,

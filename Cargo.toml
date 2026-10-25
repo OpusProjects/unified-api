@@ -44,13 +44,22 @@ serde = { version = "1", features = ["derive", "rc"] }   # rc: Serialize/Deseria
 serde_json = "1"
 serde-saphyr = "2"       # pure-Rust YAML reader (no unsafe-libyaml); we only ever read YAML
 subtle = "2"
+# LDAP login for the browsable API: bind, look the user up, bind as them.
+# rustls on ring, the TLS stack and crypto provider already in the tree, so no
+# OpenSSL comes with it.
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-ring"] }
+# A private CA for the directory (`ldap.ca_file`): the TLS config is built here
+# and handed to ldap3. Both crates are already in the tree through ldap3 and
+# reqwest.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 tokio = { version = "1", features = ["full"] }
 # The CORS middleware wraps tower-http's CorsLayer around the rest of the
 # stack per request (Layer + oneshot from `util`), which is what makes the
 # origin list reloadable. Already in the tree as an axum dependency — this
 # adds no new code to the build.
 tower = { version = "0.5", default-features = false, features = ["util"] }
-tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip", "request-id"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip", "request-id", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "6", features = ["axum_extras"] }

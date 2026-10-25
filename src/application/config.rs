@@ -117,6 +117,21 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
             .resize(next.refresh_max_concurrent, next.refresh_timeout_seconds);
     }
 
+    // A session carries the permissions its rules granted at login. Changed
+    // rules (or a different directory) must not leave people working under
+    // the old ones until their session expires: those sessions end, and the
+    // next login is judged by the new rules. API key sessions are not
+    // touched here; the key swap revokes those.
+    if previous.ldap != next.ldap {
+        let ended = state.sessions.end_directory_sessions();
+        if ended > 0 {
+            info!(
+                ended,
+                "LDAP configuration changed; its browser sessions ended"
+            );
+        }
+    }
+
     let mut report = diff(&previous, &next, cfg, state.live_settings());
 
     // Remember what this reload could NOT adopt, so the scrape-time gauge
@@ -156,6 +171,8 @@ fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
         shutdown_grace_seconds: cfg.server.shutdown_grace_seconds,
         refresh_timeout_seconds: cfg.server.refresh_timeout_seconds,
         refresh_max_concurrent: cfg.server.refresh_max_concurrent,
+        ldap: cfg.server.ui.ldap.clone(),
+        ui_home: cfg.server.ui.home().to_string(),
     }
 }
 
@@ -213,6 +230,12 @@ fn diff(
     }
     if previous.refresh_max_concurrent != next.refresh_max_concurrent {
         applied.push("server.refresh_max_concurrent".to_string());
+    }
+    if previous.ldap != next.ldap {
+        applied.push("server.ui.ldap".to_string());
+    }
+    if previous.ui_home != next.ui_home {
+        applied.push("server.ui.home".to_string());
     }
     applied.sort();
     report.applied = applied;

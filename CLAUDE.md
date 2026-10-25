@@ -55,7 +55,9 @@ src/
 │   ├── static_inventory.rs   # Ansible YAML inventory parsing (native, no process)
 │   ├── project.rs            # GitProject
 │   ├── endpoint.rs           # OutputEndpoint
-│   └── view.rs               # View, ViewMember, Ownership (read-only composite)
+│   ├── view.rs               # View, ViewMember, Ownership (read-only composite)
+│   ├── ldap.rs               # LdapConfig, AccessRule (LDAP sign-in)
+│   └── topology.rs           # Topology, Peer, PeerSource (federation map)
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
 │   ├── config.rs             # reload: swap the RuntimeConfig, diff what changed
 │   ├── sync.rs               # sync_source, SyncScope, SyncOutcome
@@ -63,6 +65,9 @@ src/
 │   ├── projects.rs           # sync_project (git checkout up to date, bounded by timeout_seconds)
 │   ├── scripts.rs            # per-execution script path resolution into project checkouts
 │   ├── views.rs              # ViewSnapshot: owner resolution + merged reads
+│   ├── login.rs              # LDAP sign-in: directory lookup, access rules, throttle
+│   ├── topology.rs           # the federation map, asking peers recursively
+│   ├── host_search.rs        # find a host across sources and views from the cache
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
 │   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
@@ -72,6 +77,8 @@ src/
 │   ├── git.rs                # GitPort (project checkouts)
 │   ├── output.rs             # OutputPort
 │   ├── secrets.rs            # SecretsPort
+│   ├── directory.rs          # DirectoryPort (LDAP)
+│   ├── peer.rs               # PeerPort (another unified-api, for topology)
 │   └── venv.rs               # VenvPort (per-project Python virtualenvs)
 ├── adapters/                 # Everything that touches the outside world
 │   ├── in/                   # Driving adapters: the outside world drives the app
@@ -90,6 +97,8 @@ src/
 │   │   │   ├── projects.rs   # Git project routes (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
+│   │   │   ├── login.rs      # login page, sessions, logout
+│   │   │   ├── ui_assets.rs  # the built web UI at "/" (server.ui.assets_dir)
 │   │   │   └── auth.rs       # API key middleware
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
@@ -100,6 +109,8 @@ src/
 │       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
 │       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
+│       ├── directory/        # ldap.rs: DirectoryPort → ldap3
+│       ├── peers/            # http.rs: PeerPort → reqwest (topology)
 │       ├── output/           # process.rs: OutputPort → tokio::process
 │       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double;
 │                             #   vault.rs; cache.rs; reloadable.rs (swappable chain);

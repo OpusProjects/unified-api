@@ -7,9 +7,12 @@
 pub mod config;
 pub mod credentials;
 pub mod enrich;
+pub mod host_search;
+pub mod login;
 pub mod output;
 pub mod projects;
 pub mod refresh;
 pub mod scripts;
 pub mod sync;
+pub mod topology;
 pub mod views;

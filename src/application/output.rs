@@ -282,6 +282,30 @@ fn merge_and_filter(
     (hostvars, groups)
 }
 
+// How many hosts and groups a call with no parameters of its own returns:
+// the same merge and filter as the builtins, without rendering anything. For
+// a page that wants the endpoint's size without fetching its output.
+pub fn counts(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    config: &HashMap<String, String>,
+) -> (usize, usize) {
+    let (hostvars, groups) = merge_and_filter(datasets, config, &serde_json::json!({}));
+    (hostvars.len(), groups.len())
+}
+
+// The hosts a call with no parameters of its own returns, by name: the same
+// merge and filter, kept to the names. For a question about one host ("does
+// this endpoint include it?") without rendering anything.
+pub fn default_hosts(
+    datasets: &HashMap<String, Arc<Dataset>>,
+    config: &HashMap<String, String>,
+) -> HashSet<String> {
+    merge_and_filter(datasets, config, &serde_json::json!({}))
+        .0
+        .into_keys()
+        .collect()
+}
+
 // Render the merged datasets as Ansible dynamic inventory JSON
 // (`_meta.hostvars` plus one key per group). Filters: see merge_and_filter.
 pub fn render_ansible(

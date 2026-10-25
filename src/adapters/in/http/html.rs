@@ -106,12 +106,14 @@ pub const THEMES: [&str; 6] = ["auto", "light", "dark", "dracula", "nord", "sola
 const THEME_COOKIE: &str = "uapi_theme";
 
 pub fn palette_css(theme: &str) -> String {
-    // bg, fg, dim, key, str, num, link, rule, panel
-    let light = "--bg:#fbfbfa;--fg:#24292f;--dim:#6e7781;--key:#0550ae;--str:#0a6847;--num:#953800;--link:#0969da;--rule:#d8dee4;--panel:#fff;";
-    let dark = "--bg:#0d1117;--fg:#e6edf3;--dim:#8b949e;--key:#79c0ff;--str:#7ee787;--num:#ffa657;--link:#58a6ff;--rule:#30363d;--panel:#161b22;";
-    let dracula = "--bg:#282a36;--fg:#f8f8f2;--dim:#6272a4;--key:#8be9fd;--str:#50fa7b;--num:#bd93f9;--link:#ff79c6;--rule:#44475a;--panel:#21222c;";
-    let nord = "--bg:#2e3440;--fg:#eceff4;--dim:#7b88a1;--key:#88c0d0;--str:#a3be8c;--num:#d08770;--link:#81a1c1;--rule:#434c5e;--panel:#3b4252;";
-    let solarized = "--bg:#002b36;--fg:#93a1a1;--dim:#586e75;--key:#268bd2;--str:#859900;--num:#cb4b16;--link:#2aa198;--rule:#073642;--panel:#073642;";
+    // bg, fg, dim, key, str, num, link, rule, panel, backdrop (behind the
+    // login card: a step darker than bg, so the card reads as the one thing
+    // on the page)
+    let light = "--bg:#fbfbfa;--fg:#24292f;--dim:#6e7781;--key:#0550ae;--str:#0a6847;--num:#953800;--link:#0969da;--rule:#d8dee4;--panel:#fff;--backdrop:#e6eaef;";
+    let dark = "--bg:#0d1117;--fg:#e6edf3;--dim:#8b949e;--key:#79c0ff;--str:#7ee787;--num:#ffa657;--link:#58a6ff;--rule:#30363d;--panel:#161b22;--backdrop:#010409;";
+    let dracula = "--bg:#282a36;--fg:#f8f8f2;--dim:#6272a4;--key:#8be9fd;--str:#50fa7b;--num:#bd93f9;--link:#ff79c6;--rule:#44475a;--panel:#21222c;--backdrop:#191a21;";
+    let nord = "--bg:#2e3440;--fg:#eceff4;--dim:#7b88a1;--key:#88c0d0;--str:#a3be8c;--num:#d08770;--link:#81a1c1;--rule:#434c5e;--panel:#3b4252;--backdrop:#242933;";
+    let solarized = "--bg:#002b36;--fg:#93a1a1;--dim:#586e75;--key:#268bd2;--str:#859900;--num:#cb4b16;--link:#2aa198;--rule:#073642;--panel:#073642;--backdrop:#001e26;";
 
     match theme {
         "light" => format!(":root{{{light}}}"),

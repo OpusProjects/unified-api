@@ -243,3 +243,39 @@ async fn project_sync_unknown_id_is_404_and_bad_repo_is_502() {
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert!(body.contains("\"success\":false"));
 }
+
+// What reads its scripts from a checkout: the list names them, so a project
+// can be seen to be unused (safe to remove) or relied on.
+#[tokio::test]
+async fn a_project_lists_what_uses_it() {
+    let workdir = tempfile::tempdir().unwrap();
+    let projects = [
+        ("prj-test".to_string(), project("file:///nowhere/repo.git")),
+        ("prj-idle".to_string(), project("file:///nowhere/idle.git")),
+    ]
+    .into_iter()
+    .collect();
+    let source: unified_api::domain::source::Source = serde_saphyr::from_str(
+        "name: x\nproject_id: prj-test\nscript_path: fetch.py\nttl_seconds: 60\n",
+    )
+    .unwrap();
+    let app = unified_api::AppBuilder::new()
+        .sources([("src-a".to_string(), source)].into_iter().collect())
+        .projects(projects, workdir.path().to_path_buf())
+        .api_keys(keys())
+        .build();
+
+    let (status, body) = request(app, "GET", "/api/v1/projects", "adm").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    let by_id = |id: &str| list.iter().find(|p| p["project_id"] == id).unwrap().clone();
+    assert_eq!(
+        by_id("prj-test")["used_by"]["sources"],
+        serde_json::json!(["src-a"])
+    );
+    assert_eq!(
+        by_id("prj-idle")["used_by"]["sources"],
+        serde_json::json!([])
+    );
+    assert_eq!(by_id("prj-test")["timeout_seconds"], 300);
+}

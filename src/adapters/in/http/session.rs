@@ -21,14 +21,24 @@ use crate::adapters::r#in::http::auth::Permissions;
 //
 // What a session is NOT: a second credential store. Logging in means presenting
 // an existing API key, validated by exactly the same constant-time compare as a
-// header would be. The session is a short-lived handle on that key, so the
-// permission model has one source (`api_keys.yaml`) and the UI inherits it.
+// header would be, or a directory account checked by the directory itself.
+// The session is a short-lived handle on what that login granted.
 pub const COOKIE_NAME: &str = "uapi_session";
 
+// How a session was opened, which decides what revokes it: an API key session
+// ends when its key leaves api_keys.yaml, an LDAP one when the LDAP
+// configuration (the directory or its access rules) changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SessionKind {
+    ApiKey,
+    Directory,
+}
+
 pub struct Session {
-    // Which key this session is, so it can be revoked with the key and named in
-    // the access log exactly as a header-authenticated request is.
+    // Who this session is: the key's name, or `ldap:<username>`. Named in the
+    // access log exactly as a header-authenticated request is.
     pub key_name: String,
+    pub kind: SessionKind,
     pub permissions: Permissions,
     // Paired with the session and required on every unsafe request that
     // authenticates by cookie. See `auth::require_api_key` for why.
@@ -58,7 +68,13 @@ impl SessionStore {
     // service has no external data dependency. The alternative — signed cookies
     // that survive a restart — means a key revoked while the process was down
     // comes back to life with it.
-    pub fn create(&self, key_name: String, permissions: Permissions, ttl: Duration) -> Issued {
+    pub fn create(
+        &self,
+        key_name: String,
+        kind: SessionKind,
+        permissions: Permissions,
+        ttl: Duration,
+    ) -> Issued {
         // Expired entries are normally dropped when looked up, but a browser
         // that logs in and is never used again is never looked up. Sweeping on
         // login bounds the map by "sessions in use" instead of "logins since
@@ -73,6 +89,7 @@ impl SessionStore {
             token.clone(),
             Session {
                 key_name,
+                kind,
                 permissions,
                 csrf: csrf.clone(),
                 expires_at: Instant::now() + ttl,
@@ -93,6 +110,7 @@ impl SessionStore {
             } else {
                 return Some(Authenticated {
                     key_name: session.key_name.clone(),
+                    kind: session.kind,
                     permissions: session.permissions.clone(),
                     csrf: session.csrf.clone(),
                 });
@@ -113,8 +131,17 @@ impl SessionStore {
     // before it — the console would outlive the revocation, which is exactly
     // the property a revocation is for.
     pub fn retain_keys(&self, live: &[String]) {
+        self.sessions.retain(|_, session| {
+            session.kind != SessionKind::ApiKey || live.contains(&session.key_name)
+        });
+    }
+
+    // Every LDAP session, ended. Returns how many there were, for the log.
+    pub fn end_directory_sessions(&self) -> usize {
+        let before = self.sessions.len();
         self.sessions
-            .retain(|_, session| live.contains(&session.key_name));
+            .retain(|_, session| session.kind != SessionKind::Directory);
+        before - self.sessions.len()
     }
 
     pub fn len(&self) -> usize {
@@ -133,6 +160,7 @@ pub struct Issued {
 
 pub struct Authenticated {
     pub key_name: String,
+    pub kind: SessionKind,
     pub permissions: Permissions,
     pub csrf: String,
 }
@@ -325,7 +353,12 @@ mod tests {
     #[test]
     fn a_session_authenticates_as_its_key() {
         let store = SessionStore::new();
-        let issued = store.create("AWX".into(), admin(), Duration::from_secs(60));
+        let issued = store.create(
+            "AWX".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
         let found = store.get(&issued.token).expect("session");
         assert_eq!(found.key_name, "AWX");
         assert_eq!(found.csrf, issued.csrf);
@@ -340,7 +373,12 @@ mod tests {
     #[test]
     fn an_expired_session_stops_working_and_is_dropped() {
         let store = SessionStore::new();
-        let issued = store.create("AWX".into(), admin(), Duration::from_secs(0));
+        let issued = store.create(
+            "AWX".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(0),
+        );
         assert!(store.get(&issued.token).is_none());
         assert_eq!(store.len(), 0, "the expired entry must not be kept");
     }
@@ -348,7 +386,12 @@ mod tests {
     #[test]
     fn logout_ends_the_session() {
         let store = SessionStore::new();
-        let issued = store.create("AWX".into(), admin(), Duration::from_secs(60));
+        let issued = store.create(
+            "AWX".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
         store.remove(&issued.token);
         assert!(store.get(&issued.token).is_none());
     }
@@ -358,8 +401,18 @@ mod tests {
     #[test]
     fn revoking_a_key_ends_its_sessions_only() {
         let store = SessionStore::new();
-        let stays = store.create("AWX".into(), admin(), Duration::from_secs(60));
-        let goes = store.create("Retired".into(), admin(), Duration::from_secs(60));
+        let stays = store.create(
+            "AWX".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
+        let goes = store.create(
+            "Retired".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
 
         store.retain_keys(&["AWX".to_string()]);
 
@@ -367,11 +420,50 @@ mod tests {
         assert!(store.get(&goes.token).is_none());
     }
 
+    // An LDAP session is not a key: a key reload must leave it alone, and an
+    // LDAP change must end it without touching the key sessions.
+    #[test]
+    fn each_kind_of_session_is_revoked_by_its_own_change() {
+        let store = SessionStore::new();
+        let key = store.create(
+            "AWX".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
+        let person = store.create(
+            "ldap:jdoe".into(),
+            SessionKind::Directory,
+            admin(),
+            Duration::from_secs(60),
+        );
+
+        store.retain_keys(&["AWX".to_string()]);
+        assert!(
+            store.get(&person.token).is_some(),
+            "a key reload ended an LDAP session"
+        );
+
+        assert_eq!(store.end_directory_sessions(), 1);
+        assert!(store.get(&person.token).is_none());
+        assert!(store.get(&key.token).is_some());
+    }
+
     #[test]
     fn tokens_are_unique_and_long() {
         let store = SessionStore::new();
-        let a = store.create("k".into(), admin(), Duration::from_secs(60));
-        let b = store.create("k".into(), admin(), Duration::from_secs(60));
+        let a = store.create(
+            "k".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
+        let b = store.create(
+            "k".into(),
+            SessionKind::ApiKey,
+            admin(),
+            Duration::from_secs(60),
+        );
         assert_ne!(a.token, b.token);
         assert_ne!(a.token, a.csrf, "the CSRF token is not the session token");
         assert_eq!(a.token.len(), 64);

@@ -74,7 +74,19 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
             "/api/v1/endpoints/{id}",
             post(http::endpoints::run_endpoint).get(http::endpoints::run_endpoint_get),
         )
+        .route(
+            "/api/v1/endpoints/{id}/counts",
+            get(http::endpoints::endpoint_counts),
+        )
         .route("/api/v1/projects", get(http::projects::list_projects))
+        .route("/api/v1/settings", get(http::settings::get_settings))
+        .route("/api/v1/hosts/search", get(http::host_search::search_hosts))
+        .route(
+            "/api/v1/credentials",
+            get(http::credentials::list_credentials),
+        )
+        .route("/api/v1/auth", get(http::users::get_auth))
+        .route("/api/v1/topology", get(http::topology::get_topology))
         .route(
             "/api/v1/projects/{id}/sync",
             post(http::projects::sync_project_now),
@@ -129,9 +141,28 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
     // read from the current snapshot), which is what lets a reload flip it.
     // It carries the key registry itself, since the auth middleware only
     // wraps the group above.
+    // The session store too: with metrics_require_auth on, a signed-in
+    // browser (the UI's Metrics and Overview pages) is let in by its session,
+    // as it is everywhere else.
     let metrics_route = Router::new()
         .route("/metrics", get(http::metrics::metrics))
-        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))));
+        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))))
+        .layer(axum::Extension(Sessions(Arc::clone(&sessions))));
+
+    // The built UI, when this instance serves one (server.ui.assets_dir, and
+    // only with the browsable UI on: it signs in through the login page).
+    let ui_assets = ui
+        .assets_dir
+        .as_ref()
+        .filter(|_| ui.enabled)
+        .map(http::ui_assets::UiAssets::new);
+    let metrics_route = match &ui_assets {
+        Some(assets) => metrics_route.layer(middleware::from_fn_with_state(
+            assets.clone(),
+            http::ui_assets::page_for_browsers,
+        )),
+        None => metrics_route,
+    };
 
     // Login is public by necessity: a page that asks for a credential cannot
     // require one. It carries the key registry and the session store itself,
@@ -154,10 +185,15 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
         Router::new()
     };
 
+    // "/" is the UI when there is one (the fallback below serves its
+    // index.html), and the API's documentation otherwise.
     let router = Router::new()
-        .route("/", get(|| async { Redirect::permanent("/swagger-ui/") }))
         .route("/healthz", get(http::health::healthz))
         .route("/readyz", get(http::health::readyz));
+    let router = match &ui_assets {
+        Some(_) => router,
+        None => router.route("/", get(|| async { Redirect::permanent("/swagger-ui/") })),
+    };
 
     // The CORS and body-limit middlewares below read their reloadable
     // settings from the state; kept as clones because with_state consumes
@@ -174,6 +210,14 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
                 .config(swagger_config()),
         )
         .with_state(state);
+    // Everything no route matched: the UI's files and pages (ui_assets keeps
+    // unmatched API paths a JSON 404).
+    let router = match ui_assets {
+        Some(assets) => {
+            router.fallback(axum::routing::any(http::ui_assets::serve).with_state(assets))
+        }
+        None => router,
+    };
 
     // The request body limit, from the current snapshot per request — which
     // is what makes server.max_body_bytes reloadable (a DefaultBodyLimit

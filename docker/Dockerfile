@@ -1,4 +1,14 @@
-# Stage 1: build
+# Stage 1: the web UI. unified-ui is its own repository with its own
+# versions; each unified-api release pins the one it ships (UI_REF), so an
+# image always serves the UI it was tested with.
+FROM node:22-alpine AS ui
+ARG UI_REF=v0.1.0
+RUN apk add --no-cache git \
+    && git clone --depth 1 --branch "$UI_REF" https://github.com/OpusProjects/unified-ui.git /ui
+WORKDIR /ui
+RUN npm ci --no-audit --no-fund && npm run build
+
+# Stage 2: build
 FROM rust:1.96-slim-trixie AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /var/lib/apt/lists/*
@@ -20,7 +30,7 @@ RUN mkdir src benches \
 COPY src/ src/
 RUN touch src/main.rs && cargo build --release --locked
 
-# Stage 2: runtime
+# Stage 3: runtime
 FROM debian:trixie-slim
 
 # git: the app clones connector-script projects at boot (projects.yaml).
@@ -38,11 +48,15 @@ RUN apt-get update && apt-get install -y \
 
 RUN groupadd -r unified && useradd -r -g unified -s /sbin/nologin unified
 
-# Writable state directory: project checkouts and the optional cache snapshot
-# default here. In k8s, mount a volume over it to survive pod replacement.
+# Writable state directory for what should survive a restart: the optional
+# cache snapshot, and project checkouts when projects.dir points here (as
+# docs/deployment.md does). In k8s, mount a volume over it.
 RUN mkdir -p /var/lib/unified-api && chown unified:unified /var/lib/unified-api
 
 COPY --from=builder /app/target/release/unified-api /usr/local/bin/unified-api
+# Served at "/" when the config points server.ui.assets_dir here (the bundled
+# config does).
+COPY --from=ui /ui/apps/unified-api/dist /usr/share/unified-api/ui
 COPY config/ /app/config/
 # Demo connector/enricher/output scripts the default config points at. They
 # double as the integration-test fixtures, so they live under tests/ (mirroring
@@ -50,6 +64,12 @@ COPY config/ /app/config/
 COPY tests/adapters/out/ /app/tests/adapters/out/
 
 WORKDIR /app
+
+# The bundled config clones its projects into the default `projects.dir`,
+# relative to /app, as the unprivileged user below: /app itself stays
+# root-owned (config and scripts are not the process's to change), so the
+# checkout directory is created here and handed over.
+RUN mkdir -p /app/projects && chown unified:unified /app/projects
 
 USER unified
 

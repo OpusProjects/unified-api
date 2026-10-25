@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use crate::domain::ldap::LdapConfig;
+use crate::domain::project::GitProject;
+use crate::domain::source::Source;
 use crate::ports::secrets::{SecretsError, SecretsPort};
 
 // Resolves a list of credential_ids against the SecretsPort and combines
@@ -30,6 +33,53 @@ pub async fn resolve_credentials(
     }
 
     Ok(all_credentials)
+}
+
+// What names a credential in its configuration: the sources that pass it
+// to their connector, the projects that clone with it, and the directory
+// login's service account. Sorted, so a page and a diff of it are stable.
+pub struct CredentialUsers {
+    pub sources: Vec<String>,
+    pub projects: Vec<String>,
+    pub ldap: bool,
+}
+
+pub fn users_of(
+    credential_id: &str,
+    sources: &HashMap<String, Source>,
+    projects: &HashMap<String, GitProject>,
+    ldap: Option<&LdapConfig>,
+) -> CredentialUsers {
+    let mut source_ids: Vec<String> = sources
+        .iter()
+        .filter(|(_, source)| source.credential_ids.iter().any(|c| c == credential_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    source_ids.sort();
+    let mut project_ids: Vec<String> = projects
+        .iter()
+        .filter(|(_, project)| project.credential_id.as_deref() == Some(credential_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    project_ids.sort();
+    CredentialUsers {
+        sources: source_ids,
+        projects: project_ids,
+        ldap: ldap.is_some_and(|l| l.bind_credential == credential_id),
+    }
+}
+
+// Whether a credential's secrets resolve right now, asked exactly as a sync
+// asks (through the same resolver chain and its cache), so "resolves" here
+// means a sync will get them. None when it does; otherwise the resolver's
+// own message, which names what is missing (the env var, the file, the
+// Vault path) and never a value. The values themselves are dropped here.
+pub async fn check(secrets: &dyn SecretsPort, credential_id: &str) -> Option<String> {
+    secrets
+        .resolve(credential_id)
+        .await
+        .err()
+        .map(|e| e.message)
 }
 
 #[cfg(test)]

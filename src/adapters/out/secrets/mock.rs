@@ -18,6 +18,18 @@ impl MockSecrets {
             secrets: HashMap::new(),
         }
     }
+
+    // A credential the double resolves, e.g. the LDAP service account.
+    pub fn with<const N: usize>(mut self, credential_id: &str, fields: [(&str, &str); N]) -> Self {
+        self.secrets.insert(
+            credential_id.to_string(),
+            fields
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        );
+        self
+    }
 }
 
 impl Default for MockSecrets {

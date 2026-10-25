@@ -1,6 +1,10 @@
+# The sample sources' scripts live in this repository (tests/adapters/out/),
+# so the sample project is unified-api itself: public, so no credential, and
+# the paths in sources.yaml resolve inside its checkout. A real deployment
+# points this at its own connector repository.
 prj-connectors-infra:
   name: "Infrastructure Connectors"
-  git_url: "https://github.com/OpusProjects/connectors-infra.git"
+  git_url: "https://github.com/OpusProjects/unified-api.git"
   # branch: "main"                    # default "main"
   # credential_id: "cred-github-token"  # for private repos (token or ssh_key)
   sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = no periodic sync)

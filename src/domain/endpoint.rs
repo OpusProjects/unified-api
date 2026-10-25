@@ -70,6 +70,18 @@ pub enum OutputFormat {
     Csv,
 }
 
+impl OutputFormat {
+    // As written after `output:` in endpoints.yaml, for anything that shows
+    // the configuration back (the endpoints list).
+    pub fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Ansible => "ansible",
+            OutputFormat::Json => "json",
+            OutputFormat::Csv => "csv",
+        }
+    }
+}
+
 // A constructed inventory: merge everything the endpoint's sources carry, then
 // hand back only part of it.
 //

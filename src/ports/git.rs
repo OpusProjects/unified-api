@@ -8,6 +8,7 @@ use crate::domain::project::GitProject;
 // Boxed future alias, same pattern as the other ports (see connector.rs
 // for why Pin<Box<dyn Future>>).
 pub type GitFuture<'a> = Pin<Box<dyn Future<Output = Result<(), GitError>> + Send + 'a>>;
+pub type RevisionFuture<'a> = Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
 
 // GitPort — keep a local checkout of a project's repository up to date.
 // The concrete implementation shells out to the git binary; the trait exists
@@ -23,6 +24,13 @@ pub trait GitPort: Send + Sync {
         project: &GitProject,
         credentials: &HashMap<String, String>,
     ) -> GitFuture<'_>;
+
+    // The commit the checkout in `dir` is at (full id), for the projects page:
+    // "which scripts are running" is answered by a commit. None when it cannot
+    // tell (no checkout yet); the default lets test doubles leave it out.
+    fn revision(&self, _dir: &Path) -> RevisionFuture<'_> {
+        Box::pin(async { None })
+    }
 }
 
 #[derive(Debug)]

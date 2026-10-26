@@ -9,6 +9,7 @@ and what changes when the target is Kubernetes, ArgoCD or a CI pipeline.
 - [CI/CD pipeline](#cicd-pipeline)
 - [Kubernetes notes](#kubernetes-notes)
 - [GitOps with ArgoCD](#gitops-with-argocd)
+- [Upgrading from 0.34](#upgrading-from-034)
 - [Scheduling and observability](#scheduling-and-observability)
 
 ---
@@ -26,7 +27,7 @@ imported libraries preinstalled from apt — `requests`, `PyYAML`, `jinja2` —
 and `git` for project checkouts. Scripts needing anything beyond that
 declare it in their project's `requirements.txt` and set `python_venv: true`
 on the project — the app builds and maintains a virtualenv per project (see
-[configuration](configuration.md#projectsyaml)); a derived image is only
+[configuration](configuration.md#projects)); a derived image is only
 needed for non-Python tooling.
 
 ```bash
@@ -46,8 +47,25 @@ complete example below.
 
 One `config/` directory exercising **every connector type, every credential
 type and every secret-delivery mechanism**. Copy it, delete what you don't
-need. The pieces reference each other by id, so the startup validation will
+need. The pieces reference each other by name, so the startup validation will
 tell you if you break a reference while trimming.
+
+```
+config/
+├── config.yaml
+├── credentials/   cred-d42.yaml  cred-netbox.yaml  cred-fleet-ssh.yaml  cred-gitlab.yaml
+├── projects/      prj-connectors.yaml  prj-inventories.yaml
+├── connectors/    d42.yaml  netbox.yaml  ssh-facts.yaml  ssh-disk-report.yaml
+├── sources/       src-d42.yaml  src-netbox.yaml  src-fleet-facts.yaml  src-fleet-disks.yaml  src-inventory.yaml
+├── enrichers/     enrich-reachability.yaml
+├── endpoints/     ep-awx-full.yaml
+└── api_keys/      key-awx.yaml  key-forms.yaml
+```
+
+One item per file, as below; the folders are a convention for people, and the
+top-level key in each file is what says what it holds (see
+[configuration](configuration.md#the-directory)). The blocks below show each
+folder's files one after another.
 
 ### config.yaml — server, cache persistence, project checkouts
 
@@ -68,7 +86,7 @@ projects:
   dir: "/var/lib/unified-api/projects"
 ```
 
-### credentials.yaml — all three types, both delivery mechanisms
+### credentials — all three types, both delivery mechanisms
 
 Credentials never hold secrets; they say **where to read them**. Two
 mechanisms: environment variables (`env_prefix` + `secret_keys`) or files
@@ -76,179 +94,231 @@ mechanisms: environment variables (`env_prefix` + `secret_keys`) or files
 by path, like SSH keys).
 
 ```yaml
-# username_password from env vars: reads D42_USERNAME and D42_PASSWORD,
-# the connector script receives CREDENTIAL_USERNAME / CREDENTIAL_PASSWORD
-cred-d42:
-  name: "Device42 API"
-  type: "username_password"
-  env_prefix: "D42"
-  secret_keys:
-    username: "USERNAME"
-    password: "PASSWORD"
+# credentials/cred-d42.yaml — username_password from env vars: reads
+# D42_USERNAME and D42_PASSWORD, the connector script receives
+# CREDENTIAL_USERNAME / CREDENTIAL_PASSWORD
+credentials:
+  - name: cred-d42
+    description: "Device42 API"
+    type: "username_password"
+    env_prefix: "D42"
+    secret_keys:
+      username: "USERNAME"
+      password: "PASSWORD"
 
-# token from env: reads NETBOX_TOKEN > script sees CREDENTIAL_TOKEN
-cred-netbox:
-  name: "NetBox API token"
-  type: "token"
-  env_prefix: "NETBOX"
-  secret_keys:
-    token: "TOKEN"
+# credentials/cred-netbox.yaml — token from env: reads NETBOX_TOKEN > script
+# sees CREDENTIAL_TOKEN
+credentials:
+  - name: cred-netbox
+    description: "NetBox API token"
+    type: "token"
+    env_prefix: "NETBOX"
+    secret_keys:
+      token: "TOKEN"
 
-# ssh_key: the username from env, the private key as a FILE the connector
-# opens by path (file_keys entries are passed as <key>_path)
-cred-fleet-ssh:
-  name: "Fleet SSH"
-  type: "ssh_key"
-  env_prefix: "FLEET_SSH"
-  secret_keys:
-    username: "USERNAME"
-  file_keys:
-    ssh_key: "/run/secrets/fleet-ssh/id_ed25519"
+# credentials/cred-fleet-ssh.yaml — ssh_key: the username from env, the
+# private key as a FILE the connector opens by path (file_keys entries are
+# passed as <key>_path)
+credentials:
+  - name: cred-fleet-ssh
+    description: "Fleet SSH"
+    type: "ssh_key"
+    env_prefix: "FLEET_SSH"
+    secret_keys:
+      username: "USERNAME"
+    file_keys:
+      ssh_key: "/run/secrets/fleet-ssh/id_ed25519"
 
-# token from a JSON file instead of env: {"token": "glpat-..."} — handy when
-# the platform delivers secrets as mounted files rather than env vars
-cred-gitlab:
-  name: "GitLab read token"
-  type: "token"
-  secret_file: "/run/secrets/gitlab.json"
-  secret_keys:
-    token: "token"
+# credentials/cred-gitlab.yaml — token from a JSON file instead of env:
+# {"token": "glpat-..."} — handy when the platform delivers secrets as
+# mounted files rather than env vars
+credentials:
+  - name: cred-gitlab
+    description: "GitLab read token"
+    type: "token"
+    secret_file: "/run/secrets/gitlab.json"
+    secret_keys:
+      token: "token"
 ```
 
-### projects.yaml — the three sync styles
+### projects — the three sync styles
 
 ```yaml
-# Auto: cloned at boot, re-pulled every 30 min
-prj-connectors:
-  name: "Connector scripts"
-  git_url: "https://gitlab.example.com/infra/connectors.git"
-  credential_id: "cred-gitlab"        # private repo > token over https
-  sync_interval_seconds: 1800
+# projects/prj-connectors.yaml — auto: cloned at boot, re-pulled every 30 min
+projects:
+  - name: prj-connectors
+    description: "Connector scripts"
+    git_url: "https://gitlab.example.com/infra/connectors.git"
+    credential: "cred-gitlab"         # private repo > token over https
+    sync_interval_seconds: 1800
 
-# Manual / pipeline-driven: existing checkout used as-is at boot (pair with a
-# persistent volume); updates only via POST /api/v1/projects/prj-inventories/sync
-prj-inventories:
-  name: "Static inventories"
-  git_url: "https://gitlab.example.com/infra/inventories.git"
-  credential_id: "cred-gitlab"
-  sync_on_boot: false
+# projects/prj-inventories.yaml — manual / pipeline-driven: existing checkout
+# used as-is at boot (pair with a persistent volume); updates only via
+# POST /api/v1/projects/prj-inventories/sync
+projects:
+  - name: prj-inventories
+    description: "Static inventories"
+    git_url: "https://gitlab.example.com/infra/inventories.git"
+    credential: "cred-gitlab"
+    sync_on_boot: false
 ```
 
-### sources.yaml — all three connector types
+### connectors — how each kind of system is read
 
 ```yaml
-# 1a. script connector running an UNMODIFIED Ansible dynamic inventory script
-#     (the d42/VMware kind): needs --list and emits _meta-style JSON
-src-d42:
-  name: "Device42"
-  project_id: "prj-connectors"
-  script_path: "d42/d42_inventory.py"     # resolved inside the checkout
-  script_args: ["--list"]
-  output_format: "ansible"
-  credential_ids: ["cred-d42"]
-  sync_interval_seconds: 300
-  ttl_seconds: 600
+# connectors/d42.yaml — an UNMODIFIED Ansible dynamic inventory script (the
+# d42/VMware kind): needs --list and emits _meta-style JSON
+connectors:
+  - name: d42
+    description: "Device42 dynamic inventory"
+    project: "prj-connectors"
+    path: "d42/d42_inventory.py"          # resolved inside the checkout
+    script_args: ["--list"]
+    output_format: "ansible"
 
-# 1b. script connector with a native-format script (reads SOURCE_CONFIG,
-#     prints {"hostvars": ..., "groups": ...}) and per-group TTL overrides
-src-netbox:
-  name: "NetBox"
-  project_id: "prj-connectors"
-  script_path: "netbox/fetch.py"
-  credential_ids: ["cred-netbox"]
-  sync_interval_seconds: 600
-  ttl_seconds: 3600
-  ttl_overrides:
-    groups:
-      production: 900
-  config:                                  # free-form, script-specific
-    api_url: "https://netbox.example.com"
+# connectors/netbox.yaml — a native-format script (reads SOURCE_CONFIG,
+# prints {"hostvars": ..., "groups": ...})
+connectors:
+  - name: netbox
+    description: "NetBox"
+    project: "prj-connectors"
+    path: "netbox/fetch.py"
 
-# 2. native SSH connector gathering Ansible local facts across a fleet —
-#    no script anywhere, the binary connects in parallel. The host list is
-#    DYNAMIC: whatever src-inventory currently knows (chained sources)
-src-fleet-facts:
-  name: "Fleet facts over SSH"
-  connector_type: "ssh"
-  project_id: "prj-connectors"             # required by schema; unused by ssh
-  script_path: "gather_facts"              # label in facts mode
-  credential_ids: ["cred-fleet-ssh"]
-  sync_interval_seconds: 300
-  ttl_seconds: 600
-  hosts_from_source:
-    source: "src-inventory"
-    match_pattern:
-      groups: ["linux"]                    # absent = every host in the source
-    connect_via: "ansible_host_then_hostname"
-  config:
-    concurrency: "50"
-    ssh_connect_timeout_seconds: "30"
-    gather_mode: "facts"
-    fact_path: "/etc/ansible/facts.d"
+# connectors/ssh-facts.yaml — native SSH reading Ansible local facts: no
+# script anywhere, the binary connects in parallel
+connectors:
+  - name: ssh-facts
+    description: "Fleet facts over SSH"
+    type: "ssh"
+    path: "gather_facts"                  # label in facts mode
 
-# 2b. same connector in script mode with a STATIC host list: run a remote
-#     command per host and store its JSON output as that host's vars
-src-fleet-disks:
-  name: "Fleet disk report"
-  connector_type: "ssh"
-  project_id: "prj-connectors"
-  script_path: "/usr/local/bin/disk-report"
-  script_args: ["--json"]
-  credential_ids: ["cred-fleet-ssh"]
-  ttl_seconds: 3600                        # no interval: manual sync only
-  config:
-    hosts: "web01.example.com,web02.example.com"
-    gather_mode: "script"
-
-# 3. static Ansible YAML inventory parsed natively from a git checkout
-#    (inventory.yaml + group_vars/ + host_vars/) — no process, no ansible-core
-src-inventory:
-  name: "Static inventory"
-  connector_type: "static_inventory"
-  project_id: "prj-inventories"
-  script_path: "inventory.yaml"
-  sync_interval_seconds: 300
-  ttl_seconds: 600
+# connectors/ssh-disk-report.yaml — the same SSH connector in script mode:
+# run a remote command per host and store its JSON output as that host's vars
+connectors:
+  - name: ssh-disk-report
+    description: "Disk report over SSH"
+    type: "ssh"
+    path: "/usr/local/bin/disk-report"    # the remote command
+    script_args: ["--json"]
 ```
 
-### enrichers.yaml and endpoints.yaml
+### sources — every connector type
 
 ```yaml
-# enrichers.yaml — post-process a cached source (dataset on stdin,
-# partial dataset on stdout)
-enrich-reachability:
-  name: "Probe reachability"
-  target_id: "src-fleet-facts"
-  script_path: "enrichers/probe.py"        # resolved via project_id if set
-  project_id: "prj-connectors"
-  script_args: ["--timeout", "5"]
-  sync_interval_seconds: 900
+# sources/src-d42.yaml
+sources:
+  - name: src-d42
+    description: "Device42"
+    connector: "d42"
+    credentials: ["cred-d42"]
+    sync_interval_seconds: 300
+    ttl_seconds: 600
+
+# sources/src-netbox.yaml — with per-group TTL overrides
+sources:
+  - name: src-netbox
+    description: "NetBox"
+    connector: "netbox"
+    credentials: ["cred-netbox"]
+    sync_interval_seconds: 600
+    ttl_seconds: 3600
+    ttl_overrides:
+      groups:
+        production: 900
+    config:                                # free-form, script-specific
+      api_url: "https://netbox.example.com"
+
+# sources/src-fleet-facts.yaml — the host list is DYNAMIC: whatever
+# src-inventory currently knows (chained sources)
+sources:
+  - name: src-fleet-facts
+    description: "Fleet facts over SSH"
+    connector: "ssh-facts"
+    credentials: ["cred-fleet-ssh"]
+    sync_interval_seconds: 300
+    ttl_seconds: 600
+    hosts_from_source:
+      source: "src-inventory"
+      match_pattern:
+        groups: ["linux"]                  # absent = every host in the source
+      connect_via: "ansible_host_then_hostname"
+    config:
+      concurrency: "50"
+      ssh_connect_timeout_seconds: "30"
+      gather_mode: "facts"
+      fact_path: "/etc/ansible/facts.d"
+
+# sources/src-fleet-disks.yaml — a STATIC host list
+sources:
+  - name: src-fleet-disks
+    description: "Fleet disk report"
+    connector: "ssh-disk-report"
+    credentials: ["cred-fleet-ssh"]
+    ttl_seconds: 3600                      # no interval: manual sync only
+    config:
+      hosts: "web01.example.com,web02.example.com"
+      gather_mode: "script"
+
+# sources/src-inventory.yaml — static Ansible YAML inventory parsed natively
+# from a git checkout (inventory.yaml + group_vars/ + host_vars/) — no
+# process, no ansible-core, and no connector item: static_inventory is built in
+sources:
+  - name: src-inventory
+    description: "Static inventory"
+    connector: "static_inventory"
+    project: "prj-inventories"
+    path: "inventory.yaml"
+    sync_interval_seconds: 300
+    ttl_seconds: 600
+```
+
+The one connector type not shown, `remote` (another unified-api instance), is built in
+as well; see [federation](federation.md).
+
+### enrichers and endpoints
+
+```yaml
+# enrichers/enrich-reachability.yaml — post-process a cached source (dataset
+# on stdin, partial dataset on stdout)
+enrichers:
+  - name: enrich-reachability
+    description: "Probe reachability"
+    target: "src-fleet-facts"
+    project: "prj-connectors"
+    script_path: "enrichers/probe.py"      # resolved via project if set
+    script_args: ["--timeout", "5"]
+    sync_interval_seconds: 900
 ```
 
 ```yaml
-# endpoints.yaml — merge cached sources through a transformer script;
-# consumers POST here (AWX inventory source, AnsibleForms, ...)
-ep-awx-full:
-  name: "Full AWX inventory"
-  source_ids: ["src-d42", "src-fleet-facts", "src-inventory"]
-  project_id: "prj-connectors"
-  script_path: "outputs/ansible_inventory.py"
+# endpoints/ep-awx-full.yaml — merge cached sources through a transformer
+# script; consumers POST here (AWX inventory source, AnsibleForms, ...)
+endpoints:
+  - name: ep-awx-full
+    description: "Full AWX inventory"
+    sources: ["src-d42", "src-fleet-facts", "src-inventory"]
+    project: "prj-connectors"
+    script_path: "outputs/ansible_inventory.py"
 ```
 
-### api_keys.yaml — per-consumer permissions
+### api_keys — per-consumer permissions
 
 ```yaml
-key-awx:
-  name: "AWX"
-  env: "UNIFIED_API_KEY_AWX"
-  role: "admin"
+# api_keys/key-awx.yaml
+api_keys:
+  - name: key-awx
+    description: "AWX"
+    env: "UNIFIED_API_KEY_AWX"
+    role: "admin"
 
-key-forms:
-  name: "AnsibleForms"
-  env: "UNIFIED_API_KEY_FORMS"
-  # restricted (the default): filtered lists, 403 elsewhere
-  sources: ["src-fleet-facts"]
-  endpoints: ["ep-awx-full"]
+# api_keys/key-forms.yaml
+api_keys:
+  - name: key-forms
+    description: "AnsibleForms"
+    env: "UNIFIED_API_KEY_FORMS"
+    # restricted (the default): filtered lists, 403 elsewhere
+    sources: ["src-fleet-facts"]
+    endpoints: ["ep-awx-full"]
 ```
 
 ### What the deployment must inject
@@ -258,7 +328,7 @@ above and whatever delivers secrets:
 
 | Name | Kind | Consumed by |
 |---|---|---|
-| `UNIFIED_API_KEY_AWX`, `UNIFIED_API_KEY_FORMS` | env | API authentication (`api_keys.yaml`) |
+| `UNIFIED_API_KEY_AWX`, `UNIFIED_API_KEY_FORMS` | env | API authentication (the `api_keys` items) |
 | `D42_USERNAME`, `D42_PASSWORD` | env | `cred-d42` |
 | `NETBOX_TOKEN` | env | `cred-netbox` |
 | `FLEET_SSH_USERNAME` | env | `cred-fleet-ssh` |
@@ -301,10 +371,20 @@ The config files become a ConfigMap (mounted at `CONFIG_DIR`), the env table
 becomes a Secret, the file secrets become Secret volume mounts, and the
 writable state gets a PVC. The complete manifests — Deployment with probes,
 non-root and resources, Service, PVC — live in
-[`deploy/k8s/`](../deploy/k8s/), linted with kubeconform in CI:
+[`deploy/k8s/`](../deploy/k8s/), linted with kubeconform in CI.
+
+A ConfigMap is **flat**: `--from-file` does not recurse, and a key cannot hold a
+`/`. The configuration is item files in folders (`sources/`, `connectors/`...),
+but the loader does not care where a file sits — the top-level key inside says
+what it holds — so flatten the tree into the keys, as below, or give each key a
+`path:` under `items:` in the volume to rebuild the folders. A directory that
+changes often is better pushed with the [configuration API](config-api.md) onto
+a PVC.
 
 ```bash
-kubectl create configmap unified-api-config --from-file=config/
+# config/sources/src-a.yaml becomes the key sources-src-a.yaml
+kubectl create configmap unified-api-config $(cd config && find . -name '*.yaml' \
+  | sed 's|^\./||' | while read -r f; do printf -- '--from-file=%s=config/%s ' "${f//\//-}" "$f"; done)
 kubectl create secret generic unified-api-env --from-env-file=.env
 kubectl create secret generic unified-api-secrets \
   --from-file=ssh-private-key=secrets/id_ed25519 \
@@ -365,13 +445,18 @@ What changes when the deployment target is a cluster rather than a single host.
 
 - **Probes:** liveness → `GET /healthz`; readiness → `GET /readyz` (503 until at
   least one configured source has synced, so pods join the Service only with data)
-- **Config:** mount a ConfigMap at a path and point `CONFIG_DIR` at it
+- **Config:** mount a ConfigMap at a path and point `CONFIG_DIR` at it. It is
+  flat (see [Kubernetes](#kubernetes) above) and its files are symlinks into a
+  hidden `..data` folder — the loader follows the links and skips the hidden
+  folder, so a mounted ConfigMap loads as-is. It is also read-only, which
+  matters for the [config API](config-api.md) and for an [upgrade from
+  0.34](#upgrading-from-034)
 - **Secrets:** three ways in. Inject values as env vars matching each
   credential's `env_prefix`/`secret_keys` (e.g. from a Secret via `envFrom`,
   populated by External Secrets Operator); mount files and reference them via
   `secret_file` / `file_keys`; or resolve natively from HashiCorp Vault — give
   a credential a `vault_path` and configure `secrets.vault:` (token or
-  Kubernetes auth), see [configuration](configuration.md#credentialsyaml).
+  Kubernetes auth), see [configuration](configuration.md#credentials).
   Adoption is per credential, so the three coexist during a migration
 - **API key:** set `UNIFIED_API_KEY` from a Secret; without it the API is open
 - **Replicas:** the cache is per-process and not shared. Multiple replicas each
@@ -393,7 +478,7 @@ in an app-of-apps. A working layout:
 apps/unified-api/manifests/
 ├── namespace.yaml
 ├── serviceaccount.yaml
-├── configmap.yaml        # config/*.yaml files, mounted at CONFIG_DIR
+├── configmap.yaml        # config.yaml + the item files (flattened), mounted at CONFIG_DIR
 ├── <secret variant>      # see below
 ├── deployment.yaml       # start from deploy/k8s/deployment.yaml in this repo
 ├── service.yaml          # start from deploy/k8s/service.yaml
@@ -468,6 +553,33 @@ mounting the SSH private key at the path `file_keys` points to (mode `0400`).
 If you use ESO with ArgoCD auto-sync, add `ignoreDifferences` for the
 `conversionStrategy`/`decodingStrategy`/`metadataPolicy` defaults the operator
 writes back, or the app never reports Synced.
+
+---
+
+## Upgrading from 0.34
+
+0.35 replaced the eight fixed configuration files with item files and moved each
+source's script onto a connector item (see [configuration → upgrading from
+0.34](configuration.md#upgrading-from-034) for the full mapping). What happens to
+a deployment depends on whether its configuration directory is writable:
+
+| Configuration delivered by | At the first 0.35 start | What to do |
+|---|---|---|
+| A writable directory (a PVC, a host bind mount, systemd) | Converted **in place**, once; the old files move to `.legacy-config-<UTC timestamp>/` | Commit the new files wherever the directory comes from, or the next push brings the old layout back |
+| A ConfigMap, or a `:ro` bind mount (as in the `docker run` above) | Converted into a **private temporary copy** and loaded from there, with a loud warning. **Every restart converts again**, and config API writes land in the copy | Convert the source: `unified-api --migrate-config ./config` in the configuration repository, commit, regenerate the ConfigMap |
+| A configuration pipeline pushing over the [config API](config-api.md) | The directory on disk converts as above; a push of old-layout files is then **refused**, naming `--migrate-config` | Convert the repository before upgrading the instances it pushes to |
+
+Either way the pod starts — refusing its own volume would brick an upgrade —
+unless the conversion itself would not load, in which case it refuses to start
+**having changed nothing**, and the log says why. Before rolling the image, run
+`--check-config` on the configuration repository with the new version: on a 0.34
+directory it validates the conversion without writing (see
+[CLI](cli.md#validating-configuration---check-config)).
+
+Rolling back to 0.34 needs the old files back: 0.34 cannot read item files. On a
+writable directory they are in the backup folder; on a ConfigMap, redeploy the
+0.34 one. The API itself did not change shape, so no consumer needs to change
+in either direction.
 
 ---
 

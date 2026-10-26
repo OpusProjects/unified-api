@@ -75,7 +75,7 @@ async fn metrics_auth_flips_on_a_reload_in_both_directions() {
     std::fs::write(dir.path().join("config.yaml"), OPEN).expect("fixture");
     std::fs::write(
         dir.path().join("api_keys.yaml"),
-        "key-admin:\n  name: \"admin\"\n  env: \"UNIFIED_API_TEST_KEY_METRICS_FLIP\"\n  role: \"admin\"\n",
+        "api_keys:\n  - name: key-admin\n    description: \"admin\"\n    env: \"UNIFIED_API_TEST_KEY_METRICS_FLIP\"\n    role: \"admin\"\n",
     )
     .expect("fixture");
     // SAFETY: the name is unique to this test binary and the value never

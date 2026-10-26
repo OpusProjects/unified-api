@@ -16,7 +16,7 @@ treatment; the script I/O contract also appears in [connectors](connectors.md#en
 
 ## Two modes
 
-Both modes write into the cache entry of their `target_id`; they differ in
+Both modes write into the cache entry of their `target`; they differ in
 where the new values come from and how much code you owe.
 
 **Script-based** — a process receives the target's current dataset on stdin
@@ -24,28 +24,36 @@ and prints a *partial* dataset of changes. Use it when the enrichment needs
 logic or the outside world (a DNS lookup, an HTTP probe):
 
 ```yaml
-enrich-reachability:
-  name: "Probe reachability"
-  target_id: "src-fleet-facts"
-  script_path: "enrichers/probe.py"
-  project_id: "prj-connectors"      # optional: resolve the script (and its
-                                    # virtualenv) inside this checkout
-  script_args: ["--timeout", "5"]
-  sync_interval_seconds: 900
-  timeout_seconds: 300
+# enrichers/enrich-reachability.yaml
+enrichers:
+  - name: enrich-reachability
+    description: "Probe reachability"
+    target: "src-fleet-facts"
+    project: "prj-connectors"         # optional: resolve the script (and its
+                                      # virtualenv) inside this checkout
+    script_path: "enrichers/probe.py"
+    script_args: ["--timeout", "5"]
+    sync_interval_seconds: 900
+    timeout_seconds: 300
 ```
+
+An enricher runs its own script rather than naming a [connector](connectors.md):
+it gathers nothing, so it has no system to talk to — hence `script_path` here
+where a connector has `path`.
 
 **Declarative merge** — no script at all: copy the named `fields` from one
 cached source onto the hosts of another. Use it for the common "join two
 sources by hostname" case:
 
 ```yaml
-enrich-storage:
-  name: "Attach storage volumes"
-  target_id: "src-d42"              # who receives the fields
-  source_id: "src-purestorage"      # who provides them
-  fields: ["volumes", "array"]
-  sync_interval_seconds: 900
+# enrichers/enrich-storage.yaml
+enrichers:
+  - name: enrich-storage
+    description: "Attach storage volumes"
+    target: "src-d42"                 # who receives the fields
+    source: "src-purestorage"         # who provides them
+    fields: ["volumes", "array"]
+    sync_interval_seconds: 900
 ```
 
 A declarative enricher writes **only** the fields it names — never the rest of
@@ -116,7 +124,7 @@ vars reaching it — it does not remove a group the target owns.
 
 Only **variables** cross. A source cannot pull its own hosts into the target
 through a shared group name, so an enricher stays safe where adding the source
-to the endpoint's `source_ids` would not be.
+to the endpoint's `sources` would not be.
 
 ---
 
@@ -144,8 +152,8 @@ not mention are untouched — concurrent writes to them are never lost.
 > so you can carry the rest through. See
 > [troubleshooting](troubleshooting.md#a-script-enrichers-keys-keep-disappearing).
 
-With `project_id` set, the script path resolves inside that project's checkout
-at every execution, and if the project has a [virtualenv](configuration.md#projectsyaml)
+With `project` set, the script path resolves inside that project's checkout
+at every execution, and if the project has a [virtualenv](configuration.md#projects)
 its `bin/` leads the script's PATH — pip-installed imports work.
 
 ---
@@ -217,4 +225,4 @@ governs is the **target's** — there is no separate enricher grant to manage.
 | `POST /api/v1/enrichers/{id}/run` | Run now; `404` for an unknown id **or** an uncached target — the body names which |
 
 Configuration field reference lives in
-[configuration → enrichers.yaml](configuration.md#enrichersyaml).
+[configuration → enrichers](configuration.md#enrichers).

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::Deserializer;
+use serde::de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 use serde_saphyr::granit_parser::{Event, Options, Parser, ScalarStyle, StrInput, Tag};
 
@@ -33,6 +35,18 @@ const MIN_ALIAS_BUDGET: usize = 1_000_000;
 const CORE_TAG: &str = "tag:yaml.org,2002:";
 
 pub fn to_json(doc: &str) -> Result<Value, String> {
+    read(doc, false)
+}
+
+// The same tree as `to_json`, except that a plain scalar resolving to a number
+// or a boolean stays a string of its source text: `1.10` is "1.10", `0x1F` is
+// "0x1F". The text a configuration file wrote, for the fields where text is
+// what is meant — see `from_json_with_text`.
+pub fn to_text_json(doc: &str) -> Result<Value, String> {
+    read(doc, true)
+}
+
+fn read(doc: &str, verbatim: bool) -> Result<Value, String> {
     // Comments are not data; without this they arrive as events of their own.
     let mut options = Options::default();
     options.emit_comments = false;
@@ -41,12 +55,15 @@ pub fn to_json(doc: &str) -> Result<Value, String> {
         anchors: HashMap::new(),
         events: 0,
         copied: 0,
+        verbatim,
     };
     reader.stream()
 }
 
 struct Reader<'a> {
     parser: Parser<'a, StrInput<'a>>,
+    // Numbers and booleans kept as their text (`to_text_json`).
+    verbatim: bool,
     // anchor id → (value, its node count, which is what copying it costs)
     anchors: HashMap<usize, (Value, usize)>,
     events: usize,
@@ -111,7 +128,13 @@ impl<'a> Reader<'a> {
                             .to_string(),
                     );
                 }
-                (scalar(&text, style, tag.as_deref()), 1, anchor)
+                let value = match scalar(&text, style, tag.as_deref()) {
+                    Value::Number(_) | Value::Bool(_) if self.verbatim => {
+                        Value::String(text.to_string())
+                    }
+                    value => value,
+                };
+                (value, 1, anchor)
             }
             Event::SequenceStart(_, anchor, _) => {
                 let mut items = Vec::new();
@@ -252,6 +275,187 @@ fn float(text: &str) -> Option<f64> {
     // Rust also reads `inf`, `NaN` and `1e999` (as infinity); YAML does not,
     // so a non-finite result here means the text stays a string.
     unsigned.parse::<f64>().ok().filter(|f| f.is_finite())
+}
+
+// Types `typed` (a `to_json` tree) as `T`, the way the typed YAML reader
+// before 0.35 did: a field that wants TEXT takes a plain scalar's source text
+// from `text` (the `to_text_json` tree of the same document), whatever the
+// scalar looks like. `script_args: ["--days", 7]` is `["--days", "7"]`, and a
+// `config:` value written `1.10` reaches its script as "1.10" — through
+// numbers it would be 1.1, and `0x1F` would be 31. Every other field reads
+// `typed` exactly as `serde_json::from_value` would.
+pub fn from_json_with_text<T: DeserializeOwned>(typed: Value, text: Value) -> Result<T, String> {
+    T::deserialize(Pair { typed, text }).map_err(|e| e.to_string())
+}
+
+// A node of each tree, walked together. Both trees come from one document, so
+// they have the same shape; a node missing from `text` reads as Null, which
+// only means "no text known" (the typed value is used).
+struct Pair {
+    typed: Value,
+    text: Value,
+}
+
+// A trait is like an interface in Java: implementing serde's `Deserializer`
+// for `Pair` is what lets any `#[derive(Deserialize)]` struct read from it.
+// Most methods are left to `deserialize_any` by the macro below; only the
+// ones whose answer depends on the field's wanted type are written out.
+impl<'de> Deserializer<'de> for Pair {
+    type Error = serde_json::Error;
+
+    fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match (self.typed, self.text) {
+            (Value::Array(typed), text) => {
+                let text = match text {
+                    Value::Array(text) => text,
+                    _ => Vec::new(),
+                };
+                let len = typed.len();
+                let mut seq = Seq {
+                    typed: typed.into_iter(),
+                    text: text.into_iter(),
+                };
+                let value = visitor.visit_seq(&mut seq)?;
+                if seq.typed.len() == 0 {
+                    Ok(value)
+                } else {
+                    Err(serde::de::Error::invalid_length(
+                        len,
+                        &"fewer elements in array",
+                    ))
+                }
+            }
+            (Value::Object(typed), text) => {
+                let text = match text {
+                    Value::Object(text) => text,
+                    _ => Map::new(),
+                };
+                let len = typed.len();
+                let mut map = Entries {
+                    typed: typed.into_iter(),
+                    text,
+                    value: None,
+                };
+                let value = visitor.visit_map(&mut map)?;
+                if map.typed.len() == 0 {
+                    Ok(value)
+                } else {
+                    Err(serde::de::Error::invalid_length(
+                        len,
+                        &"fewer elements in map",
+                    ))
+                }
+            }
+            (typed, _) => typed.deserialize_any(visitor),
+        }
+    }
+
+    // The point of the pair: text wanted, a number or boolean found, its
+    // source text given.
+    fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        self.deserialize_string(visitor)
+    }
+
+    fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match (self.typed, self.text) {
+            (Value::Number(_) | Value::Bool(_), Value::String(text)) => visitor.visit_string(text),
+            (typed, _) => typed.deserialize_string(visitor),
+        }
+    }
+
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        match self.typed {
+            Value::Null => visitor.visit_none(),
+            _ => visitor.visit_some(self),
+        }
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        visitor.visit_newtype_struct(self)
+    }
+
+    // Enums in configuration are words (`sync_mode: merge`): the typed value
+    // reads them as it always has.
+    fn deserialize_enum<V: Visitor<'de>>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.typed.deserialize_enum(name, variants, visitor)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char bytes byte_buf
+        unit unit_struct seq tuple tuple_struct map struct identifier ignored_any
+    }
+}
+
+struct Seq {
+    typed: std::vec::IntoIter<Value>,
+    text: std::vec::IntoIter<Value>,
+}
+
+impl<'de> SeqAccess<'de> for Seq {
+    type Error = serde_json::Error;
+
+    fn next_element_seed<S: DeserializeSeed<'de>>(
+        &mut self,
+        seed: S,
+    ) -> Result<Option<S::Value>, Self::Error> {
+        let Some(typed) = self.typed.next() else {
+            return Ok(None);
+        };
+        let text = self.text.next().unwrap_or(Value::Null);
+        seed.deserialize(Pair { typed, text }).map(Some)
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.typed.len())
+    }
+}
+
+struct Entries {
+    typed: serde_json::map::IntoIter,
+    text: Map<String, Value>,
+    // The value whose key was just handed out, with its text.
+    value: Option<Pair>,
+}
+
+impl<'de> MapAccess<'de> for Entries {
+    type Error = serde_json::Error;
+
+    fn next_key_seed<S: DeserializeSeed<'de>>(
+        &mut self,
+        seed: S,
+    ) -> Result<Option<S::Value>, Self::Error> {
+        let Some((key, typed)) = self.typed.next() else {
+            return Ok(None);
+        };
+        let text = self.text.remove(&key).unwrap_or(Value::Null);
+        self.value = Some(Pair { typed, text });
+        // Keys are text already (see the reader): a plain string key.
+        seed.deserialize(Value::String(key)).map(Some)
+    }
+
+    fn next_value_seed<S: DeserializeSeed<'de>>(
+        &mut self,
+        seed: S,
+    ) -> Result<S::Value, Self::Error> {
+        let pair = self
+            .value
+            .take()
+            .ok_or_else(|| serde::de::Error::custom("a map value was read before its key"))?;
+        seed.deserialize(pair)
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.typed.len())
+    }
 }
 
 #[cfg(test)]

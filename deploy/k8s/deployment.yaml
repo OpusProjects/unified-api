@@ -3,7 +3,8 @@
 # into invalid the way YAML in prose can.
 #
 # What the names refer to:
-#   unified-api-config   ConfigMap holding the config/*.yaml files (CONFIG_DIR)
+#   unified-api-config   ConfigMap holding config.yaml and the item files (CONFIG_DIR;
+#                        flat, see deploy/README.md for folders)
 #   unified-api-env      Secret with the env table (API keys, credential values)
 #   unified-api-secrets  Secret with file-delivered secrets (SSH key, JSON files)
 #   unified-api-state    PVC for project checkouts and the cache snapshot

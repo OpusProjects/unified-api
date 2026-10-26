@@ -4,6 +4,7 @@ pub mod audit;
 pub mod auth;
 pub mod cache;
 pub mod config;
+pub mod connectors;
 pub mod credentials;
 pub mod detail;
 pub mod endpoints;

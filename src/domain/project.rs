@@ -9,6 +9,9 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GitProject {
+    // The display label: the item's `description`, falling back to its
+    // identity (see config::take). The identity is the map key — what
+    // references, URLs and cache keys use.
     pub name: String,
     pub git_url: String,
 
@@ -16,7 +19,9 @@ pub struct GitProject {
     #[serde(default = "default_branch")]
     pub branch: String,
 
-    // Credential for private repos (GitHub token, SSH key, etc.)
+    // Credential for private repos (GitHub token, SSH key, etc.) —
+    // `credential:` in the item file
+    #[serde(default, rename = "credential")]
     pub credential_id: Option<String>,
 
     // Seconds between periodic re-pulls (0 or None = no periodic sync).

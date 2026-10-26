@@ -1,0 +1,15 @@
+---
+# The sample connectors' scripts live in this repository (tests/adapters/out/),
+# so the sample project is unified-api itself: public, so no credential, and
+# the connectors' paths resolve inside its checkout. A real deployment points
+# this at its own connector repository.
+projects:
+  - name: prj-connectors-infra
+    description: "Infrastructure Connectors"
+    git_url: "https://github.com/OpusProjects/unified-api.git"
+    # branch: "main"                    # default "main"
+    # credential: "cred-github-token"   # for private repos (token or ssh_key)
+    sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = no periodic sync)
+    # schedule: "15 2 * * *"            # cron (UTC) instead of the interval — pick one
+    # sync_on_boot: false               # start from the existing checkout as-is;
+    #                                   # update only via POST /api/v1/projects/{id}/sync

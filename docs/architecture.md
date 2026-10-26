@@ -74,7 +74,8 @@ Adapters come in two kinds, distinguished by which way the call travels across t
 1. `http::sync::sync_source` resolves the `Source` and builds a `SyncScope`
    (full / host / group) from query params
 2. `application::sync::sync_source` resolves credentials via `SecretsPort`,
-   runs the right `ConnectorPort` (script or SSH, per `source.connector_type`),
+   runs the right `ConnectorPort` (script, SSH, static inventory or remote, per
+   the `connector_type` the source resolved from its connector at load),
    and applies the resulting `Dataset` to the cache according to scope and
    `sync_mode` (replace / merge)
 3. The handler maps the `SyncOutcome` to a `SyncResult` JSON body

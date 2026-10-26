@@ -249,8 +249,9 @@ login form and a session cookie rather than a header box.
   `allows_source` per id. **The UI inherits the permission model for free**, and
   a restricted key browsing the UI sees exactly the sources its token allows.
 - A reload that removes a key must invalidate its sessions, or the console
-  outlives the revocation. The registry replace sweeps the session map by key
-  name.
+  outlives the revocation. The registry replace sweeps the session map by the
+  key's `name` (its identity), never by its label: two keys may share a
+  description.
 
 If no keys are configured at all, the API is open (`auth.rs:213`) and so is the
 UI, with the same loud warning at startup. No special case.
@@ -266,11 +267,11 @@ would have been a report. So the detail pages carry forms:
 
 | Page | Action | Route |
 |---|---|---|
-| source detail | Sync now | `POST /api/v1/sources/{id}/sync` |
+| source detail | Sync | `POST /api/v1/sources/{id}/sync` |
 | source detail | Evict cache | `DELETE /api/v1/sources/{id}` |
 | host detail | Delete host | `DELETE /api/v1/sources/{id}/hosts/{host}` |
-| enricher detail | Run now | `POST /api/v1/enrichers/{id}/run` |
-| project detail | Sync now | `POST /api/v1/projects/{id}/sync` |
+| enricher detail | Run | `POST /api/v1/enrichers/{id}/run` |
+| project detail | Sync | `POST /api/v1/projects/{id}/sync` |
 
 Two consequences, both mandatory:
 
@@ -330,6 +331,8 @@ on its own merits.
   paginated envelope with a one-entry `hostvars` map. The detail page needs a
   resource, and consumers that fetch one host want it too.
 - **`GET /api/v1/`** — the index: every collection, plus counts, plus links.
+  The admin-only collections (`projects`, `connectors`, `config`) are linked
+  only for an admin key, by the same rule as `related`.
 
 ### The gap: a source that never synced is invisible
 

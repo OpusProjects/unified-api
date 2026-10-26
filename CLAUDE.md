@@ -42,10 +42,13 @@ src/
 ├── main.rs                   # Entrypoint: load config, build app, start Axum
 ├── lib.rs                    # Module tree + AppBuilder (composition root)
 ├── state.rs                  # AppState (ports as Arc<dyn Trait> + static config)
-├── config.rs                 # YAML configuration loading from config/ directory
+├── config.rs                 # Loader: config.yaml + item files at any depth (SECTIONS)
+├── config/
+│   └── migrate.rs            # one-time 0.34 → item-file conversion (startup, --migrate-config)
 ├── domain/                   # Core domain types (pure, no dependencies)
 │   ├── dataset.rs            # Dataset, Group, HostVars
-│   ├── source.rs             # Source, TtlOverrides, ConnectorType
+│   ├── source.rs             # SourceDef (file) → Source (resolved with its connector), TtlOverrides
+│   ├── connector.rs          # Connector item (how to talk to a system); built-ins remote/static_inventory
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
 │   ├── sync_health.rs        # SyncHealth + registry (one per kind: sync/enrich/project/snapshot)
 │   ├── credential.rs         # Credential, CredentialType
@@ -95,6 +98,7 @@ src/
 │   │   │   ├── hosts.rs      # PUT/DELETE host
 │   │   │   ├── endpoints.rs  # Output endpoints (GET and POST)
 │   │   │   ├── projects.rs   # Git project routes (admin-only)
+│   │   │   ├── connectors.rs # GET connectors + their users and health (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
 │   │   │   ├── login.rs      # login page, sessions, logout
@@ -115,8 +119,9 @@ src/
 │       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double;
 │                             #   vault.rs; cache.rs; reloadable.rs (swappable chain);
 │                             #   build_chain() — the one place the chain is wired
-config/                       # Split YAML config (server, credentials, sources, etc.)
+config/                       # Example config: config.yaml + item files (sources/, connectors/, ...)
 tests/                        # Integration tests (*.rs), with sample scripts mirroring src/adapters/out/:
+├── fixtures/legacy-0.34/     # a 0.34-layout directory the migration tests convert
 └── adapters/
     └── out/                  # sample scripts — stand-ins for the driven adapters
         ├── connectors/       #   sample source connectors (incl. slow.py for timeout tests)
@@ -136,6 +141,19 @@ translators that call it; don't put orchestration logic in either.
 No external data dependencies (no Redis, no PostgreSQL). All cache in-memory with DashMap.
 Cache mutations must use the atomic `CachePort::update`/`merge_or_insert` operations —
 never the get → modify → set pattern (it loses concurrent writes).
+Configuration is item files (AWX style): `config.yaml` at the root, every other
+`*.yaml`/`*.yml` at any depth holds items under a typed top-level key
+(`config::SECTIONS`); `name` is the identity (what references, URLs and cache keys
+use), `description` the label. Struct `name` fields hold that LABEL — `config::take`
+moves `description` into them, which is what keeps API `name` fields unchanged.
+References are written without `_id` (`credentials`, `project`, `target`, `sources`);
+Rust fields kept their old names via `#[serde(rename)]`, because the API still
+answers `target_id` etc. A source item (`SourceDef`) is resolved with its connector
+at load into the flat runtime `Source` that everything downstream reads — never
+read a connector at sync time. A new item type touches `SECTIONS`, the loader's
+`take` calls, `AppConfig`, and `config::migrate`'s key order. A 0.34 directory is
+converted at startup (`config::migrate`): staged, validated, backed up to
+`.legacy-config-*`, never half-written; a read-only one into a temp copy.
 Configuration from YAML files, parsed STRICTLY: every config struct carries
 `deny_unknown_fields`, so a typo'd key fails startup naming the key instead of
 silently applying the default (policy comment in `config.rs`). Free-form data
@@ -222,7 +240,7 @@ Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
   removal) and one naming an api-key env var that is not set. See
   `docs/config-api.md`.
 
-- **Views:** `views.yaml` declares read-only composites over several sources.
+- **Views:** `views` items declare read-only composites over several sources.
   A view is served on the SOURCE routes and shares their id space (config
   validation rejects a collision) — that is what makes migrating a consumer a
   one-word change. It holds no cache entry: `application::views::snapshot`
@@ -268,7 +286,7 @@ Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
   waits for every configured source. Either way the body carries
   `sources_synced` and `sources_pending`, so a failing probe names what it is
   waiting for.
-- **Auth:** keys are declared in `api_keys.yaml`, each `role: admin` (everything)
+- **Auth:** keys are declared as `api_keys` items, each `role: admin` (everything)
   or restricted to explicit `sources`/`endpoints` id lists; secrets come from the
   env var each definition names. The legacy `UNIFIED_API_KEY` still works as one
   extra admin key. Constant-time compare; `/healthz`, `/readyz` and Swagger

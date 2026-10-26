@@ -1,0 +1,25 @@
+---
+# A 0.34 configuration directory with the shapes of a real aggregator:
+# shared inventory scripts, SSH fact gathering chained off an inventory,
+# federation to edges, a static inventory, views, constructed endpoints,
+# restricted keys and LDAP sign-in. Nothing here is a secret: credentials
+# and keys only name the environment variables that hold them.
+server:
+  host: "127.0.0.1"
+  port: 9090
+  refresh_timeout_seconds: 20
+  ui:
+    enabled: true
+    session_ttl_seconds: 3600
+    ldap:
+      url: "ldaps://ldap.example.com:636"
+      bind_credential: cred-ldap
+      search_base: "OU=Users,DC=example,DC=com"
+      access:
+        - name: "Platform team"
+          groups: ["DL-platform@example.com"]
+          role: admin
+projects:
+  dir: "projects"
+config_api:
+  enabled: true

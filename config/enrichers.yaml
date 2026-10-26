@@ -1,2 +1,0 @@
-# Enrichers — post-processors that enrich already-cached data.
-# They receive the current dataset on stdin and return the modified hosts on stdout.

@@ -4,13 +4,18 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::api_key::{ApiKeyDef, ApiKeyRole};
+use crate::domain::connector::Connector;
 use crate::domain::credential::Credential;
 use crate::domain::endpoint::{BUILTIN_SETTINGS, OutputEndpoint, renamed_setting};
 use crate::domain::enricher::Enricher;
 use crate::domain::host_filter::HostFilter;
 use crate::domain::project::GitProject;
-use crate::domain::source::Source;
+use crate::domain::source::{Source, SourceDef};
 use crate::domain::view::View;
+
+// The one-time conversion of a 0.34 directory (id-keyed maps in eight fixed
+// files) into item files. Lives beside the loader it feeds.
+pub mod migrate;
 
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -19,7 +24,11 @@ pub struct AppConfig {
     pub secrets_config: SecretsConfig,
     pub config_api: ConfigApiConfig,
     pub credentials: HashMap<String, Credential>,
+    // Resolved: each source with its connector's settings folded in (see
+    // SourceDef::resolve). The connectors themselves are kept too, for the
+    // /connectors listing and for what a reload reports.
     pub sources: HashMap<String, Source>,
+    pub connectors: HashMap<String, Connector>,
     pub views: HashMap<String, View>,
     pub enrichers: HashMap<String, Enricher>,
     pub projects: HashMap<String, GitProject>,
@@ -105,6 +114,20 @@ pub struct ServerConfig {
     // PUT is one body) or the largest host-vars document a consumer writes.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: usize,
+
+    // The address people and other instances reach this one at
+    // (https://unified-api-central.example.com). The process only knows the
+    // port it listens on; the real address is the ingress's. Optional, and
+    // only used to tell the instances this one reads from where it is, so
+    // their Topology page can link back to it.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    // What this instance is called where it is shown among others (the
+    // Topology page): "Central", "CDI DC01". Optional; without it the UI
+    // derives a name from the instance's address.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 fn default_refresh_timeout_seconds() -> u64 {
@@ -220,27 +243,119 @@ pub struct ConfigApiConfig {
     pub enabled: bool,
 }
 
-// Every file `load_config` reads, in the order --check-config reports them.
-// One list, so the config API cannot drift from the loader: a file added here
-// becomes readable and writable over HTTP the moment the loader knows it.
-pub const CONFIG_FILES: [&str; 8] = [
-    "config.yaml",
-    "credentials.yaml",
-    "sources.yaml",
-    "views.yaml",
-    "enrichers.yaml",
-    "projects.yaml",
-    "endpoints.yaml",
-    "api_keys.yaml",
-];
+// The configuration directory is laid out the way AWX config as code is:
+// config.yaml at the root holds the server settings, and every other *.yaml /
+// *.yml file, at any depth, holds ITEMS under a typed top-level key:
+//
+//   # sources/acme/src-d42-acme.yaml
+//   sources:
+//     - name: src-d42-acme
+//       description: "Device42 Acme Inventory"
+//       connector: d42
+//       ...
+//
+// The top-level key says what an item is, never the folder: folders are for
+// people (by team, by estate) and may nest as deep as they like. One item per
+// file is the convention; a file may hold several, of several types. `name`
+// is the item's identity: what other items reference, what URLs and cache
+// keys use. `description` is the label people read.
+//
+// Until 0.35 the directory was eight fixed files of id-keyed maps; a
+// directory still in that shape is converted once, at startup (see
+// config::migrate).
 
 // The one file that is not optional: without server config there is nothing
-// to bind. The config API refuses to delete it for the same reason the loader
-// refuses to start without it.
+// to bind. Always at the root, under exactly this name. The config API
+// refuses to delete it for the same reason the loader refuses to start
+// without it.
 pub const REQUIRED_CONFIG_FILE: &str = "config.yaml";
 
-pub fn is_config_file(name: &str) -> bool {
-    CONFIG_FILES.contains(&name)
+// The top-level keys an item file may use.
+pub const SECTIONS: [&str; 8] = [
+    "sources",
+    "views",
+    "endpoints",
+    "enrichers",
+    "connectors",
+    "projects",
+    "credentials",
+    "api_keys",
+];
+
+// Whether a path, relative to the configuration directory, can be a
+// configuration file: segments of letters, digits, `-`, `_` and `.`, none
+// hidden, ending in .yaml or .yml. The same rule the loader applies to what
+// it finds and the config API applies to what it is asked to write, so a file
+// the API cannot name cannot be part of the configuration either.
+pub fn is_config_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').collect();
+    path.len() <= 512
+        && segments.len() <= 16
+        && segments.iter().all(|s| is_safe_id(s))
+        && (path.ends_with(".yaml") || path.ends_with(".yml"))
+}
+
+// Every configuration file under `dir`, as relative paths with `/`, sorted:
+// the same directory always loads in the same order. Hidden entries are
+// skipped (the config API's staging directories, the migration's backup,
+// editor swap files, .git).
+//
+// Symlinks ARE followed: a Kubernetes ConfigMap mount is nothing but links
+// into a hidden `..data` folder, and skipping them would load an empty
+// configuration. The directory is the admins' to write either way; the depth
+// cap is what keeps a link loop from walking forever.
+pub fn config_files(dir: &Path) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    walk(dir, "", 0, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+const MAX_CONFIG_DEPTH: usize = 16;
+
+fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) -> Result<(), String> {
+    if depth > MAX_CONFIG_DEPTH {
+        return Err(format!(
+            "{}: folders nested more than {MAX_CONFIG_DEPTH} deep (a symlink loop?)",
+            dir.display()
+        ));
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && prefix.is_empty() => {
+            return Ok(());
+        }
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let rel = format!("{prefix}{name}");
+        // metadata, not file_type: it follows a link to what it points at.
+        let Ok(meta) = fs::metadata(entry.path()) else {
+            continue;
+        };
+        if meta.is_dir() {
+            walk(&entry.path(), &format!("{rel}/"), depth + 1, out)?;
+        } else if meta.is_file() && (name.ends_with(".yaml") || name.ends_with(".yml")) {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
+// An identity that is also safe as a path segment and in a URL: letters,
+// digits, `-`, `_` and `.`, not starting with a dot. Item names are held to
+// it because they appear in both (`/api/v1/sources/{id}`, the migration's
+// `<section>/<name>.yaml`), and configuration paths are made of it.
+pub fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 // The settings a running process cannot adopt without being restarted, pulled
@@ -432,6 +547,14 @@ impl AppConfig {
     pub fn validate_errors(&self) -> Vec<String> {
         let mut errors: Vec<String> = Vec::new();
 
+        if let Some(url) = &self.server.url
+            && !(url.starts_with("https://") || url.starts_with("http://"))
+        {
+            errors.push(format!(
+                "server.url '{url}' must be an http:// or https:// address"
+            ));
+        }
+
         // Enrichers must reference existing sources
         for (id, enricher) in &self.enrichers {
             if self.views.contains_key(&enricher.target_id) {
@@ -459,7 +582,7 @@ impl AppConfig {
             }
             if enricher.source_id.is_none() && enricher.script_path.is_none() {
                 errors.push(format!(
-                    "Enricher '{}' needs either source_id (declarative) or script_path (script)",
+                    "Enricher '{}' needs either source (declarative) or script_path (script)",
                     id
                 ));
             }
@@ -483,7 +606,7 @@ impl AppConfig {
             if endpoint.output.is_some() {
                 if endpoint.project_id.is_some() {
                     errors.push(format!(
-                        "Endpoint '{}' sets project_id, which a builtin output ignores",
+                        "Endpoint '{}' sets project, which a builtin output ignores",
                         id
                     ));
                 }
@@ -572,7 +695,7 @@ impl AppConfig {
                 {
                     errors.push(format!(
                         "Endpoint '{}' limits by hosts from '{}', which is not one of its \
-                         source_ids — add it to source_ids",
+                         sources — add it to sources",
                         id, from
                     ));
                 }
@@ -651,7 +774,7 @@ impl AppConfig {
             }
         }
 
-        // Sources with credential_ids must reference existing credentials
+        // Sources' credentials must exist
         for (id, source) in &self.sources {
             for cred_id in &source.credential_ids {
                 if !self.credentials.contains_key(cred_id) {
@@ -663,13 +786,31 @@ impl AppConfig {
             }
         }
 
-        // Sources must reference existing projects — the checkout of that
-        // project is where a relative script_path resolves first.
+        // Projects must exist — the checkout of that project is where a
+        // relative path resolves first. A connector names its own; of
+        // the sources only a static_inventory one names a project (the others
+        // took theirs from a connector already checked here, and reporting it
+        // again per source would bury the one line that needs fixing).
+        let mut connector_ids: Vec<&String> = self.connectors.keys().collect();
+        connector_ids.sort();
+        for id in connector_ids {
+            if let Some(project) = &self.connectors[id].project
+                && !self.projects.contains_key(project)
+            {
+                errors.push(format!(
+                    "Connector '{}' references unknown project '{}'",
+                    id, project
+                ));
+            }
+        }
         for (id, source) in &self.sources {
-            if !self.projects.contains_key(&source.project_id) {
+            if source.connector_type == crate::domain::source::ConnectorType::StaticInventory
+                && let Some(project) = &source.project_id
+                && !self.projects.contains_key(project)
+            {
                 errors.push(format!(
                     "Source '{}' references unknown project '{}'",
-                    id, source.project_id
+                    id, project
                 ));
             }
         }
@@ -714,7 +855,8 @@ impl AppConfig {
                 && scope.hosts.is_empty()
             {
                 errors.push(format!(
-                    "Source '{}' has an empty advertise_scope — name at least one                      group or host, or remove the block",
+                    "Source '{}' has an empty advertise_scope — name at least one \
+                     group or host, or remove the block",
                     id
                 ));
             }
@@ -778,34 +920,6 @@ impl AppConfig {
                         id, path
                     ));
                 }
-            }
-        }
-
-        // host_args are CLI arguments for a spawned script. The other
-        // connectors are not spawned with any (ssh builds its own remote
-        // command per host, static_inventory reads a file, remote speaks
-        // HTTP), so declaring them there is a config that looks active and
-        // is not.
-        for (id, source) in &self.sources {
-            if !source.host_args.is_empty()
-                && source.connector_type != crate::domain::source::ConnectorType::Script
-            {
-                errors.push(format!(
-                    "Source '{}' sets host_args but is not a script source",
-                    id
-                ));
-            }
-        }
-
-        // Remote (federation) sources need the remote base URL
-        for (id, source) in &self.sources {
-            if source.connector_type == crate::domain::source::ConnectorType::Remote
-                && !source.config.contains_key("url")
-            {
-                errors.push(format!(
-                    "Source '{}' is a remote source but has no 'url' in config",
-                    id
-                ));
             }
         }
 
@@ -1050,17 +1164,71 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
 // wrapper over it that main and the tests already use.
 pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
     // config.yaml is mandatory — without server config we cannot start
-    let server_file: ServerFile = load_yaml_file(&dir.join("config.yaml"))
-        .map_err(|e| ConfigErrors::single(format!("config.yaml: {}", e)))?;
+    let server_file: ServerFile = load_yaml_file(&dir.join(REQUIRED_CONFIG_FILE))
+        .map_err(|e| ConfigErrors::single(format!("{REQUIRED_CONFIG_FILE}: {e}")))?;
 
-    // The rest are optional — if they do not exist, empty HashMap
-    let credentials = load_named(dir, "credentials.yaml")?;
-    let sources = load_named(dir, "sources.yaml")?;
-    let views = load_named(dir, "views.yaml")?;
-    let enrichers = load_named(dir, "enrichers.yaml")?;
-    let projects = load_named(dir, "projects.yaml")?;
-    let endpoints = load_named(dir, "endpoints.yaml")?;
-    let api_keys = load_named(dir, "api_keys.yaml")?;
+    // Every other file holds items. All of them are read before anything is
+    // reported, so a push with three typos in three files names all three.
+    let mut errors = Vec::new();
+    let mut entries: HashMap<&str, Vec<Entry>> = HashMap::new();
+    let files = config_files(dir).map_err(ConfigErrors::single)?;
+    for file in files.iter().filter(|f| *f != REQUIRED_CONFIG_FILE) {
+        if !is_config_path(file) {
+            errors.push(format!(
+                "{file}: rename it — configuration paths may only use letters, digits, \
+                 '-', '_' and '.', in segments that do not start with a dot"
+            ));
+            continue;
+        }
+        match fs::read_to_string(dir.join(file)) {
+            Ok(text) => read_items(file, &text, &mut entries, &mut errors),
+            Err(e) => errors.push(format!("{file}: {e}")),
+        }
+    }
+    let mut section = |name: &str| entries.remove(name).unwrap_or_default();
+    let (cr, pr, co, so, vi, en, ep, ak) = (
+        section("credentials"),
+        section("projects"),
+        section("connectors"),
+        section("sources"),
+        section("views"),
+        section("enrichers"),
+        section("endpoints"),
+        section("api_keys"),
+    );
+    let credentials = take("credential", cr, &mut errors);
+    let projects = take("project", pr, &mut errors);
+    let connectors: HashMap<String, Connector> = take("connector", co, &mut errors);
+    let source_defs: HashMap<String, SourceDef> = take("source", so, &mut errors);
+    let views = take("view", vi, &mut errors);
+    let enrichers = take("enricher", en, &mut errors);
+    let endpoints = take("endpoint", ep, &mut errors);
+    let api_keys = take("API key", ak, &mut errors);
+
+    // A connector's own shape first: a source cannot be resolved against a
+    // connector that is itself wrong, and its errors would only repeat.
+    for (id, connector) in &connectors {
+        errors.extend(connector.errors(id));
+    }
+    if !errors.is_empty() {
+        // Cross-references are only worth checking once every item parsed:
+        // otherwise one typo'd connector also reports every source using it.
+        return Err(ConfigErrors::new(errors));
+    }
+
+    let mut sources = HashMap::new();
+    for (id, def) in &source_defs {
+        match def.resolve(id, &connectors) {
+            Ok(source) => {
+                sources.insert(id.clone(), source);
+            }
+            Err(found) => errors.extend(found),
+        }
+    }
+    if !errors.is_empty() {
+        errors.sort();
+        return Err(ConfigErrors::new(errors));
+    }
 
     let config = AppConfig {
         server: server_file.server,
@@ -1070,6 +1238,7 @@ pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
         config_api: server_file.config_api,
         credentials,
         sources,
+        connectors,
         views,
         enrichers,
         projects,
@@ -1085,15 +1254,183 @@ pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
     }
 }
 
-// An optional file, with its name in front of whatever went wrong. A YAML
-// parse error carries a line and a column and no filename at all, which in a
-// directory of eight files is half an answer.
-fn load_named<T: serde::de::DeserializeOwned>(
-    dir: &Path,
-    name: &str,
-) -> Result<HashMap<String, T>, ConfigErrors> {
-    load_optional_yaml(&dir.join(name))
-        .map_err(|e| ConfigErrors::single(format!("{}: {}", name, e)))
+// One item as found: which file, its name, and the rest of its keys.
+struct Entry {
+    file: String,
+    name: String,
+    body: serde_json::Map<String, serde_json::Value>,
+    // The same item with numbers and booleans as their source text
+    // (domain::yaml::to_text_json): what a field that wants text reads.
+    text: serde_json::Map<String, serde_json::Value>,
+}
+
+// Reads one item file into `entries`, by section. YAML is read with the
+// core-schema reader static inventories use (domain::yaml), so `0644` stays
+// a string, and an error names a position, never the text — a configuration
+// file can hold a secret, and the error goes to the log. It is read twice:
+// typed, and with every scalar as its text, which is what a text field (a
+// `config:` value, a script argument) is given — `1.10` stays "1.10".
+fn read_items(
+    file: &str,
+    text: &str,
+    entries: &mut HashMap<&'static str, Vec<Entry>>,
+    errors: &mut Vec<String>,
+) {
+    use serde_json::Value;
+    let top = match crate::domain::yaml::to_json(text) {
+        Ok(Value::Object(top)) => top,
+        // An empty file is a file with nothing in it yet, not an error.
+        Ok(Value::Null) => return,
+        Ok(_) => {
+            errors.push(format!(
+                "{file}: expected a mapping with one of: {}",
+                SECTIONS.join(", ")
+            ));
+            return;
+        }
+        Err(e) => {
+            errors.push(format!("{file}: {e}"));
+            return;
+        }
+    };
+    // The same document, so it parses the same; an empty map only if not.
+    let mut text_top = match crate::domain::yaml::to_text_json(text) {
+        Ok(Value::Object(top)) => top,
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in top {
+        let mut text_items = match text_top.remove(&key) {
+            Some(Value::Array(items)) => items.into_iter(),
+            _ => Vec::new().into_iter(),
+        };
+        let Some(section) = SECTIONS.iter().find(|s| **s == key) else {
+            // An id with a map under it is the 0.34 layout, most likely pushed
+            // by a pipeline that has not converted its files yet. Saying so
+            // is the difference between a typo hunt and a one-line fix.
+            let hint = if value.is_object() {
+                " — this is the 0.34 layout (items keyed by id); convert it with \
+                 `unified-api --migrate-config <dir>`"
+            } else {
+                ""
+            };
+            errors.push(format!(
+                "{file}: unknown key '{key}' (expected one of: {}){hint}",
+                SECTIONS.join(", ")
+            ));
+            continue;
+        };
+        let items = match value {
+            Value::Array(items) => items,
+            Value::Null => continue,
+            _ => {
+                errors.push(format!("{file}: '{key}' must be a list of items"));
+                continue;
+            }
+        };
+        for (i, item) in items.into_iter().enumerate() {
+            let mut text_body = match text_items.next() {
+                Some(Value::Object(body)) => body,
+                _ => serde_json::Map::new(),
+            };
+            let Value::Object(mut body) = item else {
+                errors.push(format!("{file}: {key} item {} is not a mapping", i + 1));
+                continue;
+            };
+            body.remove("name");
+            // By its text: `name: 2024` is the item "2024", as an id-keyed
+            // 0.34 item of that name was.
+            let name = match text_body.remove("name") {
+                Some(Value::String(name)) if !name.trim().is_empty() => name,
+                _ => {
+                    errors.push(format!(
+                        "{file}: {key} item {} needs a 'name', its identity",
+                        i + 1
+                    ));
+                    continue;
+                }
+            };
+            if !is_safe_id(&name) {
+                errors.push(format!(
+                    "{file}: {key} item '{name}' — a name may only use letters, digits, \
+                     '-', '_' and '.', and may not start with a dot (it is used in URLs)"
+                ));
+                continue;
+            }
+            entries.entry(section).or_default().push(Entry {
+                file: file.to_string(),
+                name,
+                body,
+                text: text_body,
+            });
+        }
+    }
+}
+
+// One section's items, typed. A name defined twice is an error naming both
+// files: which one wins would otherwise depend on the order files are read.
+//
+// Two adjustments before an item is typed:
+// - its `description` becomes the struct's `name` (falling back to the
+//   identity). Every item struct's `name` is the label people read; the
+//   identity is the map key. Doing it here, once, is what keeps every
+//   response that has always answered `name` answering the same thing.
+// - a field that wants text takes a scalar's source text (see
+//   domain::yaml::from_json_with_text). `config:` maps are free-form
+//   string → string (they become environment variables and script settings),
+//   and the typed reader before 0.35 took `concurrency: 20` as "20" and
+//   `version: 1.10` as "1.10"; read as numbers they were refused ("expected a
+//   string") or rewritten (1.1). The same holds for `script_args: [7]`.
+fn take<T: serde::de::DeserializeOwned>(
+    label: &str,
+    entries: Vec<Entry>,
+    errors: &mut Vec<String>,
+) -> HashMap<String, T> {
+    use serde_json::Value;
+    let mut out = HashMap::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+    for mut entry in entries {
+        if let Some(first) = seen.get(&entry.name) {
+            errors.push(format!(
+                "{}: {label} '{}' is already defined in {first}",
+                entry.file, entry.name
+            ));
+            continue;
+        }
+        seen.insert(entry.name.clone(), entry.file.clone());
+
+        let text_description = entry.text.remove("description");
+        let display = match entry.body.remove("description") {
+            Some(Value::String(text)) if !text.trim().is_empty() => text,
+            // `description: 2024`: its text, as any text field.
+            Some(Value::Number(_) | Value::Bool(_)) => match text_description {
+                Some(Value::String(text)) => text,
+                _ => entry.name.clone(),
+            },
+            Some(Value::Null) | None => entry.name.clone(),
+            Some(Value::String(_)) => entry.name.clone(),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: {label} '{}': description must be text",
+                    entry.file, entry.name
+                ));
+                continue;
+            }
+        };
+        entry
+            .body
+            .insert("name".to_string(), Value::String(display));
+
+        match crate::domain::yaml::from_json_with_text::<T>(
+            Value::Object(entry.body),
+            Value::Object(entry.text),
+        ) {
+            Ok(item) => {
+                out.insert(entry.name, item);
+            }
+            Err(e) => errors.push(format!("{}: {label} '{}': {e}", entry.file, entry.name)),
+        }
+    }
+    out
 }
 
 // Reads and parses a YAML file — fails if it does not exist
@@ -1109,19 +1446,6 @@ fn load_yaml_file<T: serde::de::DeserializeOwned>(
     };
     let parsed = serde_saphyr::from_str_with_options(&contents, options)?;
     Ok(parsed)
-}
-
-// Reads and parses a YAML file — returns empty HashMap if it does not exist
-// `T: DeserializeOwned` is a "trait bound": it says T must be deserializable.
-// It's like a type constraint in TypeScript or a Protocol in Python.
-fn load_optional_yaml<T: serde::de::DeserializeOwned>(
-    path: &Path,
-) -> Result<HashMap<String, T>, Box<dyn std::error::Error>> {
-    if path.exists() {
-        load_yaml_file(path)
-    } else {
-        Ok(HashMap::new())
-    }
 }
 
 #[cfg(test)]
@@ -1191,6 +1515,25 @@ mod tests {
         assert!(live.changed_keys(&proposed).is_empty());
     }
 
+    // server.url is shown back as a link: anything but a web address is a typo.
+    #[test]
+    fn server_url_must_be_a_web_address() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  url: \"central.example\"\n",
+        )
+        .unwrap();
+        let error = load_config(dir.path().to_str().unwrap())
+            .err()
+            .expect("a bare hostname is refused");
+        assert!(error.to_string().contains("server.url"), "{error}");
+        let cfg = config_with(
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n  url: \"https://central.example\"\n",
+        );
+        assert_eq!(cfg.server.url.as_deref(), Some("https://central.example"));
+    }
+
     #[test]
     fn the_config_api_is_off_unless_it_is_asked_for() {
         let cfg = config_with("server:\n  host: \"127.0.0.1\"\n  port: 9090\n");
@@ -1203,17 +1546,248 @@ mod tests {
         assert!(cfg.config_api.enabled);
     }
 
-    // The list the API serves and the list the loader reads have to be the
-    // same list, or a file becomes writable that nothing reads (or the other
-    // way round, which is worse).
+    // The rule the API applies to what it is asked to write and the rule the
+    // loader applies to what it finds are one rule, or a file becomes
+    // writable that nothing reads (or the other way round, which is worse).
     #[test]
-    fn every_file_the_loader_reads_is_a_known_config_file() {
-        for name in CONFIG_FILES {
-            assert!(is_config_file(name));
+    fn configuration_paths() {
+        for ok in ["config.yaml", "a/b/c.yml", "sources/acme/src-d42-acme.yaml"] {
+            assert!(is_config_path(ok), "{ok}");
         }
-        assert!(is_config_file(REQUIRED_CONFIG_FILE));
-        assert!(!is_config_file("secrets.yaml"));
-        assert!(!is_config_file("../etc/passwd"));
+        for bad in [
+            "",
+            "a.json",
+            "../x.yaml",
+            "a/../x.yaml",
+            "/abs.yaml",
+            "a//b.yaml",
+            ".hidden.yaml",
+            "a/.git/x.yaml",
+            "with space.yaml",
+            "a\\b.yaml",
+            "secrets.json",
+        ] {
+            assert!(!is_config_path(bad), "{bad:?}");
+        }
+    }
+
+    // ---- item files -------------------------------------------------------
+
+    fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+        )
+        .unwrap();
+        for (name, body) in files {
+            let path = dir.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, body).unwrap();
+        }
+        dir
+    }
+
+    const CONNECTOR: &str = "connectors:\n  - name: inv\n    project: prj-inv\n    path: inv.py\n";
+    const PROJECT: &str =
+        "projects:\n  - name: prj-inv\n    git_url: https://example.com/inv.git\n";
+
+    #[test]
+    fn items_load_from_any_depth_by_their_top_level_key() {
+        let dir = dir_with(&[
+            // Folders are for people: a connector may live anywhere.
+            ("connectors/inv.yaml", CONNECTOR),
+            ("projects.yml", PROJECT),
+            (
+                "sources/team-a/storage/src-a.yaml",
+                "sources:\n  - name: src-a\n    description: The A inventory\n    connector: inv\n    ttl_seconds: 60\n",
+            ),
+            // Hidden entries are not configuration: the migration's backup,
+            // the config API's staging, editors, git.
+            (
+                ".legacy-config-20261025T000000Z/sources.yaml",
+                "nonsense: [",
+            ),
+            (".git/HEAD.yaml", "nonsense: ["),
+            ("sources/.swp.yaml", "nonsense: ["),
+            // Neither is anything that is not YAML.
+            ("README.md", "# notes"),
+        ]);
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        let source = &cfg.sources["src-a"];
+        assert_eq!(source.name, "The A inventory");
+        assert_eq!(source.connector, "inv");
+        assert_eq!(source.script_path, "inv.py");
+        assert!(cfg.connectors.contains_key("inv") && cfg.projects.contains_key("prj-inv"));
+    }
+
+    #[test]
+    fn without_a_description_the_label_is_the_identity() {
+        let dir = dir_with(&[(
+            "all.yaml",
+            &format!(
+                "{CONNECTOR}{PROJECT}sources:\n  - name: src-a\n    connector: inv\n    ttl_seconds: 60\n"
+            ),
+        )]);
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        assert_eq!(cfg.sources["src-a"].name, "src-a");
+        assert_eq!(cfg.projects["prj-inv"].name, "prj-inv");
+    }
+
+    #[test]
+    fn a_configmap_mount_of_symlinks_loads() {
+        // What the kubelet writes: the real files in a hidden folder, and a
+        // link per key at the top.
+        let dir = dir_with(&[
+            ("..2026_10_25/connectors-inv.yaml", CONNECTOR),
+            ("..2026_10_25/projects.yaml", PROJECT),
+        ]);
+        std::os::unix::fs::symlink(dir.path().join("..2026_10_25"), dir.path().join("..data"))
+            .unwrap();
+        for name in ["connectors-inv.yaml", "projects.yaml"] {
+            std::os::unix::fs::symlink(format!("..data/{name}"), dir.path().join(name)).unwrap();
+        }
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        assert!(cfg.connectors.contains_key("inv"));
+    }
+
+    #[test]
+    fn config_maps_take_unquoted_scalars_as_text() {
+        let dir = dir_with(&[(
+            "all.yaml",
+            &format!(
+                "{CONNECTOR}{PROJECT}sources:\n  - name: src-a\n    connector: inv\n    ttl_seconds: 60\n    config:\n      concurrency: 20\n      insecure: true\n      mode: \"0644\"\n"
+            ),
+        )]);
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        let config = &cfg.sources["src-a"].config;
+        assert_eq!(config["concurrency"], "20");
+        assert_eq!(config["insecure"], "true");
+        assert_eq!(config["mode"], "0644");
+    }
+
+    // A text field holds what the file says, not what a number made of it:
+    // through numbers `1.10` was "1.1", `0x1F` was "31" and a long id a
+    // float in scientific notation — and a bare number in a list of
+    // arguments was refused outright.
+    #[test]
+    fn text_fields_keep_number_looking_values_verbatim() {
+        let dir = dir_with(&[(
+            "all.yaml",
+            &format!(
+                "{PROJECT}connectors:\n  - name: inv\n    project: prj-inv\n    path: inv.py\n    \
+                 script_args: [\"--days\", 7, 1.10]\n    timeout_seconds: 0x3C\n\
+                 sources:\n  - name: src-a\n    description: 2024\n    connector: inv\n    \
+                 ttl_seconds: 60\n    config:\n      API_VERSION: 1.10\n      ACCOUNT: 0x1F\n      \
+                 BIG: 123456789012345678901234\n      FLAG: True\n      PLUS: +3\n\
+                 enrichers:\n  - name: enr-a\n    target: src-a\n    project: prj-inv\n    \
+                 script_path: e.py\n    script_args: [\"--days\", 7]\n"
+            ),
+        )]);
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        let source = &cfg.sources["src-a"];
+        assert_eq!(source.config["API_VERSION"], "1.10");
+        assert_eq!(source.config["ACCOUNT"], "0x1F");
+        assert_eq!(source.config["BIG"], "123456789012345678901234");
+        assert_eq!(source.config["FLAG"], "True");
+        assert_eq!(source.config["PLUS"], "+3");
+        assert_eq!(source.name, "2024");
+        assert_eq!(source.script_args, ["--days", "7", "1.10"]);
+        // A field that wants a number still reads one.
+        assert_eq!(cfg.connectors["inv"].timeout_seconds, 60);
+        assert_eq!(cfg.enrichers["enr-a"].script_args, ["--days", "7"]);
+    }
+
+    // 0.34 ids were map keys, always text; a migrated `name: 2024` is the
+    // item "2024".
+    #[test]
+    fn a_number_looking_name_is_the_name() {
+        let dir = dir_with(&[(
+            "p.yaml",
+            "projects:\n  - name: 2024\n    git_url: https://example.com/inv.git\n",
+        )]);
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        assert!(cfg.projects.contains_key("2024"));
+    }
+
+    #[test]
+    fn duplicate_names_unknown_keys_and_bad_names_are_all_named() {
+        let dir = dir_with(&[
+            ("projects.yaml", PROJECT),
+            ("connectors/one.yaml", CONNECTOR),
+            ("connectors/two.yaml", CONNECTOR),
+            ("typo.yaml", "sorces:\n  - name: x\n"),
+            ("legacy.yaml", "src-a:\n  name: A\n"),
+            (
+                "nameless.yaml",
+                "projects:\n  - git_url: https://example.com/x.git\n",
+            ),
+            (
+                "slash.yaml",
+                "projects:\n  - name: a/b\n    git_url: https://example.com/x.git\n",
+            ),
+            ("bad field.yaml", "projects: []\n"),
+        ]);
+        let err = load_err(&dir);
+        for expected in [
+            "connectors/two.yaml: connector 'inv' is already defined in connectors/one.yaml",
+            "typo.yaml: unknown key 'sorces'",
+            "legacy.yaml: unknown key 'src-a'",
+            "this is the 0.34 layout",
+            "nameless.yaml: projects item 1 needs a 'name'",
+            "slash.yaml: projects item 'a/b'",
+            "bad field.yaml: rename it",
+        ] {
+            assert!(err.contains(expected), "missing {expected:?} in {err}");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_inside_an_item_name_the_file_and_the_item() {
+        let dir = dir_with(&[(
+            "sources/src-a.yaml",
+            "sources:\n  - name: src-a\n    connector: remote\n    ttl_seconds: 60\n    credential_ids: []\n",
+        )]);
+        let err = load_err(&dir);
+        assert!(
+            err.contains("sources/src-a.yaml: source 'src-a'") && err.contains("credential_ids"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn connector_rules_are_checked_at_load() {
+        let dir = dir_with(&[(
+            "connectors.yaml",
+            "connectors:\n  - name: remote\n    path: /opt/x.py\n  - name: loose\n    path: x.py\n  - name: ghostly\n    project: prj-ghost\n    path: x.py\n",
+        )]);
+        let err = load_err(&dir);
+        assert!(
+            err.contains("Connector 'remote' uses the name of a built-in"),
+            "{err}"
+        );
+        assert!(
+            err.contains("Connector 'loose' has a relative path but no project"),
+            "{err}"
+        );
+        // A connector's own shape is reported before references are: the
+        // unknown project is named once the shape is right.
+        let dir = dir_with(&[(
+            "connectors.yaml",
+            "connectors:\n  - name: ghostly\n    project: prj-ghost\n    path: x.py\n",
+        )]);
+        assert!(
+            load_err(&dir).contains("Connector 'ghostly' references unknown project 'prj-ghost'")
+        );
+    }
+
+    #[test]
+    fn a_source_naming_an_unknown_connector_is_named() {
+        let dir = dir_with(&[(
+            "sources.yaml",
+            "sources:\n  - name: src-a\n    connector: d43\n    ttl_seconds: 60\n",
+        )]);
+        assert!(load_err(&dir).contains("Source 'src-a' references unknown connector 'd43'"));
     }
 
     #[test]
@@ -1234,7 +1808,7 @@ mod tests {
         // they stopped being.)
         fs::write(
             dir.path().join("credentials.yaml"),
-            "cred-test:\n  name: \"Test\"\n  type: \"token\"\n  env_prefix: \"TEST\"\n",
+            "credentials:\n  - name: cred-test\n    description: \"Test\"\n    type: \"token\"\n    env_prefix: \"TEST\"\n",
         )
         .unwrap();
 
@@ -1266,7 +1840,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "enrich-test:\n  name: \"Test\"\n  target_id: \"src-nonexistent\"\n  script_path: \"test.py\"\n",
+            "enrichers:\n  - name: enrich-test\n    description: \"Test\"\n    target: \"src-nonexistent\"\n    script_path: \"test.py\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -1285,7 +1859,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-test:\n  name: \"Test\"\n  source_ids: [\"src-ghost\"]\n  script_path: \"test.py\"\n",
+            "endpoints:\n  - name: ep-test\n    description: \"Test\"\n    sources: [\"src-ghost\"]\n    script_path: \"test.py\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -1304,7 +1878,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-test:\n  name: \"Test\"\n",
+            "endpoints:\n  - name: ep-test\n    description: \"Test\"\n",
         )
         .unwrap();
 
@@ -1325,7 +1899,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-test:\n  name: \"Test\"\n  output: ansible\n  script_path: \"x.py\"\n",
+            "endpoints:\n  - name: ep-test\n    description: \"Test\"\n    output: ansible\n    script_path: \"x.py\"\n",
         )
         .unwrap();
 
@@ -1346,7 +1920,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-ok:\n  name: \"Ok\"\n  output: json\n  config:\n    host: \"*.aa1.pqe\"\n    group: \"linux\"\n    filter: \"os=OracleLinux\"\n    fields: \"os\"\n    exclude_fields: \"secret\"\n",
+            "endpoints:\n  - name: ep-ok\n    description: \"Ok\"\n    output: json\n    config:\n      host: \"*.aa1.pqe\"\n      group: \"linux\"\n      filter: \"os=OracleLinux\"\n      fields: \"os\"\n      exclude_fields: \"secret\"\n",
         )
         .unwrap();
         load_config(dir.path().to_str().unwrap()).expect("the five shared settings must validate");
@@ -1355,7 +1929,7 @@ mod tests {
         // unknown key fails listing what a builtin understands.
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-old:\n  name: \"Old\"\n  output: ansible\n  config:\n    filter_os: \"OracleLinux\"\n    colour: \"red\"\n",
+            "endpoints:\n  - name: ep-old\n    description: \"Old\"\n    output: ansible\n    config:\n      filter_os: \"OracleLinux\"\n      colour: \"red\"\n",
         )
         .unwrap();
         let err = load_config(dir.path().to_str().unwrap())
@@ -1376,7 +1950,7 @@ mod tests {
         // A malformed static filter fails the load, not every render.
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-bad:\n  name: \"Bad\"\n  output: csv\n  config:\n    filter: \"os\"\n",
+            "endpoints:\n  - name: ep-bad\n    description: \"Bad\"\n    output: csv\n    config:\n      filter: \"os\"\n",
         )
         .unwrap();
         let err = load_config(dir.path().to_str().unwrap())
@@ -1399,7 +1973,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-test:\n  name: \"Test\"\n  output: ansible\n",
+            "endpoints:\n  - name: ep-test\n    description: \"Test\"\n    output: ansible\n",
         )
         .unwrap();
 
@@ -1420,13 +1994,12 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-cmdb:\n  name: \"CMDB\"\n  project_id: \"prj-test\"\n  script_path: \"cmdb.py\"\n  ttl_seconds: 60\n\
-             src-vmware:\n  name: \"VMware\"\n  project_id: \"prj-test\"\n  script_path: \"vmware.py\"\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-cmdb\n    description: \"CMDB\"\n    connector: c-src-cmdb\n    ttl_seconds: 60\n  - name: src-vmware\n    description: \"VMware\"\n    connector: c-src-vmware\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-cmdb\n    project: \"prj-test\"\n    path: \"cmdb.py\"\n  - name: c-src-vmware\n    project: \"prj-test\"\n    path: \"vmware.py\"\n",
         )
         .unwrap();
         fs::write(dir.path().join("endpoints.yaml"), endpoints_yaml).unwrap();
@@ -1436,7 +2009,7 @@ mod tests {
     #[test]
     fn an_endpoint_limited_by_one_of_its_own_sources_validates() {
         let dir = config_dir_with_two_sources(
-            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\", \"src-vmware\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventory: \"src-cmdb\"\n",
+            "endpoints:\n  - name: ep-built\n    description: \"Built\"\n    sources: [\"src-cmdb\", \"src-vmware\"]\n    output: ansible\n    limit:\n      by_hosts_from_inventory: \"src-cmdb\"\n",
         );
 
         let cfg = load_config(dir.path().to_str().unwrap())
@@ -1455,7 +2028,7 @@ mod tests {
         // src-vmware exists, but this endpoint never merges it -- so the
         // intersection would be against data the endpoint never waits for.
         let dir = config_dir_with_two_sources(
-            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventory: \"src-vmware\"\n",
+            "endpoints:\n  - name: ep-built\n    description: \"Built\"\n    sources: [\"src-cmdb\"]\n    output: ansible\n    limit:\n      by_hosts_from_inventory: \"src-vmware\"\n",
         );
 
         let err = load_config(dir.path().to_str().unwrap())
@@ -1463,13 +2036,13 @@ mod tests {
             .expect("a limit naming a source outside source_ids must fail")
             .to_string();
         assert!(err.contains("src-vmware"), "{}", err);
-        assert!(err.contains("source_ids"), "{}", err);
+        assert!(err.contains("add it to sources"), "{}", err);
     }
 
     #[test]
     fn validate_catches_a_limit_that_names_no_rule() {
         let dir = config_dir_with_two_sources(
-            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit: {}\n",
+            "endpoints:\n  - name: ep-built\n    description: \"Built\"\n    sources: [\"src-cmdb\"]\n    output: ansible\n    limit: {}\n",
         );
 
         let err = load_config(dir.path().to_str().unwrap())
@@ -1484,7 +2057,7 @@ mod tests {
     #[test]
     fn a_typo_inside_the_limit_is_named_at_load() {
         let dir = config_dir_with_two_sources(
-            "ep-built:\n  name: \"Built\"\n  source_ids: [\"src-cmdb\"]\n  output: ansible\n  limit:\n    by_hosts_from_inventary: \"src-cmdb\"\n",
+            "endpoints:\n  - name: ep-built\n    description: \"Built\"\n    sources: [\"src-cmdb\"]\n    output: ansible\n    limit:\n      by_hosts_from_inventary: \"src-cmdb\"\n",
         );
 
         let err = load_config(dir.path().to_str().unwrap())
@@ -1506,7 +2079,7 @@ mod tests {
         // setting it is a mistake to name, like project_id and script_args.
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-test:\n  name: \"Test\"\n  output: csv\n  timeout_seconds: 60\n",
+            "endpoints:\n  - name: ep-test\n    description: \"Test\"\n    output: csv\n    timeout_seconds: 60\n",
         )
         .unwrap();
 
@@ -1528,7 +2101,7 @@ mod tests {
         // sources.yaml declares a project_id that does not exist in projects.yaml
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-ghost\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-test\n    description: \"Test\"\n    connector: c-src-test\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-test\n    project: \"prj-ghost\"\n    path: \"test.py\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -1547,14 +2120,14 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         let kh_path = dir.path().join("known_hosts");
         fs::write(
             dir.path().join("sources.yaml"),
             format!(
-                "src-fleet:\n  name: \"Fleet\"\n  project_id: \"prj-test\"\n  script_path: \"unused\"\n  connector_type: \"ssh\"\n  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n    ssh_known_hosts: \"{}\"\n",
+                "sources:\n  - name: src-fleet\n    description: \"Fleet\"\n    connector: c-src-fleet\n    ttl_seconds: 60\n    config:\n      hosts: \"a.example\"\n      ssh_known_hosts: \"{}\"\nconnectors:\n  - name: c-src-fleet\n    type: ssh\n    path: \"unused\"\n",
                 kh_path.display()
             ),
         )
@@ -1581,12 +2154,12 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-script:\n  name: \"Script\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n  config:\n    ssh_known_hosts: \"/anywhere\"\n",
+            "sources:\n  - name: src-script\n    description: \"Script\"\n    connector: c-src-script\n    ttl_seconds: 60\n    config:\n      ssh_known_hosts: \"/anywhere\"\nconnectors:\n  - name: c-src-script\n    project: \"prj-test\"\n    path: \"test.py\"\n",
         )
         .unwrap();
 
@@ -1612,8 +2185,7 @@ mod tests {
                 .err()
                 .map(|e| e.to_string())
         };
-        let cred =
-            "cred-ldap:\n  name: \"LDAP\"\n  type: username_password\n  env_prefix: \"LDAP\"\n";
+        let cred = "credentials:\n  - name: cred-ldap\n    description: \"LDAP\"\n    type: username_password\n    env_prefix: \"LDAP\"\n";
         let ldap = |url: &str, extra: &str| {
             format!(
                 "    enabled: true\n    ldap:\n      url: \"{url}\"\n      bind_credential: cred-ldap\n      \
@@ -1669,7 +2241,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n  credential_id: \"cred-ghost\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n    credential: \"cred-ghost\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -1688,12 +2260,12 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-test\n    description: \"Test\"\n    connector: c-src-test\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-test\n    project: \"prj-test\"\n    path: \"test.py\"\n",
         ).unwrap();
 
         let cfg = load_config(dir.path().to_str().unwrap()).unwrap();
@@ -1710,16 +2282,16 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"test.py\"\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-test\n    description: \"Test\"\n    connector: c-src-test\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-test\n    project: \"prj-test\"\n    path: \"test.py\"\n",
         ).unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "enrich-test:\n  name: \"Test\"\n  target_id: \"src-test\"\n  script_path: \"e.py\"\n  project_id: \"prj-ghost\"\n",
+            "enrichers:\n  - name: enrich-test\n    description: \"Test\"\n    target: \"src-test\"\n    script_path: \"e.py\"\n    project: \"prj-ghost\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());
@@ -1737,7 +2309,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         // three violations at once: not an ssh source, self-reference is
@@ -1745,12 +2317,13 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "src-script:\n  name: \"S\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
-                "  hosts_from_source:\n    source: \"src-ssh\"\n",
-                "src-ssh:\n  name: \"T\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
-                "  connector_type: \"ssh\"\n",
-                "  hosts_from_source:\n    source: \"src-ssh\"\n",
-                "  config:\n    hosts: \"a.example.com\"\n",
+                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "sources:\n",
+                "  - name: src-script\n    connector: inv\n    ttl_seconds: 60\n",
+                "    hosts_from_source:\n      source: \"src-ssh\"\n",
+                "  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
+                "    hosts_from_source:\n      source: \"src-ssh\"\n",
+                "    config:\n      hosts: \"a.example.com\"\n",
             ),
         )
         .unwrap();
@@ -1774,16 +2347,16 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "src-ssh:\n  name: \"S\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
-                "  connector_type: \"ssh\"\n",
-                "  host_args: [\"--host\", \"{target}\"]\n",
-                "  config:\n    hosts: \"a.example.com\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "    host_args: [\"--host\", \"{target}\"]\n",
+                "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
+                "    config:\n      hosts: \"a.example.com\"\n",
             ),
         )
         .unwrap();
@@ -1792,7 +2365,11 @@ mod tests {
             .err()
             .expect("expected a validation error")
             .to_string();
-        assert!(err.contains("not a script source"), "missing rule: {}", err);
+        assert!(
+            err.contains("not a script connector"),
+            "missing rule: {}",
+            err
+        );
     }
 
     #[test]
@@ -1805,15 +2382,15 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "src-ssh:\n  name: \"T\"\n  project_id: \"prj-test\"\n  script_path: \"gather_facts\"\n  ttl_seconds: 60\n",
-                "  connector_type: \"ssh\"\n",
-                "  hosts_from_source:\n    source: \"src-ghost\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
+                "    hosts_from_source:\n      source: \"src-ghost\"\n",
             ),
         )
         .unwrap();
@@ -1836,12 +2413,12 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-a:\n  name: \"A\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
         )
         .unwrap();
         dir
@@ -1860,15 +2437,16 @@ mod tests {
         fs::write(
             dir.path().join("views.yaml"),
             concat!(
+                "views:\n",
                 // id collides with a source, and its member is unknown
-                "src-a:\n  name: \"Collides\"\n  members:\n",
-                "    - source: \"src-ghost\"\n      owns:\n        source: \"src-a\"\n",
+                "  - name: src-a\n    description: \"Collides\"\n    members:\n",
+                "      - source: \"src-ghost\"\n        owns:\n          source: \"src-a\"\n",
                 // lists the same member twice, and owns against an unknown source
-                "vw-dup:\n  name: \"Dup\"\n  members:\n",
-                "    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
-                "    - source: \"src-a\"\n      owns:\n        source: \"src-nowhere\"\n",
+                "  - name: vw-dup\n    description: \"Dup\"\n    members:\n",
+                "      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n",
+                "      - source: \"src-a\"\n        owns:\n          source: \"src-nowhere\"\n",
                 // no members at all
-                "vw-empty:\n  name: \"Empty\"\n  members: []\n",
+                "  - name: vw-empty\n    description: \"Empty\"\n    members: []\n",
             ),
         )
         .unwrap();
@@ -1887,10 +2465,11 @@ mod tests {
         fs::write(
             dir.path().join("views.yaml"),
             concat!(
-                "vw-inner:\n  name: \"Inner\"\n  members:\n",
-                "    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
-                "vw-outer:\n  name: \"Outer\"\n  members:\n",
-                "    - source: \"vw-inner\"\n      owns:\n        source: \"src-a\"\n",
+                "views:\n",
+                "  - name: vw-inner\n    description: \"Inner\"\n    members:\n",
+                "      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n",
+                "  - name: vw-outer\n    description: \"Outer\"\n    members:\n",
+                "      - source: \"vw-inner\"\n        owns:\n          source: \"src-a\"\n",
             ),
         )
         .unwrap();
@@ -1903,17 +2482,17 @@ mod tests {
         let dir = dir_with_one_source();
         fs::write(
             dir.path().join("views.yaml"),
-            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+            "views:\n  - name: vw-a\n    description: \"V\"\n    members:\n      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("endpoints.yaml"),
-            "ep-a:\n  name: \"E\"\n  source_ids: [\"vw-a\"]\n  script_path: \"t.py\"\n",
+            "endpoints:\n  - name: ep-a\n    description: \"E\"\n    sources: [\"vw-a\"]\n    script_path: \"t.py\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "en-a:\n  name: \"E\"\n  target_id: \"vw-a\"\n  script_path: \"t.py\"\n",
+            "enrichers:\n  - name: en-a\n    description: \"E\"\n    target: \"vw-a\"\n    script_path: \"t.py\"\n",
         )
         .unwrap();
 
@@ -1927,12 +2506,12 @@ mod tests {
         let dir = dir_with_one_source();
         fs::write(
             dir.path().join("views.yaml"),
-            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n",
+            "views:\n  - name: vw-a\n    description: \"V\"\n    members:\n      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("api_keys.yaml"),
-            "key-forms:\n  name: \"Forms\"\n  env: \"X\"\n  sources: [\"vw-a\"]\n",
+            "api_keys:\n  - name: key-forms\n    description: \"Forms\"\n    env: \"X\"\n    sources: [\"vw-a\"]\n",
         )
         .unwrap();
 
@@ -1945,7 +2524,7 @@ mod tests {
         let dir = dir_with_one_source();
         fs::write(
             dir.path().join("views.yaml"),
-            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        grups: [\"x\"]\n",
+            "views:\n  - name: vw-a\n    description: \"V\"\n    members:\n      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n          grups: [\"x\"]\n",
         )
         .unwrap();
 
@@ -1967,14 +2546,14 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         // sync_interval_second (no s): the sync interval this operator thinks
         // they configured would silently not exist
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  sync_interval_second: 300\n",
+            "sources:\n  - name: src-test\n    description: \"Test\"\n    connector: c-src-test\n    ttl_seconds: 60\n    sync_interval_second: 300\nconnectors:\n  - name: c-src-test\n    project: \"prj-test\"\n    path: \"x.py\"\n",
         )
         .unwrap();
 
@@ -1992,7 +2571,7 @@ mod tests {
         // carry would silently become an empty one
         fs::write(
             dir.path().join("api_keys.yaml"),
-            "key-forms:\n  name: \"Forms\"\n  env: \"X\"\n  source: [\"src-a\"]\n",
+            "api_keys:\n  - name: key-forms\n    description: \"Forms\"\n    env: \"X\"\n    source: [\"src-a\"]\n",
         )
         .unwrap();
 
@@ -2040,7 +2619,7 @@ mod tests {
         // ownership with no fallback can never route anything
         fs::write(
             dir.path().join("views.yaml"),
-            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        advertised: true\n",
+            "views:\n  - name: vw-a\n    description: \"V\"\n    members:\n      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n          advertised: true\n",
         )
         .unwrap();
         assert!(load_err(&dir).contains("claim nothing"));
@@ -2048,7 +2627,7 @@ mod tests {
         // A declared fallback makes it valid
         fs::write(
             dir.path().join("views.yaml"),
-            "vw-a:\n  name: \"V\"\n  members:\n    - source: \"src-a\"\n      owns:\n        source: \"src-a\"\n        advertised: true\n        groups: [\"dc1\"]\n",
+            "views:\n  - name: vw-a\n    description: \"V\"\n    members:\n      - source: \"src-a\"\n        owns:\n          source: \"src-a\"\n          advertised: true\n          groups: [\"dc1\"]\n",
         )
         .unwrap();
         load_config(dir.path().to_str().unwrap()).expect("fallback makes it valid");
@@ -2059,7 +2638,7 @@ mod tests {
         let dir = dir_with_one_source();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-a:\n  name: \"A\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  advertise_scope: {}\n",
+            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\n    advertise_scope: {}\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
         )
         .unwrap();
 
@@ -2078,18 +2657,20 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
+                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n",
+                "sources:\n",
                 // junk in the schedule
-                "src-bad:\n  name: \"B\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
-                "  schedule: \"whenever feels right\"\n",
+                "  - name: src-bad\n    connector: inv\n    ttl_seconds: 60\n",
+                "    schedule: \"whenever feels right\"\n",
                 // schedule AND interval
-                "src-both:\n  name: \"C\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
-                "  schedule: \"0 2 * * *\"\n  sync_interval_seconds: 60\n",
+                "  - name: src-both\n    connector: inv\n    ttl_seconds: 60\n",
+                "    schedule: \"0 2 * * *\"\n    sync_interval_seconds: 60\n",
             ),
         )
         .unwrap();
@@ -2098,15 +2679,16 @@ mod tests {
         // concept, whatever kind of periodic work it paces
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "en-bad:\n  name: \"E\"\n  target_id: \"src-both\"\n  script_path: \"e.py\"\n  schedule: \"nope\"\n",
+            "enrichers:\n  - name: en-bad\n    description: \"E\"\n    target: \"src-both\"\n    script_path: \"e.py\"\n    schedule: \"nope\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
             concat!(
-                "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n",
-                "prj-both:\n  name: \"P\"\n  git_url: \"https://example.com/p.git\"\n",
-                "  schedule: \"0 2 * * *\"\n  sync_interval_seconds: 60\n",
+                "projects:\n",
+                "  - name: prj-test\n    git_url: \"https://example.com/repo.git\"\n",
+                "  - name: prj-both\n    git_url: \"https://example.com/p.git\"\n",
+                "    schedule: \"0 2 * * *\"\n    sync_interval_seconds: 60\n",
             ),
         )
         .unwrap();
@@ -2124,17 +2706,17 @@ mod tests {
         // Well-formed cron-only definitions of every kind load
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-cron:\n  name: \"OK\"\n  project_id: \"prj-test\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n  schedule: \"30 2 * * *\"\n",
+            "sources:\n  - name: src-cron\n    description: \"OK\"\n    connector: c-src-cron\n    ttl_seconds: 60\n    schedule: \"30 2 * * *\"\nconnectors:\n  - name: c-src-cron\n    project: \"prj-test\"\n    path: \"x.py\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("enrichers.yaml"),
-            "en-cron:\n  name: \"E\"\n  target_id: \"src-cron\"\n  script_path: \"e.py\"\n  schedule: \"45 2 * * *\"\n",
+            "enrichers:\n  - name: en-cron\n    description: \"E\"\n    target: \"src-cron\"\n    script_path: \"e.py\"\n    schedule: \"45 2 * * *\"\n",
         )
         .unwrap();
         fs::write(
             dir.path().join("projects.yaml"),
-            "prj-test:\n  name: \"Test\"\n  git_url: \"https://example.com/repo.git\"\n  schedule: \"15 2 * * *\"\n",
+            "projects:\n  - name: prj-test\n    description: \"Test\"\n    git_url: \"https://example.com/repo.git\"\n    schedule: \"15 2 * * *\"\n",
         )
         .unwrap();
         load_config(dir.path().to_str().unwrap()).expect("a valid cron schedule loads");
@@ -2150,7 +2732,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("credentials.yaml"),
-            "cred-v:\n  name: \"V\"\n  type: \"token\"\n  vault_path: \"team/api\"\n",
+            "credentials:\n  - name: cred-v\n    description: \"V\"\n    type: \"token\"\n    vault_path: \"team/api\"\n",
         )
         .unwrap();
 
@@ -2179,7 +2761,7 @@ mod tests {
         .unwrap();
         fs::write(
             dir.path().join("sources.yaml"),
-            "src-test:\n  name: \"Test\"\n  project_id: \"p\"\n  script_path: \"test.py\"\n  credential_ids: [\"cred-missing\"]\n  ttl_seconds: 60\n",
+            "sources:\n  - name: src-test\n    description: \"Test\"\n    connector: c-src-test\n    credentials: [\"cred-missing\"]\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-test\n    project: \"p\"\n    path: \"test.py\"\n",
         ).unwrap();
 
         let result = load_config(dir.path().to_str().unwrap());

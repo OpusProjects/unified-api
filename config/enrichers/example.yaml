@@ -1,0 +1,13 @@
+---
+# Enrichers — post-processors that enrich already-cached data.
+# They receive the current dataset on stdin and return the modified hosts on
+# stdout (script mode), or copy named fields from one source onto another
+# (declarative mode). See docs/enrichers.md.
+#
+# enrichers:
+#   - name: enr-infra-onto-section9
+#     description: "Infrastructure fields onto the Section 9 hosts"
+#     target: "src-section9"          # the cache entry written into
+#     source: "src-infra"             # declarative: copy from this source...
+#     fields: ["rack", "power"]       # ...these vars
+#     sync_interval_seconds: 300

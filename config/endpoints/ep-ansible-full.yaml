@@ -1,0 +1,6 @@
+---
+endpoints:
+  - name: ep-ansible-full
+    description: "Full Ansible Inventory"
+    sources: ["src-section9", "src-infra"]
+    output: "ansible"

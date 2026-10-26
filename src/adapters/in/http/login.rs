@@ -69,7 +69,7 @@ fn safe_next<'a>(next: Option<&'a str>, home: &'a str) -> &'a str {
 
 // For a `next` carried in a query string: every byte but the unreserved ones
 // and '/' escaped, so a path with its own query ("?host=a&b") arrives whole.
-fn query_escape(value: &str) -> String {
+pub(crate) fn query_escape(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {
@@ -372,7 +372,7 @@ pub async fn login_submit(
         );
     }
 
-    let (name, kind, permissions) = if let Some(username) = form.username.as_deref() {
+    let (name, kind, key_id, permissions) = if let Some(username) = form.username.as_deref() {
         let Some(ldap) = ldap.as_ref() else {
             return refuse("LDAP login is not configured", StatusCode::BAD_REQUEST);
         };
@@ -390,6 +390,7 @@ pub async fn login_submit(
             Ok(logged) => (
                 format!("ldap:{}", logged.username),
                 SessionKind::Directory,
+                None,
                 match logged.grant {
                     Grant::Admin => Permissions::Admin,
                     Grant::Scoped { sources, endpoints } => {
@@ -455,11 +456,14 @@ pub async fn login_submit(
         (
             key.name.clone(),
             SessionKind::ApiKey,
+            Some(key.id.clone()),
             key.permissions.clone(),
         )
     };
 
-    let issued = sessions.0.create(name.clone(), kind, permissions, ttl.0);
+    let issued = sessions
+        .0
+        .create(name.clone(), kind, key_id, permissions, ttl.0);
 
     tracing::info!(key_name = %name, "browser session opened");
 

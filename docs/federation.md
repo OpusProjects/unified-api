@@ -4,7 +4,7 @@ One instance per datacenter doing the local gathering, one central that
 federates them — so consumers only ever talk to the central, and no SSH key or
 firewall opening needs global reach.
 
-This page is the topology. The `connector_type: remote` script contract it rests
+This page is the topology. The built-in `remote` connector it rests
 on lives in [connectors](connectors.md), and [views](views.md) are how a consumer
 stops needing to know which instance a host sits behind.
 
@@ -18,7 +18,7 @@ For hosts spread over multiple datacenters, don't SSH across the WAN from
 one central instance (firewall openings into every DC, one key with global
 reach, WAN latency on every handshake). Deploy **one instance per DC** doing
 the local work, and **one central** that federates them with
-`connector_type: "remote"` — consumers only ever talk to the central:
+the built-in `connector: remote` — consumers only ever talk to the central:
 
 ```
           DATACENTER A                                  DATACENTER B
@@ -74,12 +74,13 @@ the worked example above). The only federation-specific piece is a
 **restricted API key** for the central:
 
 ```yaml
-# edge: api_keys.yaml
-key-central:
-  name: "Central aggregator"
-  env: "UNIFIED_API_KEY_CENTRAL"
-  # restricted (default role): the central can read THIS source and nothing else
-  sources: ["src-fleet"]
+# edge: api_keys/key-central.yaml
+api_keys:
+  - name: key-central
+    description: "Central aggregator"
+    env: "UNIFIED_API_KEY_CENTRAL"
+    # restricted (default role): the central can read THIS source and nothing else
+    sources: ["src-fleet"]
 ```
 
 The deployment injects `UNIFIED_API_KEY_CENTRAL` on the edge (same secret
@@ -92,45 +93,44 @@ mechanisms as everything else). Generate one distinct key per edge.
 What the central instance needs in order to treat each edge as a remote source it can read.
 
 ```yaml
-# central: credentials.yaml — one token credential per DC
-cred-edge-dc1:
-  name: "Edge datacenter A API key"
-  type: "token"
-  env_prefix: "EDGE_DC1"
-  secret_keys:
-    token: "TOKEN"          # reads env EDGE_DC1_TOKEN
+# central: credentials/cred-edge-dc1.yaml — one token credential per DC
+credentials:
+  - name: cred-edge-dc1
+    description: "Edge datacenter A API key"
+    type: "token"
+    env_prefix: "EDGE_DC1"
+    secret_keys:
+      token: "TOKEN"          # reads env EDGE_DC1_TOKEN
 ```
 
 ```yaml
-# central: sources.yaml — one remote source per DC
-src-dc1:
-  name: "Datacenter A"
-  connector_type: "remote"
-  project_id: "prj-unused"        # required by schema; unused by remote
-  script_path: "src-fleet"        # the source id ON THE EDGE
-  credential_ids: ["cred-edge-dc1"]
-  sync_interval_seconds: 120      # how often the central re-pulls the edge
-  ttl_seconds: 600
-  config:
-    url: "https://unified-api-dc1.example.com"
-    # http_timeout_seconds: "30"  # default 30
-    # insecure_tls: "true"        # only for self-signed edges; opt-in
+# central: sources/src-dc1.yaml — one remote source per DC
+sources:
+  - name: src-dc1
+    description: "Datacenter A"
+    connector: "remote"             # built in: no connector item to write
+    credentials: ["cred-edge-dc1"]
+    sync_interval_seconds: 120      # how often the central re-pulls the edge
+    ttl_seconds: 600
+    config:
+      url: "https://unified-api-dc1.example.com"
+      source: "src-fleet"           # the source id ON THE EDGE
+      # http_timeout_seconds: "30"  # default 30
+      # insecure_tls: "true"        # only for self-signed edges; opt-in
 ```
 
-```yaml
-# central: projects.yaml — the stub the schema requires
-prj-unused:
-  name: "unused"
-  git_url: "https://example.invalid/unused.git"
-  sync_on_boot: false
-```
+`config.url` and `config.source` are both required. Before 0.35 the edge's
+source id rode in `script_path`, and a remote source had to name a stub project
+it never used; the built-in connector needs neither (a 0.34 central is converted
+that way on upgrade — see [configuration](configuration.md#upgrading-from-034)).
 
 ```yaml
-# central: endpoints.yaml — one merged world view for consumers
-ep-global:
-  name: "Global inventory"
-  source_ids: ["src-dc1"]      # add one id per DC
-  script_path: "tests/adapters/out/output/ansible_inventory.py"
+# central: endpoints/ep-global.yaml — one merged world view for consumers
+endpoints:
+  - name: ep-global
+    description: "Global inventory"
+    sources: ["src-dc1"]          # add one id per DC
+    script_path: "tests/adapters/out/output/ansible_inventory.py"
 ```
 
 Secrets the central's deployment must inject: `EDGE_DC1_TOKEN` (the value of
@@ -151,11 +151,14 @@ pattern an SSH source already gathers by. On the edge that means the claim is
 maintained exactly once, where the gathering is configured:
 
 ```yaml
-# edge: sources.yaml — the source states what it owns
-src-fleet:
-  # ... connector config ...
-  advertise_scope:
-    groups: ["dc1"]            # optional when hosts_from_source already says it
+# edge: sources/src-fleet.yaml — the source states what it owns
+sources:
+  - name: src-fleet
+    connector: "ssh-facts"
+    # ... credentials, config, TTLs ...
+    ttl_seconds: 600
+    advertise_scope:
+      groups: ["dc1"]            # optional when hosts_from_source already says it
 ```
 
 The central's remote syncs fetch the edge's `/scope` alongside the dataset,
@@ -201,7 +204,7 @@ Failure modes, all loud:
 |---|---|
 | `answered 401` | The token credential isn't the edge's API key |
 | `answered 403` | The edge key exists but isn't allowed that source id |
-| `answered 404` | Wrong remote source id, or the edge hasn't synced it yet |
+| `answered 404` | Wrong `config.source` (the remote source id), or the edge hasn't synced it yet |
 | `request … failed` (network) | WAN/DNS/TLS problem — the central keeps serving its last good copy |
 | WARN `could not read remote ages` | Data arrived fine; only the age lookup failed (treated as fresh) |
 
@@ -232,7 +235,7 @@ curl -s -H "X-API-Key: $KEY" https://central.example.com/api/v1/topology?depth=2
 }
 ```
 
-- **Peers come from configuration**: every `connector_type: remote` source,
+- **Peers come from configuration**: every `connector: remote` source,
   grouped by its `config.url`. No registry to keep in sync.
 - **Each peer is asked in turn**, with the token credential its sources
   already use, and nests its own answer under `instance`. `depth` (default 2,
@@ -251,7 +254,42 @@ curl -s -H "X-API-Key: $KEY" https://central.example.com/api/v1/topology?depth=2
 - A restricted key sees each peer's version, not the peer's own peers: those
   were asked with this instance's key, not the caller's.
 
-The UI's Topology page draws this as a tree.
+The UI's Topology page draws this as a tree. Each line is green where data gets through, red where
+the peer is unreachable or its pulls fail.
+
+## The map on an edge: pushed down from the central
+
+An edge reads from nobody, so its own `GET /topology` is just itself. The central fills the gap:
+
+- **Every minute** an instance with remote sources maps the federation (depth 2) and sends it to
+  each peer that answered: `PUT /api/v1/topology/federation`, with the key its remote sources use.
+  When two sources read one edge with different keys, the push uses the one the map asked with:
+  the first source by id.
+- **What an edge is sent is redacted** the way a restricted caller's map is. It shows every
+  peer's name and version, but not that peer's own map (asked with the central's keys).
+- **Errors stay on the central.** Why a peer was not asked is generic, and a failing link says it
+  fails (`consecutive_failures`) without its error: those name the central's env vars and Vault
+  paths.
+- **No edge configuration.** The central's key is restricted to the sources it reads, and that is
+  enough: any key may push, and the map is stored under the key's name (`key-central` → central).
+- **Only a key sent with the request pushes.** A browser session cannot, even one signed in with
+  a key: the answer is a `403`.
+- **The central's address comes from its `server.url`** (`config.yaml`), since a process only
+  knows the port it listens on. Unset, the edge shows the central without a URL.
+- **Admins read it** at `GET /api/v1/topology/federation`. The edge's Topology page then draws the
+  central at the root and this instance among its peers, and the Overview counts the same map.
+- **In memory, and it expires.** A restart empties it until the next push (within a minute); a
+  sender silent for ten minutes is dropped. Past three minutes the page says the map may be stale.
+- **Older edges are skipped quietly**: a 404 or 405 to the push is not a failure. Other failures
+  are logged once when they start, and once when they stop.
+
+```mermaid
+flowchart LR
+    C[central] -- "GET /topology (every minute)" --> E1[edge dc1]
+    C -- "GET /topology" --> E2[edge dc2]
+    C -- "PUT /topology/federation: the map, redacted" --> E1
+    C -- "PUT /topology/federation" --> E2
+```
 
 ## Operational notes
 
@@ -262,7 +300,7 @@ How the arrangement behaves once it is running, and what it costs to change its 
   metric flags the broken link — alert on that.
 - **An unchanged edge costs almost nothing to poll**: full pulls revalidate
   with the edge's `ETag` and a `304` skips the transfer — see
-  [connectors → remote](connectors.md#remote-sources--federation-connector_type-remote).
+  [connectors → remote](connectors.md#remote-sources--federation-connector-remote).
   `unified_api_remote_not_modified_total` counts the skips, so a low ratio of
   skips to syncs on a source that rarely changes is worth a look.
 - **Adding a DC** = deploy an edge (same manifests, different config), give

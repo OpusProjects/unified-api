@@ -11,7 +11,7 @@ use utoipa::ToSchema;
 use crate::AppState;
 use crate::adapters::out::config::fs::directory_etag;
 use crate::application::config as reload_use_case;
-use crate::config::{AppConfig, CONFIG_FILES, ConfigErrors, REQUIRED_CONFIG_FILE, is_config_file};
+use crate::config::{AppConfig, ConfigErrors, REQUIRED_CONFIG_FILE, is_config_path};
 use crate::ports::config_store::{ConfigChange, ConfigFileStat, ConfigStorePort};
 
 use super::audit;
@@ -49,6 +49,7 @@ pub struct ConfigFileInfo {
 #[derive(Serialize, ToSchema)]
 pub struct ConfigSummary {
     pub sources: usize,
+    pub connectors: usize,
     pub views: usize,
     pub credentials: usize,
     pub enrichers: usize,
@@ -115,6 +116,7 @@ pub struct ReloadInfo {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub restart_required: Vec<String>,
     pub sources: DeltaInfo,
+    pub connectors: DeltaInfo,
     pub views: DeltaInfo,
     pub enrichers: DeltaInfo,
     pub endpoints: DeltaInfo,
@@ -192,7 +194,8 @@ pub struct ReloadQuery {
 // of its TTL — the console outliving the revocation, which is the one thing a
 // revocation is for.
 fn swap_keys(state: &AppState, keys: &ApiKeys, resolved: Vec<ResolvedApiKey>) -> usize {
-    let live: Vec<String> = resolved.iter().map(|key| key.name.clone()).collect();
+    // By identity: a key's label (its description) need not be unique.
+    let live: Vec<String> = resolved.iter().map(|key| key.id.clone()).collect();
     let count = resolved.len();
     keys.0.replace(resolved);
     state.sessions.retain_keys(&live);
@@ -219,14 +222,18 @@ fn admin(auth: &AuthContext) -> Result<(), ApiError> {
     }
 }
 
+// A path the loader would read: relative, at any depth, safe segments, a
+// YAML extension. Anything else could never be part of the configuration, so
+// it is refused before it is read or written.
 fn known_file(name: &str) -> Result<(), ApiError> {
-    if is_config_file(name) {
+    if is_config_path(name) {
         Ok(())
     } else {
         Err(ApiError::not_found(format!(
-            "'{}' is not a configuration file — the loader reads exactly: {}",
-            name,
-            CONFIG_FILES.join(", ")
+            "'{}' is not a configuration path — a relative path ending in .yaml or \
+             .yml, whose segments use only letters, digits, '-', '_' and '.' and \
+             do not start with a dot",
+            name
         )))
     }
 }
@@ -247,6 +254,7 @@ fn file_info(stat: &ConfigFileStat) -> ConfigFileInfo {
 fn summarize(cfg: &AppConfig) -> ConfigSummary {
     ConfigSummary {
         sources: cfg.sources.len(),
+        connectors: cfg.connectors.len(),
         views: cfg.views.len(),
         credentials: cfg.credentials.len(),
         enrichers: cfg.enrichers.len(),
@@ -262,6 +270,7 @@ fn reload_info(report: &reload_use_case::ReloadReport, api_keys: usize) -> Reloa
         applied: report.applied.clone(),
         restart_required: report.restart_required.clone(),
         sources: (&report.sources).into(),
+        connectors: (&report.connectors).into(),
         views: (&report.views).into(),
         enrichers: (&report.enrichers).into(),
         endpoints: (&report.endpoints).into(),
@@ -380,12 +389,13 @@ pub async fn get_config(
     let store = store(&state)?;
 
     let stats = store.stat_all().map_err(ApiError::internal)?;
-    let present: Vec<&str> = stats.iter().map(|s| s.name.as_str()).collect();
-    let missing = CONFIG_FILES
-        .iter()
-        .filter(|name| !present.contains(name))
-        .map(|name| name.to_string())
-        .collect();
+    // Only one file is ever required; every other is an item file that is
+    // there or not.
+    let missing = if stats.iter().any(|s| s.name == REQUIRED_CONFIG_FILE) {
+        Vec::new()
+    } else {
+        vec![REQUIRED_CONFIG_FILE.to_string()]
+    };
 
     // What is on disk may differ from what is running (somebody wrote without
     // reloading) and may not even load (somebody edited the file by hand).
@@ -421,7 +431,7 @@ pub async fn get_config(
     get,
     path = "/api/v1/config/{file}",
     tag = "Configuration",
-    params(("file" = String, Path, description = "File name, e.g. sources.yaml")),
+    params(("file" = String, Path, description = "Path inside the configuration directory, e.g. sources/acme/src-d42-acme.yaml (slashes allowed)")),
     responses(
         (status = 200, description = "The file, verbatim. The ETag is the sha256 of the bytes — send it back as If-Match to write safely", body = String, content_type = "application/yaml"),
         (status = 304, description = "If-None-Match matched: unchanged"),
@@ -473,7 +483,7 @@ pub async fn get_config_file(
     path = "/api/v1/config/{file}",
     tag = "Configuration",
     params(
-        ("file" = String, Path, description = "File name, e.g. sources.yaml"),
+        ("file" = String, Path, description = "Path inside the configuration directory, e.g. sources/acme/src-d42-acme.yaml (slashes allowed)"),
         ("reload" = Option<bool>, Query, description = "Apply to the running process as part of the write")
     ),
     request_body(content = String, description = "The file's new contents, verbatim YAML", content_type = "application/yaml"),
@@ -514,7 +524,7 @@ pub async fn put_config_file(
     path = "/api/v1/config/{file}",
     tag = "Configuration",
     params(
-        ("file" = String, Path, description = "File name, e.g. enrichers.yaml"),
+        ("file" = String, Path, description = "Path inside the configuration directory, e.g. sources/acme/src-d42-acme.yaml (slashes allowed)"),
         ("reload" = Option<bool>, Query, description = "Apply to the running process as part of the delete")
     ),
     responses(
@@ -728,6 +738,9 @@ async fn write(
         None
     };
 
+    // Named before the commit: afterwards, what a prune removed is no longer
+    // there to be listed.
+    let deleted = deleted_names(state, store, &change)?;
     store.commit(&change).map_err(|e| {
         metrics::counter!("unified_api_config_writes_total", "outcome" => "error").increment(1);
         ApiError::internal(format!("configuration written to nowhere: {}", e))
@@ -735,7 +748,6 @@ async fn write(
     metrics::counter!("unified_api_config_writes_total", "outcome" => "success").increment(1);
 
     let written: Vec<String> = change.write.keys().cloned().collect();
-    let deleted = deleted_names(state, store, &change)?;
 
     let reloaded = match resolved {
         Some(resolved) => {
@@ -786,8 +798,8 @@ fn changed_names(change: &ConfigChange) -> Vec<String> {
     names
 }
 
-// Which files the commit actually removed: the explicit deletions, plus
-// whatever a pruning push left out.
+// Which files the commit will remove: the explicit deletions, plus whatever
+// a pruning push leaves out.
 fn deleted_names(
     _state: &Arc<AppState>,
     store: &Arc<dyn ConfigStorePort>,
@@ -796,9 +808,9 @@ fn deleted_names(
     let present = store.stat_all().map_err(ApiError::internal)?;
     let mut deleted: Vec<String> = change.delete.iter().cloned().collect();
     if change.prune {
-        for name in CONFIG_FILES {
-            if !change.write.contains_key(name) && !present.iter().any(|s| s.name == name) {
-                deleted.push(name.to_string());
+        for stat in &present {
+            if !change.write.contains_key(&stat.name) {
+                deleted.push(stat.name.clone());
             }
         }
     }

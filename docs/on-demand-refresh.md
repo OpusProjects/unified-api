@@ -99,7 +99,7 @@ One request, followed from the consumer through the central to the origin and ba
       ┌────────────────────────────────────────────────────────┐
       │   unified-api CENTRAL          (datacenter A, k8s)     │
       │                                                        │
-      │   src-edge-dc2:  connector_type: remote                │
+      │   src-edge-dc2:  connector: remote                     │
       │                  allow_on_demand_refresh: true         │
       │                  ttl_seconds: 300                      │
       │                                                        │
@@ -119,7 +119,7 @@ One request, followed from the consumer through the central to the origin and ba
       ┌────────────────────────────────────────────────────────┐
       │   unified-api EDGE             (datacenter B, podman)  │
       │                                                        │
-      │   src-ssh-facts: connector_type: ssh                   │
+      │   src-ssh-facts: connector: ssh-facts (type: ssh)      │
       │                  hosts_from_source: src-inventory      │
       │                                                        │
       │   host scope honoured: SSH to node100 ONLY             │
@@ -170,60 +170,77 @@ central's key for that source — which a **restricted** key does, since `POST
 
 Complete and copy-pasteable. Two instances, one datacenter each.
 
-### Edge — `sources.yaml` (datacenter B, podman)
+### Edge — connectors and sources (datacenter B, podman)
 
 Nothing new here. The edge is unchanged by this feature; it only has to honour
 a host-scoped sync, which it does as of 0.8.0.
 
 ```yaml
-# The inventory that says WHAT exists in this DC
-src-inventory:
-  name: "Device42 inventory (datacenter B)"
-  project_id: "prj-connectors"
-  script_path: "d42_inventory.py"
-  script_args: ["--list"]
-  output_format: "ansible"
-  connector_type: "script"
-  credential_ids: ["cred-d42"]
-  sync_interval_seconds: 3600
-  ttl_seconds: 7200
+# connectors/d42.yaml — an Ansible dynamic inventory script
+connectors:
+  - name: d42
+    description: "Device42 dynamic inventory"
+    project: "prj-connectors"
+    path: "d42_inventory.py"
+    script_args: ["--list"]
+    output_format: "ansible"
 
-# The facts: WHAT each host is doing. Host list comes from src-inventory.
-src-ssh-facts:
-  name: "Ansible local facts (datacenter B)"
-  project_id: "prj-connectors"
-  script_path: "unused-in-facts-mode"
-  connector_type: "ssh"
-  credential_ids: ["cred-ssh-dc2"]
-  hosts_from_source:
-    source: "src-inventory"
-    match_pattern:
-      groups: ["dc2"]
-    connect_via: "ansible_host_then_hostname"
-  sync_interval_seconds: 1800
-  # The edge's own TTL. Independent of the central's: this one describes when
-  # the edge's scheduler considers its data old, the central's decides when a
-  # consumer's read is worth a gather.
-  ttl_seconds: 3600
-  config:
-    gather_mode: "facts"
-    fact_path: "/etc/ansible/facts.d"
-    concurrency: "40"
-    ssh_connect_timeout_seconds: "20"
+# connectors/ssh-facts.yaml — native SSH, Ansible local facts
+connectors:
+  - name: ssh-facts
+    description: "Ansible local facts over SSH"
+    type: "ssh"
+    path: "gather_facts"              # a label: facts mode runs no command of ours
 ```
 
-### Edge — `api_keys.yaml`
+```yaml
+# sources/src-inventory.yaml — the inventory that says WHAT exists in this DC
+sources:
+  - name: src-inventory
+    description: "Device42 inventory (datacenter B)"
+    connector: "d42"
+    credentials: ["cred-d42"]
+    sync_interval_seconds: 3600
+    ttl_seconds: 7200
+
+# sources/src-ssh-facts.yaml — the facts: WHAT each host is doing. Host list
+# comes from src-inventory.
+sources:
+  - name: src-ssh-facts
+    description: "Ansible local facts (datacenter B)"
+    connector: "ssh-facts"
+    credentials: ["cred-ssh-dc2"]
+    hosts_from_source:
+      source: "src-inventory"
+      match_pattern:
+        groups: ["dc2"]
+      connect_via: "ansible_host_then_hostname"
+    sync_interval_seconds: 1800
+    # The edge's own TTL. Independent of the central's: this one describes when
+    # the edge's scheduler considers its data old, the central's decides when a
+    # consumer's read is worth a gather.
+    ttl_seconds: 3600
+    config:
+      gather_mode: "facts"
+      fact_path: "/etc/ansible/facts.d"
+      concurrency: "40"
+      ssh_connect_timeout_seconds: "20"
+```
+
+### Edge — `api_keys`
 
 The key the central uses. Restricted to the one source it federates: if the
 central is compromised it cannot read the rest of datacenter B's inventory.
 
 ```yaml
-key-central:
-  name: "central (datacenter A)"
-  env: "UNIFIED_API_KEY_CENTRAL"
-  role: "restricted"
-  sources: ["src-ssh-facts"]
-  endpoints: []
+# api_keys/key-central.yaml
+api_keys:
+  - name: key-central
+    description: "central (datacenter A)"
+    env: "UNIFIED_API_KEY_CENTRAL"
+    role: "restricted"
+    sources: ["src-ssh-facts"]
+    endpoints: []
 ```
 
 ### Central — `config.yaml` (datacenter A, k8s)
@@ -246,49 +263,53 @@ cache:
     interval_seconds: 300
 ```
 
-### Central — `sources.yaml`
+### Central — `sources`
+
+The built-in `remote` connector: no connector item, and no project.
 
 ```yaml
-src-edge-dc2:
-  name: "Datacenter B facts (federated)"
-  project_id: "prj-connectors"
-  # script_path = the source id ON THE EDGE
-  script_path: "src-ssh-facts"
-  connector_type: "remote"
-  credential_ids: ["cred-edge-dc2"]
-  # This is the gate. A read asking for a host refreshes it only if the host is
-  # older than this. Read the "Choosing the TTL" note before setting it.
-  ttl_seconds: 300
-  # Off by default; this is what lets a GET trigger a gather.
-  allow_on_demand_refresh: true
-  # The scheduler keeps working as before: the central pulls the edge's cache
-  # on its own interval and NEVER causes SSH by doing so.
-  sync_interval_seconds: 600
-  ttl_overrides:
-    hosts:
-      # A box whose state changes fast enough to be worth gathering more often
-      node100: 60
-    groups:
-    # ...or a whole group of them
-      oracle_db: 120
-  config:
-    url: "https://unified-api-dc2.example.com"
-    # Bounds BOTH the reads and the refresh POST, so it must exceed the time the
-    # edge needs to gather one host. Raise it on slow links or slow hosts.
-    http_timeout_seconds: "30"
+# sources/src-edge-dc2.yaml
+sources:
+  - name: src-edge-dc2
+    description: "Datacenter B facts (federated)"
+    connector: "remote"
+    credentials: ["cred-edge-dc2"]
+    # This is the gate. A read asking for a host refreshes it only if the host is
+    # older than this. Read the "Choosing the TTL" note before setting it.
+    ttl_seconds: 300
+    # Off by default; this is what lets a GET trigger a gather.
+    allow_on_demand_refresh: true
+    # The scheduler keeps working as before: the central pulls the edge's cache
+    # on its own interval and NEVER causes SSH by doing so.
+    sync_interval_seconds: 600
+    ttl_overrides:
+      hosts:
+        # A box whose state changes fast enough to be worth gathering more often
+        node100: 60
+      groups:
+        # ...or a whole group of them
+        oracle_db: 120
+    config:
+      url: "https://unified-api-dc2.example.com"
+      source: "src-ssh-facts"         # the source id ON THE EDGE
+      # Bounds BOTH the reads and the refresh POST, so it must exceed the time the
+      # edge needs to gather one host. Raise it on slow links or slow hosts.
+      http_timeout_seconds: "30"
 ```
 
-### Central — `credentials.yaml`
+### Central — `credentials`
 
 ```yaml
-# The edge's API key, read from UNIFIED_API_EDGE_DC2_KEY. The remote connector
-# looks for a credential named `token`, which is what secret_keys maps here.
-cred-edge-dc2:
-  name: "Datacenter B edge API key"
-  type: "token"
-  env_prefix: "UNIFIED_API_EDGE_DC2"
-  secret_keys:
-    token: "KEY"
+# credentials/cred-edge-dc2.yaml — the edge's API key, read from
+# UNIFIED_API_EDGE_DC2_KEY. The remote connector looks for a credential named
+# `token`, which is what secret_keys maps here.
+credentials:
+  - name: cred-edge-dc2
+    description: "Datacenter B edge API key"
+    type: "token"
+    env_prefix: "UNIFIED_API_EDGE_DC2"
+    secret_keys:
+      token: "KEY"
 ```
 
 ### The secret contract
@@ -472,9 +493,9 @@ Every way a refresh can fall short, and what the caller is told in each case.
 | Edge unreachable (WAN down) | `200` + cached data, `refreshed: false` | Same reason. Reads keep working off the last snapshot |
 | `refresh=true` with no `?host=` | `400` + explanation | Naming the hosts is what bounds the cost |
 | Source without `allow_on_demand_refresh` | `403` naming the setting | The capability was never granted |
-| Source not in `sources.yaml` | `404` | Configuration error, not a cache miss |
+| Source not configured | `404` | Configuration error, not a cache miss |
 | Central's key rejected by the edge | `200` + cached data, `refreshed: false`, error contains `401` | The key rotated on one side only |
-| Central's key not scoped to the edge source | same, error contains `403` | `api_keys.yaml` on the edge |
+| Central's key not scoped to the edge source | same, error contains `403` | the `api_keys` item on the edge |
 | Hostname differs between central and edge | `200`, `refreshed: false`, error says the scope matched no hosts | The two sides must key hosts identically |
 | `refresh_depth` runs out mid-chain | `200`, data served, `WARN` in the log | Chain longer than the budget, or a cycle |
 | Source has no cache entry at all | Refresh runs (nothing cached is maximally stale), then `404` if it still has nothing | A refresh cannot invent a source |

@@ -22,8 +22,12 @@ pub struct ProjectInfo {
     pub name: String,
     pub git_url: String,
     pub branch: String,
+    /// The credential it pulls with, when the repository needs one
+    pub credential_id: Option<String>,
     /// Whether a checkout currently exists on disk
     pub checkout_present: bool,
+    /// The commit the checkout is at (full id); null without a checkout
+    pub revision: Option<String>,
     /// Seconds between periodic re-pulls (absent/0 = only boot and on demand)
     pub sync_interval_seconds: Option<u64>,
     pub sync_on_boot: bool,
@@ -46,6 +50,10 @@ pub struct ProjectInfo {
 
 #[derive(Serialize, ToSchema)]
 pub struct ProjectUsers {
+    /// Connectors whose scripts live in this checkout
+    pub connectors: Vec<String>,
+    /// Sources that run from it: through their connector, or (static
+    /// inventory) by naming it themselves
     pub sources: Vec<String>,
     pub endpoints: Vec<String>,
     pub enrichers: Vec<String>,
@@ -106,13 +114,20 @@ pub async fn list_projects(
             // clones from the configured value.
             git_url: crate::domain::topology::without_userinfo(&project.git_url),
             branch: project.branch.clone(),
+            credential_id: project.credential_id.clone(),
             checkout_present,
+            revision: if checkout_present {
+                state.git.revision(&state.projects_dir.join(id)).await
+            } else {
+                None
+            },
             sync_interval_seconds: project.sync_interval_seconds,
             sync_on_boot: project.sync_on_boot,
             schedule: project.schedule.clone(),
             timeout_seconds: project.timeout_seconds,
             used_by: ProjectUsers {
-                sources: users_of(&config.sources, id, |s| Some(s.project_id.as_str())),
+                connectors: users_of(&config.connectors, id, |c| c.project.as_deref()),
+                sources: users_of(&config.sources, id, |s| s.project_id.as_deref()),
                 endpoints: users_of(&config.endpoints, id, |e| e.project_id.as_deref()),
                 enrichers: users_of(&config.enrichers, id, |e| e.project_id.as_deref()),
             },

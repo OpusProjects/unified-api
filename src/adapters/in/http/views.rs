@@ -407,6 +407,35 @@ pub fn groups(state: &Arc<AppState>, id: &str, view: &View) -> Vec<GroupInfo> {
         .collect()
 }
 
+// GET /api/v1/sources/{id}/groups/{group} for a view: the group as the
+// members' merge has it. None when no member has it.
+pub fn group(
+    state: &Arc<AppState>,
+    id: &str,
+    view: &View,
+    name: &str,
+) -> Option<super::sources::GroupDetail> {
+    let config = state.config();
+    let snap = snapshot(
+        &*state.cache,
+        &config.sources,
+        &state.advertised_scopes,
+        id,
+        view,
+    );
+    let groups = snap.groups();
+    let group = groups.get(name)?;
+    Some(super::sources::GroupDetail {
+        name: name.to_string(),
+        host_count: group.hosts.len(),
+        children: group.children.iter().map(|c| c.to_string()).collect(),
+        vars: group
+            .vars
+            .map(|v| v.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+    })
+}
+
 // GET /api/v1/sources/{id}/hosts for a view.
 pub fn hosts(
     state: &Arc<AppState>,

@@ -23,6 +23,9 @@ use super::dataset::Dataset;
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct View {
+    // The display label: the item's `description`, falling back to its
+    // identity (see config::take). The identity is the map key — what
+    // references, URLs and cache keys use.
     pub name: String,
 
     // Declared order is significant: the FIRST member that claims a host wins

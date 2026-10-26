@@ -19,6 +19,7 @@ and every one of them sees the same inventory.
 ## ✨ Features
 
 - **Pluggable sources**: any executable that prints inventory JSON is a connector
+- **Connectors**: one item says how to read a system; every instance of it is a source naming it
 - **SSH connector**: gathers Ansible facts from whole fleets in parallel
 - **In-memory cache with TTLs**: per-dataset, per-host and per-group freshness, no database
 - **Gzip responses**: a client that accepts gzip transfers about a tenth of the bytes
@@ -28,6 +29,7 @@ and every one of them sees the same inventory.
 - **Views**: one id over several sources, routing each host to the member that owns it
 - **Scheduled + on-demand sync**: interval sync per source, plus scoped sync over the API
 - **Refresh**: a read can bring the hosts it names up to date, bounded by the source's TTL
+- **Config as code**: AWX-style item files, one per source, in any folders you like
 - **Configuration API**: a pipeline pushes the config directory and reloads it live, no restart
 - **Web UI**: sources, endpoints, topology, metrics and host search in a browser, same address
 - **Swagger UI**: interactive OpenAPI docs served at `/swagger-ui/`
@@ -41,13 +43,15 @@ and every one of them sees the same inventory.
 |---|---|
 | [API](docs/api.md) | All routes with authentication, status code semantics and curl examples |
 | [Architecture](docs/architecture.md) | The four layers, the dependency rule and the concurrency model |
-| [CLI](docs/cli.md) | Environment variables, log tuning, health checks and common curl operations |
-| [Configuration](docs/configuration.md) | Every YAML file field by field, env vars and startup validation |
+| [Browsable API](docs/browsable-api.md) | The API's own pages in a browser: login, sessions, navigation |
+| [CLI](docs/cli.md) | `--check-config`, `--migrate-config`, env vars, log tuning and common curl operations |
+| [Configuration](docs/configuration.md) | The item-file layout, every item field by field, upgrading from 0.34 |
 | [Configuration API](docs/config-api.md) | Pushing the config directory over HTTP, validating it and reloading it live |
-| [Connectors](docs/connectors.md) | Script contracts for connectors, enrichers and output transformers |
+| [Connectors](docs/connectors.md) | Connector items, the built-ins, and the script contracts for all three kinds |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |
 | [Enrichers](docs/enrichers.md) | Post-processing cached data: modes, triggers, freshness rules, health |
 | [Federation](docs/federation.md) | One instance per datacenter, one central federating them, no WAN SSH |
+| [LDAP login](docs/ldap-login.md) | Signing in with a directory account, and the access rules that decide what it reaches |
 | [Observability](docs/observability.md) | Scheduling, structured logs and the metrics worth alerting on |
 | [Output endpoints](docs/endpoints.md) | Consumer-facing transformers: contract, GET vs POST, permissions |
 | [Projects](docs/projects.md) | Git checkouts: sync styles, script resolution, virtualenvs, health |

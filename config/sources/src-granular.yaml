@@ -1,0 +1,10 @@
+---
+sources:
+  - name: src-granular
+    description: "Granular Inventory"
+    connector: "granular"
+    # The granular mode describes the groups it puts the host in, so take their
+    # vars as well (off by default)
+    host_sync_updates_group_vars: true
+    sync_interval_seconds: 300
+    ttl_seconds: 3600

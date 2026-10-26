@@ -13,6 +13,9 @@ use crate::domain::source::{ConnectorType, Source};
 // peer that asked for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Topology {
+    /// What the instance is called (its `server.name`), when it says
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The running version, as the instance reports it
     pub version: String,
     /// Sources configured on the instance. Absent when the peer is too old to
@@ -22,6 +25,54 @@ pub struct Topology {
     /// The instances it pulls from, by base URL
     #[serde(default)]
     pub peers: Vec<Peer>,
+}
+
+// Why a peer was not asked, as a caller outside this instance's admins reads
+// it: the resolver's own message names env vars and Vault paths.
+const NOT_ASKED: &str = "not asked: this instance cannot authenticate to it";
+// A link's last failure, as an instance this one pushes its map to reads it.
+const PULL_FAILED: &str = "the last pull failed — its error is on the instance that pulls";
+
+impl Topology {
+    // What a caller who is not an admin here may see of the peers. They were
+    // asked with THIS instance's key, which may be an admin key over there:
+    // their own peers, URLs and counts are that key's view, not the caller's,
+    // so only each peer's name and version are kept. And why a peer was not
+    // asked stays generic (see NOT_ASKED); /credentials keeps that for
+    // admins.
+    pub fn redacted(mut self) -> Topology {
+        for peer in &mut self.peers {
+            if let Some(instance) = peer.instance.as_mut() {
+                instance.sources = None;
+                instance.peers = Vec::new();
+            }
+            if peer
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("not asked:") && !e.contains("depth limit"))
+            {
+                peer.error = Some(NOT_ASKED.to_string());
+            }
+        }
+        self
+    }
+
+    // What this instance pushes to its peers (PUT /topology/federation). The
+    // peer's admins are not this instance's: they get the redacted map, and a
+    // failing link says it fails, not why — a sync error can name this
+    // instance's env vars and Vault paths as well. Every peer gets the same
+    // map, its own link included, so siblings still show where it sits.
+    pub fn for_push(self) -> Topology {
+        let mut topology = self.redacted();
+        for peer in &mut topology.peers {
+            for source in &mut peer.sources {
+                if source.last_error.is_some() {
+                    source.last_error = Some(PULL_FAILED.to_string());
+                }
+            }
+        }
+        topology
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -56,8 +107,64 @@ pub struct PeerSource {
     pub age_seconds: Option<u64>,
     /// Failed pulls since the last success — 0 while healthy
     pub consecutive_failures: u32,
+    /// Seconds since the last pull that worked: when data last moved along
+    /// this link. Absent until one has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_pull_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+// What an instance that reads from this one sends it: the federation as THAT
+// instance sees it, and the address it reaches this one at. An edge cannot
+// map the federation itself — it reads from nobody, and does not know who
+// reads from it — so the instance above tells it, over the same link and
+// with the same key its remote sources already use.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct FederationPush {
+    /// This instance's address, as the sender's remote sources spell it
+    pub url: String,
+    /// The sender's own address (its `server.url`), when it declares one
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_url: Option<String>,
+    /// The sender's own facts
+    #[serde(default)]
+    pub sender: InstanceSummary,
+    /// The sender's topology, this instance included as one of its peers
+    pub topology: Topology,
+}
+
+// What the sender says about itself, for the card the edge draws it as: the
+// same facts its own Topology page shows on its own card.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct InstanceSummary {
+    /// Its source ids, sorted (views left out: they hold no data of their own)
+    pub sources: Vec<String>,
+    /// Hosts across those sources' caches, added up
+    pub hosts: usize,
+    /// Groups across those sources' caches, added up
+    pub groups: usize,
+    pub endpoints: usize,
+    /// Age of its oldest cached data; null when nothing is cached
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_age_seconds: Option<u64>,
+}
+
+// A pushed map as GET /topology/federation serves it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Federation {
+    /// The API key the sender authenticated with: which instance it was
+    pub pushed_by: String,
+    /// This instance's address, as the sender spells it
+    pub url: String,
+    /// The sender's address, when its `server.url` declares one
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_url: Option<String>,
+    pub sender: InstanceSummary,
+    pub topology: Topology,
+    /// Seconds since it arrived. Senders push every minute, so an old one
+    /// means the sender stopped (or lost its way here).
+    pub age_seconds: u64,
 }
 
 // The peers of a configuration: every remote source the caller may see,
@@ -125,6 +232,77 @@ mod tests {
             yaml.push_str(&format!("config:\n  url: \"{url}\"\n"));
         }
         serde_saphyr::from_str(&yaml).unwrap()
+    }
+
+    fn peer(instance: Option<Topology>, error: Option<&str>) -> Peer {
+        Peer {
+            url: "https://edge.example".to_string(),
+            sources: Vec::new(),
+            instance: instance.map(Box::new),
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_redacted_map_keeps_each_peers_version_and_no_secret_locations() {
+        let behind = Topology {
+            name: None,
+            version: "0.33.0".to_string(),
+            sources: Some(12),
+            peers: vec![peer(None, None)],
+        };
+        let topology = Topology {
+            name: None,
+            version: "0.34.0".to_string(),
+            sources: Some(1),
+            peers: vec![
+                peer(Some(behind), None),
+                peer(None, Some("not asked: Env var 'EDGE_TOKEN' not set")),
+                peer(None, Some("not asked: depth limit reached")),
+            ],
+        };
+        let seen = topology.redacted();
+        let instance = seen.peers[0].instance.as_ref().unwrap();
+        assert_eq!(instance.version, "0.33.0");
+        assert!(instance.peers.is_empty() && instance.sources.is_none());
+        assert!(
+            !seen.peers[1]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("EDGE_TOKEN")
+        );
+        assert_eq!(
+            seen.peers[2].error.as_deref(),
+            Some("not asked: depth limit reached")
+        );
+    }
+
+    #[test]
+    fn a_pushed_map_says_a_link_fails_but_not_why() {
+        let mut link = peer(None, None);
+        link.sources.push(PeerSource {
+            source_id: "src-dc1".to_string(),
+            remote_source: "src-fleet".to_string(),
+            cached: false,
+            hosts: None,
+            groups: None,
+            age_seconds: None,
+            consecutive_failures: 3,
+            last_pull_age_seconds: None,
+            last_error: Some("Vault path 'kv/central/dc1' denied".to_string()),
+        });
+        let topology = Topology {
+            name: None,
+            version: "0.35.0".to_string(),
+            sources: Some(1),
+            peers: vec![link],
+        };
+        let pushed = topology.for_push();
+        let source = &pushed.peers[0].sources[0];
+        assert_eq!(source.consecutive_failures, 3);
+        let error = source.last_error.as_deref().unwrap();
+        assert!(!error.contains("kv/central"), "{error}");
     }
 
     #[test]

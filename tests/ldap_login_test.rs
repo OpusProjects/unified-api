@@ -94,6 +94,7 @@ fn app_home(ldap: Option<LdapConfig>, home: &str) -> axum::Router {
         // With keys configured the API is not open, so a session is the only
         // way these requests authenticate.
         .api_keys(vec![ResolvedApiKey {
+            id: "AWX".to_string(),
             name: "AWX".to_string(),
             secret: "awx-secret".to_string(),
             permissions: Permissions::Admin,
@@ -430,6 +431,54 @@ async fn a_session_learns_its_csrf_token_from_auth_and_writes_with_it() {
     );
 }
 
+// A federation map is pushed by another instance, with a key sent on the
+// request. A browser session cannot push one, however it signed in: one
+// opened with a key carried no key identity, and its push was stored under
+// the key's label, which could replace a different key's entry.
+#[tokio::test]
+async fn a_browser_session_cannot_push_a_federation_map() {
+    let app = app(Some(ldap()));
+    let push = serde_json::json!({
+        "url": "https://edge.example",
+        "topology": {"version": "0.35.0", "peers": []},
+    })
+    .to_string();
+    for login in ["key=awx-secret", "username=jdoe&password=right"] {
+        let resp = submit(&app, login).await;
+        let session = cookie(&resp, "uapi_session").expect("a session cookie");
+        let (_, json) = get_json(&app, "/api/v1/auth", &session).await;
+        let token = json["me"]["csrf_token"].as_str().unwrap().to_string();
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::put("/api/v1/topology/federation")
+                    .header(header::COOKIE, format!("uapi_session={session}"))
+                    .header("x-csrf-token", token)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(push.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{login}");
+        assert!(body(resp).await.contains("with an API key"), "{login}");
+    }
+
+    // The same push with the key itself is accepted.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::put("/api/v1/topology/federation")
+                .header("x-api-key", "awx-secret")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(push))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
 #[tokio::test]
 async fn a_header_caller_is_given_no_csrf_token() {
     let resp = app(Some(ldap()))
@@ -509,6 +558,7 @@ async fn a_session_reads_protected_metrics() {
         )))
         .directory(Arc::new(Directory))
         .api_keys(vec![ResolvedApiKey {
+            id: "AWX".to_string(),
             name: "AWX".to_string(),
             secret: "awx-secret".to_string(),
             permissions: Permissions::Admin,

@@ -50,6 +50,10 @@ pub struct ServerSettings {
     pub refresh_max_concurrent: usize,
     pub shutdown_grace_seconds: u64,
     pub max_body_bytes: usize,
+    /// This instance's address, as `server.url` declares it; null when unset
+    pub url: Option<String>,
+    /// What this instance is called, as `server.name` declares it
+    pub name: Option<String>,
     pub ui: UiSettings,
 }
 
@@ -144,6 +148,8 @@ pub async fn get_settings(
             refresh_max_concurrent: config.refresh_max_concurrent,
             shutdown_grace_seconds: config.shutdown_grace_seconds,
             max_body_bytes: config.max_body_bytes,
+            url: config.url.clone(),
+            name: config.name.clone(),
             ui: UiSettings {
                 enabled: state.ui.enabled,
                 session_ttl_seconds: state.ui.session_ttl_seconds,

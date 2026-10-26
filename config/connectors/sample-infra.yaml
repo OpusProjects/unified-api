@@ -1,0 +1,6 @@
+---
+connectors:
+  - name: sample-infra
+    description: "Sample infrastructure data"
+    project: "prj-connectors-infra"
+    path: "tests/adapters/out/connectors/infra.py"

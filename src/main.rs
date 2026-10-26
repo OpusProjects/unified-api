@@ -4,21 +4,76 @@ use unified_api::adapters::out::git::cli::CliGit;
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Convert a 0.34 configuration directory into the 0.35 layout and exit:
+    // what startup does on its own, offered as a command for a configuration
+    // repository to run once and commit. Same code path, so a repository and
+    // a pod upgraded in place end up with the same files.
+    if let Some(i) = args.iter().position(|arg| arg == "--migrate-config") {
+        let dir = args
+            .get(i + 1)
+            .cloned()
+            .or_else(|| std::env::var("CONFIG_DIR").ok())
+            .unwrap_or_else(|| "config".to_string());
+        match unified_api::config::migrate::migrate_in_place(std::path::Path::new(&dir)) {
+            Ok(Some(outcome)) => {
+                for line in outcome.plan.summary() {
+                    println!("{line}");
+                }
+                println!(
+                    "migrated {dir}; the old files are in {}",
+                    outcome.backup_dir.display()
+                );
+                return;
+            }
+            Ok(None) => {
+                println!("{dir} is already in the item-file layout; nothing to do");
+                return;
+            }
+            Err(e) => {
+                eprintln!("migration of {dir} FAILED, nothing was changed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Validate-only mode for CI on config repositories: load and validate the
     // configuration exactly as startup would, report, and exit — nothing
     // binds, no scheduler starts, and no secrets are resolved (a CI runner
     // validating YAML has no reason to hold the deployment's env vars).
     // Plain prints rather than tracing: this output is for a human or a CI
     // log, not for a log pipeline.
-    if std::env::args().skip(1).any(|arg| arg == "--check-config") {
+    //
+    // A directory still in the 0.34 layout is converted in a scratch copy
+    // and THAT is checked: the directory may be mounted read-only, and the
+    // question CI asks is whether this version will start on it — which,
+    // since startup migrates, it will exactly when the conversion loads.
+    if args.iter().any(|arg| arg == "--check-config") {
         let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
+        match unified_api::config::migrate::check(std::path::Path::new(&config_dir)) {
+            Ok(Some(plan)) => {
+                println!(
+                    "configuration OK ({config_dir}) in the 0.34 layout: startup would \
+                     convert it ({}); run --migrate-config to do it now",
+                    plan.summary().join("; ")
+                );
+                return;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("configuration INVALID ({config_dir}): {e}");
+                std::process::exit(1);
+            }
+        }
         match unified_api::config::load_config(&config_dir) {
             Ok(cfg) => {
                 println!(
-                    "configuration OK ({}): {} sources, {} views, {} credentials, \
-                     {} enrichers, {} endpoints, {} projects",
+                    "configuration OK ({}): {} sources, {} connectors, {} views, \
+                     {} credentials, {} enrichers, {} endpoints, {} projects",
                     config_dir,
                     cfg.sources.len(),
+                    cfg.connectors.len(),
                     cfg.views.len(),
                     cfg.credentials.len(),
                     cfg.enrichers.len(),
@@ -45,6 +100,60 @@ async fn main() {
         .init();
 
     let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
+
+    // A pod upgraded from 0.34 still has the old files on its volume.
+    // Convert them once, loudly, before loading — in place, or into a private
+    // copy when the directory is read-only (a ConfigMap) — or refuse to start,
+    // having changed nothing, when the conversion would not load.
+    // Held to the end of main: it is the directory this process runs on, and
+    // dropping it removes it (see migrate::ConvertedCopy).
+    let mut _converted_copy = None;
+    let config_dir = match unified_api::config::migrate::prepare_for_startup(std::path::Path::new(
+        &config_dir,
+    )) {
+        Ok(unified_api::config::migrate::StartupConfig::AsIs) => config_dir,
+        Ok(unified_api::config::migrate::StartupConfig::Migrated(outcome)) => {
+            warn!(
+                dir = %config_dir,
+                backup = %outcome.backup_dir.display(),
+                "Configuration directory was in the 0.34 layout and has been migrated \
+                 to item files; the old files are kept in the backup folder. Commit \
+                 the new layout wherever this directory comes from, or it will be \
+                 pushed back over it"
+            );
+            for line in outcome.plan.summary() {
+                warn!(dir = %config_dir, "Migration: {}", line);
+            }
+            config_dir
+        }
+        Ok(unified_api::config::migrate::StartupConfig::Converted { copy, plan }) => {
+            warn!(
+                dir = %config_dir,
+                copy = %copy.path().display(),
+                "Configuration directory is in the 0.34 layout and read-only: it was \
+                 converted into a temporary copy, which is what this process runs. \
+                 Convert the source of these files (unified-api --migrate-config) — \
+                 every restart converts them again, and writes through the config \
+                 API land in the copy"
+            );
+            for line in plan.summary() {
+                warn!(dir = %config_dir, "Migration: {}", line);
+            }
+            let dir = copy.path().to_string_lossy().into_owned();
+            _converted_copy = Some(copy);
+            dir
+        }
+        Err(e) => {
+            error!(
+                dir = %config_dir,
+                "Refusing to start: the configuration is in the 0.34 layout and could \
+                 not be migrated (nothing was changed): {}",
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
     let cfg = match unified_api::config::load_config(&config_dir) {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -83,6 +192,7 @@ async fn main() {
 
     info!(
         sources = cfg.sources.len(),
+        connectors = cfg.connectors.len(),
         views = cfg.views.len(),
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),

@@ -39,6 +39,11 @@ pub struct Session {
     // access log exactly as a header-authenticated request is.
     pub key_name: String,
     pub kind: SessionKind,
+    // The key's identity (its api_keys `name`) for a key session: what a
+    // reload revokes it by. Its label (key_name, the description) is for
+    // people and need not be unique — two keys described alike, one removed,
+    // and revoking by label kept the removed key's sessions working.
+    key_id: Option<String>,
     pub permissions: Permissions,
     // Paired with the session and required on every unsafe request that
     // authenticates by cookie. See `auth::require_api_key` for why.
@@ -72,6 +77,7 @@ impl SessionStore {
         &self,
         key_name: String,
         kind: SessionKind,
+        key_id: Option<String>,
         permissions: Permissions,
         ttl: Duration,
     ) -> Issued {
@@ -90,6 +96,7 @@ impl SessionStore {
             Session {
                 key_name,
                 kind,
+                key_id,
                 permissions,
                 csrf: csrf.clone(),
                 expires_at: Instant::now() + ttl,
@@ -130,9 +137,11 @@ impl SessionStore {
     // revoked by that reload keeps working in every browser that logged in
     // before it — the console would outlive the revocation, which is exactly
     // the property a revocation is for.
+    // `live` holds key identities (ResolvedApiKey::id), never labels.
     pub fn retain_keys(&self, live: &[String]) {
         self.sessions.retain(|_, session| {
-            session.kind != SessionKind::ApiKey || live.contains(&session.key_name)
+            session.kind != SessionKind::ApiKey
+                || session.key_id.as_ref().is_some_and(|id| live.contains(id))
         });
     }
 
@@ -356,6 +365,7 @@ mod tests {
         let issued = store.create(
             "AWX".into(),
             SessionKind::ApiKey,
+            Some("AWX".into()),
             admin(),
             Duration::from_secs(60),
         );
@@ -376,6 +386,7 @@ mod tests {
         let issued = store.create(
             "AWX".into(),
             SessionKind::ApiKey,
+            Some("AWX".into()),
             admin(),
             Duration::from_secs(0),
         );
@@ -389,6 +400,7 @@ mod tests {
         let issued = store.create(
             "AWX".into(),
             SessionKind::ApiKey,
+            Some("AWX".into()),
             admin(),
             Duration::from_secs(60),
         );
@@ -404,17 +416,45 @@ mod tests {
         let stays = store.create(
             "AWX".into(),
             SessionKind::ApiKey,
+            Some("AWX".into()),
             admin(),
             Duration::from_secs(60),
         );
         let goes = store.create(
             "Retired".into(),
             SessionKind::ApiKey,
+            Some("Retired".into()),
             admin(),
             Duration::from_secs(60),
         );
 
         store.retain_keys(&["AWX".to_string()]);
+
+        assert!(store.get(&stays.token).is_some());
+        assert!(store.get(&goes.token).is_none());
+    }
+
+    // Revoked by identity, not by label: two keys described alike, and the
+    // one removed takes only its own sessions with it.
+    #[test]
+    fn a_key_is_revoked_by_its_identity_not_its_label() {
+        let store = SessionStore::new();
+        let stays = store.create(
+            "Automation".into(),
+            SessionKind::ApiKey,
+            Some("key-awx".into()),
+            admin(),
+            Duration::from_secs(60),
+        );
+        let goes = store.create(
+            "Automation".into(),
+            SessionKind::ApiKey,
+            Some("key-old".into()),
+            admin(),
+            Duration::from_secs(60),
+        );
+
+        store.retain_keys(&["key-awx".to_string()]);
 
         assert!(store.get(&stays.token).is_some());
         assert!(store.get(&goes.token).is_none());
@@ -428,12 +468,14 @@ mod tests {
         let key = store.create(
             "AWX".into(),
             SessionKind::ApiKey,
+            Some("AWX".into()),
             admin(),
             Duration::from_secs(60),
         );
         let person = store.create(
             "ldap:jdoe".into(),
             SessionKind::Directory,
+            None,
             admin(),
             Duration::from_secs(60),
         );
@@ -455,12 +497,14 @@ mod tests {
         let a = store.create(
             "k".into(),
             SessionKind::ApiKey,
+            Some("k".into()),
             admin(),
             Duration::from_secs(60),
         );
         let b = store.create(
             "k".into(),
             SessionKind::ApiKey,
+            Some("k".into()),
             admin(),
             Duration::from_secs(60),
         );

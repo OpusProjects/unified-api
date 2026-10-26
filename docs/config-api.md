@@ -6,7 +6,7 @@ over HTTP, so a configuration-as-code pipeline can **push** a change to each
 instance instead of publishing an artifact each instance has to **pull**.
 
 It is **off by default**. Turning it on means an admin key can rewrite every
-file the loader reads — `api_keys.yaml` included, which is the same authority
+file the loader reads — the `api_keys` items included, which is the same authority
 as editing the directory the container mounts.
 
 ```yaml
@@ -53,10 +53,10 @@ not set — with a body that says so rather than a bare `404`.
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/config` | The directory: every file with size, sha256 and mtime, what is missing, whether it still loads, whether the process is running it |
-| `GET /api/v1/config/{file}` | One file, verbatim. `ETag` is the sha256; `If-None-Match` answers `304` |
-| `PUT /api/v1/config/{file}` | Replace one file. Body is raw YAML |
-| `DELETE /api/v1/config/{file}` | Remove one optional file |
+| `GET /api/v1/config` | The directory: every file (at any depth) with size, sha256 and mtime, what is missing, whether it still loads, whether the process is running it |
+| `GET /api/v1/config/{path}` | One file, verbatim. `ETag` is the sha256; `If-None-Match` answers `304` |
+| `PUT /api/v1/config/{path}` | Create or replace one file (its folders are created). Body is raw YAML |
+| `DELETE /api/v1/config/{path}` | Remove one file (folders it leaves empty go too) |
 | `PUT /api/v1/config` | Replace the whole directory in one transaction |
 | `POST /api/v1/config/validate` | Dry run: same checks, nothing written, ever |
 | `POST /api/v1/config/reload` | Apply what is on disk to the running process |
@@ -64,22 +64,41 @@ not set — with a body that says so rather than a bare `404`.
 `PUT` and `DELETE` take `?reload=true` to apply the change as part of the
 write, so a push is one request rather than two.
 
-The files are exactly the ones the loader reads:
+`{path}` is a file's path inside the directory, **slashes included** — the
+directory is item files in folders (see [configuration](configuration.md#the-directory)):
 
-```
-config.yaml  credentials.yaml  sources.yaml  views.yaml
-enrichers.yaml  projects.yaml  endpoints.yaml  api_keys.yaml
+```bash
+curl -sS "$BASE/api/v1/config/sources/acme/src-d42-acme.yaml" -H "X-API-Key: $KEY"
+
+curl -sS -X PUT "$BASE/api/v1/config/connectors/d42.yaml?reload=true" \
+  -H "X-API-Key: $KEY" -H 'Content-Type: application/yaml' \
+  --data-binary @config/connectors/d42.yaml
 ```
 
-Anything else is a `404` naming the list. `config.yaml` cannot be deleted.
+A path must be one the loader would read: relative, segments of letters,
+digits, `-`, `_` and `.`, none hidden, ending in `.yaml` or `.yml`. Anything else
+is a `404` naming that rule — the same rule the loader applies to what it finds,
+so a file the API cannot name cannot be part of the configuration either.
+`config.yaml`, at the root, cannot be deleted, and it is the only file `missing`
+in `GET /api/v1/config` can ever list: every other file is an item file that is
+there or not.
+
+A file still in the **0.34 layout** (items keyed by id, as `sources.yaml` used to
+be) is refused like any other unknown top-level key, with a hint naming
+`unified-api --migrate-config` — a pipeline that has not converted its
+repository yet gets a one-line fix rather than a typo hunt. The startup
+migration (see [configuration → upgrading](configuration.md#upgrading-from-034))
+converts a directory on disk; it does not convert what is pushed.
 
 ---
 
 ## Pushing a whole directory
 
-The verb a pipeline wants. `prune: true` makes the directory become *exactly*
-the payload — the same semantics as the configuration image it replaces, where
-what is not in the image is not in `/config`.
+The verb a pipeline wants. `files` is keyed by path relative to the directory,
+and `prune: true` makes the directory become *exactly* the payload — the same
+semantics as the configuration image it replaces, where what is not in the image
+is not in `/config`. Every file the payload leaves out, at any depth, is
+removed, and so are the folders that leaves empty; `deleted` names them.
 
 ```bash
 curl -sS -X PUT "$BASE/api/v1/config?reload=true" \
@@ -90,9 +109,10 @@ curl -sS -X PUT "$BASE/api/v1/config?reload=true" \
 {
   "prune": true,
   "files": {
-    "config.yaml":   "server:\n  host: \"0.0.0.0\"\n  port: 8080\n",
-    "sources.yaml":  "src-dc4:\n  name: \"DC4\"\n  project_id: \"prj-inv\"\n  ...\n",
-    "projects.yaml": "prj-inv:\n  name: \"Inventory\"\n  git_url: \"...\"\n"
+    "config.yaml": "server:\n  host: \"0.0.0.0\"\n  port: 8080\n",
+    "connectors/d42.yaml": "connectors:\n  - name: d42\n    project: prj-inv\n    path: d42/inventory.py\n",
+    "sources/dc4/src-dc4.yaml": "sources:\n  - name: src-dc4\n    description: \"DC4\"\n    connector: d42\n    ...\n",
+    "projects/prj-inv.yaml": "projects:\n  - name: prj-inv\n    git_url: \"...\"\n"
   }
 }
 JSON
@@ -100,19 +120,40 @@ JSON
 
 ```json
 {
-  "written": ["config.yaml", "projects.yaml", "sources.yaml"],
+  "written": ["config.yaml", "connectors/d42.yaml", "projects/prj-inv.yaml",
+              "sources/dc4/src-dc4.yaml"],
+  "deleted": ["sources/src-old.yaml"],
   "etag": "9f2c…",
-  "summary": {"sources": 1, "views": 0, "credentials": 0, "enrichers": 0,
-              "endpoints": 0, "projects": 1, "api_keys": 0},
+  "summary": {"sources": 1, "connectors": 1, "views": 0, "credentials": 0,
+              "enrichers": 0, "endpoints": 0, "projects": 1, "api_keys": 0},
   "reloaded": {
     "generation": 3,
-    "applied": ["sources"],
-    "sources": {"added": ["src-dc4"], "changed": ["src-old"]},
+    "applied": ["sources", "connectors"],
+    "sources": {"added": ["src-dc4"], "removed": ["src-old"]},
+    "connectors": {"added": ["d42"]},
     "api_keys": 2
   },
   "reload_pending": false
 }
 ```
+
+A pipeline builds that payload from its checkout of the configuration
+repository — every YAML file, keyed by its path relative to the directory:
+
+```bash
+cd config
+find . -type f \( -name '*.yaml' -o -name '*.yml' \) -not -path '*/.*' | sed 's|^\./||' | sort |
+  while read -r f; do jq -n --arg p "$f" --rawfile c "$f" '{($p): $c}'; done |
+  jq -s '{prune: true, files: add}' > /tmp/payload.json
+
+curl -sS -X PUT "$BASE/api/v1/config?reload=true" \
+  -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  --data-binary @/tmp/payload.json
+```
+
+Hidden paths are left out because the loader skips them too (`.git`, editor
+swap files); a file the push should not carry is one the directory should not
+hold.
 
 Validate first from CI, against the instance that will run it, without writing
 anything:
@@ -120,12 +161,12 @@ anything:
 ```bash
 curl -sS -X POST "$BASE/api/v1/config/validate" \
   -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
-  -d '{"files": {"sources.yaml": "..."}, "prune": true}'
+  --data-binary @/tmp/payload.json
 ```
 
 ```json
 {"valid": false, "errors": [
-  "Source 'src-dc4' references unknown project 'prj-typo'",
+  "Connector 'd42' references unknown project 'prj-typo'",
   "View 'view-all' references unknown source 'src-gone'"
 ]}
 ```
@@ -151,11 +192,12 @@ is already running.
 
 | | Effect |
 |---|---|
-| `sources.yaml` | New sources start syncing, removed ones stop, changed ones restart on the new settings |
-| `views.yaml`, `enrichers.yaml`, `endpoints.yaml` | Live on the next request/tick |
-| `projects.yaml` | Pull tasks restart; a project that arrived with the reload is cloned in the background |
-| `credentials.yaml`, `secrets:` | The resolver chain is rebuilt (which also drops the resolution cache) |
-| `api_keys.yaml` | In force on the next request |
+| `sources` | New sources start syncing, removed ones stop, changed ones restart on the new settings |
+| `connectors` | A source is resolved through its connector, so the sources using a changed connector count as changed themselves and restart on it |
+| `views`, `enrichers`, `endpoints` | Live on the next request/tick |
+| `projects` | Pull tasks restart; a project that arrived with the reload is cloned in the background |
+| `credentials`, `secrets:` | The resolver chain is rebuilt (which also drops the resolution cache) |
+| `api_keys` | In force on the next request |
 | `server.readyz_require_all_sources` | Next probe |
 | `server.refresh_timeout_seconds`, `server.refresh_max_concurrent` | Next refresh. A shrunk concurrency cap lets in-flight refreshes finish under the old limit and reclaims their permits as they land |
 | `server.shutdown_grace_seconds` | The next shutdown — the drain reads whatever a reload set last |
@@ -199,8 +241,9 @@ source are already serialised.
 - **Validated as a directory, before anything moves.** The proposed set is
   staged in a temporary directory and loaded there. A rejected change never
   touched the real one.
-- **Rejected whole.** Cross-file references (a source naming a project, a view
-  naming a source, a restricted key naming an endpoint) only make sense
+- **Rejected whole.** Cross-file references (a source naming a connector, a
+  connector naming a project, a view naming a source, a restricted key naming an
+  endpoint) only make sense
   against the complete set, so the complete set is what is accepted or refused.
 - **Atomic per file.** Every file is written to a temporary name and renamed
   into place, so no reader ever sees a half-written file.
@@ -209,7 +252,7 @@ source are already serialised.
   it under a running process is refused with `409`. Write the file and restart
   if that is really the intent.
 - **A key that cannot be resolved fails the whole operation.** If
-  `api_keys.yaml` names an env var that is not set, the write is refused
+  an `api_keys` item names an env var that is not set, the write is refused
   **before** it is committed, rather than landing and then locking a consumer
   out.
 - **A write without `?reload=true` says so.** `reload_pending: true` means the
@@ -242,7 +285,7 @@ a single pipeline and stays unceremonious.
 
 ## Permissions and audit
 
-Admin keys only, **reads included** — `config.yaml` and `credentials.yaml`
+Admin keys only, **reads included** — `config.yaml` and the credentials
 describe the estate (which systems exist, which variable holds which
 credential), which is exactly what a restricted consumer key has no business
 enumerating.
@@ -251,7 +294,7 @@ Every write and reload emits an audit line under the `audit` target, with the
 key that did it and the request id:
 
 ```
-actor=pipeline action=config_write_reload resource=sources.yaml request_id=req-42 outcome=success
+actor=pipeline action=config_write_reload resource=sources/dc4/src-dc4.yaml request_id=req-42 outcome=success
 ```
 
 `RUST_LOG=audit=info` to isolate them. See [observability](observability.md).
@@ -272,6 +315,12 @@ process and then lost the next time the container starts from its image.
 
 An instance whose directory is read-only will refuse writes with a `500`
 naming the filesystem error; leave `config_api.enabled` off there.
+
+One exception: a read-only directory still in the 0.34 layout is converted at
+startup into a private temporary copy, and that copy is what the process runs —
+so writes *succeed*, land in the copy, and are gone at the next restart (which
+converts the read-only files again). Convert the source of the files first; see
+[configuration → upgrading](configuration.md#a-read-only-directory).
 
 ---
 

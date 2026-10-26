@@ -6,6 +6,58 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The browsable API's sync button reads "Sync" (was "Sync now"), as in the web UI.
+- The image ships unified-ui 0.2.0 (`UI_REF`): the federation map on edges, a source's groups with their hosts and variables, exact live durations, and the shared look with unified-gitops.
+
+- **Breaking (everyone: every configuration directory):** the configuration is item files, the way AWX configuration as code is laid out. `config.yaml` stays at the root, unchanged; every other `*.yaml`/`*.yml`, at any depth and in any folder, holds items under a typed top-level key (`sources`, `views`, `endpoints`, `enrichers`, `connectors`, `projects`, `credentials`, `api_keys`). Each item has a `name` (its identity: what references, URLs and cache keys use — the 0.34 ids) and an optional `description` (its label). A name defined twice, an unknown top-level key or an unknown key inside an item fails the load naming the file and the item. The eight fixed files of id-keyed maps are gone; a 0.34 directory is converted at startup (see Upgrading below). See `docs/configuration.md`.
+- **Breaking (anyone writing sources):** what a source said about its script moved to a new `connectors` item: `type` (`script` or `ssh`), `project`, `path` (the script inside the project — `project` + `path` always means a file in that checkout), `script_args`, `host_args`, `output_format` and a default `timeout_seconds`. A source names it with `connector:` and keeps only what is its own: credentials, `config`, schedule, TTLs and every per-source flag, plus an optional `timeout_seconds` override. Sources of the same system now share one connector instead of each carrying a copy. Two connectors are built in and need no item: `remote` (another unified-api: `config.url` and `config.source`, the source id on that instance — formerly `script_path`) and `static_inventory` (`project` + `path` on the source — formerly `project_id` + `script_path`). See `docs/connectors.md`.
+- **Breaking (anyone writing references):** reference keys lost their `_id` suffix: a source's `credentials`, a project's `credential`, an enricher's `target`, `source` and `project`, an endpoint's `sources` and `project`.
+- **Breaking (pipelines using the configuration API):** files are addressed by path, folders included: `GET/PUT/DELETE /api/v1/config/{path}` with slashes (`/api/v1/config/sources/acme/src-d42.yaml`). A whole-directory push with `prune: true` removes every file at any depth that it leaves out, and the folders it empties; `missing` only ever names `config.yaml`. A push still in the 0.34 layout is refused with a hint naming `--migrate-config`.
+- **Breaking (`GET /api/v1/sources/{id}` admin callers):** `gathering.project_id` is null for remote and ssh sources, which run nothing from a checkout (it used to repeat a project that was required and never used).
+
+### Added
+
+- Edges show the whole federation. Every minute, an instance with remote sources pushes its map to each peer (`PUT /api/v1/topology/federation`, with the key its remote sources already use); admins read it at `GET /api/v1/topology/federation`. Nothing to configure on the edges. The map an edge receives is redacted the way a restricted caller's is: its peers' names and versions, not their own maps, and no error that names the central's secrets. Only a key sent with the request may push, never a browser session. See `docs/federation.md`.
+- `GET /api/v1/projects` answers each project's `revision` (the commit its checkout is at) and `credential_id`, so the UI's project cards show the commit and the credential, as unified-gitops does.
+- `GET /api/v1/topology`: each peer source's `last_pull_age_seconds`, when data last moved along that link (its last successful sync); the UI animates a link each time it does.
+- `GET /api/v1/sources/{id}/groups/{group}`: one group's variables, child groups and host count, for sources and views, without fetching the whole dataset.
+- `server.name` (optional, reloadable): what the instance is called on the Topology page; in its own topology answer and in the map it pushes. Without it the UI derives one from the URL.
+- `server.url` (optional, reloadable): this instance's public address. A central sends it with the federation map so edges can link back to it; also shown on `GET /api/v1/settings`.
+
+- A browser that is not signed in is sent to the login form by the server when it asks for a page of the UI, so the app never loads only to redirect itself (no flash of the overview before the login page).
+
+- `GET /api/v1/connectors` and `GET /api/v1/connectors/{id}` (admin-only): each connector, the two built-ins included (`built_in: true`), what it runs, the sources that use it with the timeout each syncs under, and a health summary of those sources. Linked from the API index as `connectors`.
+- `gathering.connector` on a source's page, `used_by.connectors` on projects, and `connectors` in the configuration API's summary and reload report.
+- `unified-api --migrate-config [dir]`: converts a 0.34 directory in place, for a configuration repository to run once and commit.
+
+### Fixed
+
+- A browser session opened with an API key is ended by a reload that removes that key's `name` (its identity), not by its label. Two keys with the same label, one of them removed, left the removed key's sessions working with its old permissions until they expired.
+
+### Upgrading from 0.34
+
+Response shapes and ids are unchanged: consumers see no difference. On
+startup, a configuration directory still in the 0.34 layout is converted once,
+before it is loaded: connectors are extracted from the sources and
+de-duplicated, references renamed, one file written per item
+(`<section>/<name>.yaml`), and the old files moved to a hidden
+`.legacy-config-<timestamp>/` folder; the log says what was done. Values are
+written as they were (`1.10`, `0x1F` and `True` stay exactly that), and an
+unquoted value in a text field is still text (`script_args: ["--days", 7]`).
+A generated connector never takes a name already in use, whether another
+connector's or a built-in's (a script in a `remote/` folder becomes `remote-2`). Nothing is
+moved unless the converted configuration loads — otherwise the process refuses
+to start with the directory untouched. A read-only directory (a ConfigMap) is
+converted into a temporary copy instead, every start; the copy is removed
+when the process stops, or by the next start after a crash. Comments in the old
+files are not carried over (the backup keeps them). Convert the source of the
+files too — `unified-api --migrate-config <dir>`, or by hand — or the next
+push puts the old layout back; `--check-config` on a 0.34 directory checks the
+conversion without writing. Rolling back to 0.34 needs the old files restored
+from the backup.
+
 ## [0.34.0] - 2026-10-25
 
 ### Added

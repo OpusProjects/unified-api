@@ -89,13 +89,14 @@ fn member_source(counter_file: &str, ttl_seconds: u64, allow: bool) -> Source {
 
     Source {
         name: "Member".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: "tests/adapters/out/connectors/counting.py".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: Default::default(),
         credential_ids: vec![],
@@ -289,7 +290,9 @@ async fn same_named_groups_merge_into_one_namespace() {
     assert_eq!(linux, vec!["h1.example", "h2.example"]);
 
     // and the discovery route agrees with the dataset
-    let groups = get(f.app, "/api/v1/sources/vw-all/groups").await.json();
+    let groups = get(f.app.clone(), "/api/v1/sources/vw-all/groups")
+        .await
+        .json();
     let named: Vec<&str> = groups
         .as_array()
         .unwrap()
@@ -297,6 +300,12 @@ async fn same_named_groups_merge_into_one_namespace() {
         .map(|g| g["name"].as_str().unwrap())
         .collect();
     assert!(named.contains(&"linux"));
+    // and one group of the view, as the members' merge has it
+    let linux = get(f.app, "/api/v1/sources/vw-all/groups/linux")
+        .await
+        .json();
+    assert_eq!(linux["name"], "linux");
+    assert_eq!(linux["host_count"], 2);
     let linux_info = groups
         .as_array()
         .unwrap()
@@ -619,6 +628,7 @@ async fn a_key_granted_only_the_view_can_read_it_and_not_its_members() {
         .sources(sources)
         .views(HashMap::from([("vw-all".to_string(), view)]))
         .api_keys(vec![ResolvedApiKey {
+            id: "forms".to_string(),
             name: "forms".to_string(),
             secret: "view-only".to_string(),
             permissions: Permissions::Scoped {

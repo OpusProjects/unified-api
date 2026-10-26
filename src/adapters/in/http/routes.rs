@@ -51,6 +51,10 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
             get(http::sources::list_source_groups),
         )
         .route(
+            "/api/v1/sources/{id}/groups/{group}",
+            get(http::sources::get_source_group),
+        )
+        .route(
             "/api/v1/sources/{id}/hosts",
             get(http::sources::list_source_hosts),
         )
@@ -79,6 +83,11 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
             get(http::endpoints::endpoint_counts),
         )
         .route("/api/v1/projects", get(http::projects::list_projects))
+        .route("/api/v1/connectors", get(http::connectors::list_connectors))
+        .route(
+            "/api/v1/connectors/{id}",
+            get(http::connectors::get_connector),
+        )
         .route("/api/v1/settings", get(http::settings::get_settings))
         .route("/api/v1/hosts/search", get(http::host_search::search_hosts))
         .route(
@@ -87,6 +96,10 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
         )
         .route("/api/v1/auth", get(http::users::get_auth))
         .route("/api/v1/topology", get(http::topology::get_topology))
+        .route(
+            "/api/v1/topology/federation",
+            get(http::topology::get_federation).put(http::topology::put_federation),
+        )
         .route(
             "/api/v1/projects/{id}/sync",
             post(http::projects::sync_project_now),
@@ -104,8 +117,10 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
             post(http::config::validate_config),
         )
         .route("/api/v1/config/reload", post(http::config::reload_config))
+        // `{*file}`: a configuration file may sit in folders, so the capture
+        // takes the rest of the path, slashes included.
         .route(
-            "/api/v1/config/{file}",
+            "/api/v1/config/{*file}",
             get(http::config::get_config_file)
                 .put(http::config::put_config_file)
                 .delete(http::config::delete_config_file),
@@ -151,11 +166,9 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
 
     // The built UI, when this instance serves one (server.ui.assets_dir, and
     // only with the browsable UI on: it signs in through the login page).
-    let ui_assets = ui
-        .assets_dir
-        .as_ref()
-        .filter(|_| ui.enabled)
-        .map(http::ui_assets::UiAssets::new);
+    let ui_assets = ui.assets_dir.as_ref().filter(|_| ui.enabled).map(|dir| {
+        http::ui_assets::UiAssets::new(dir).with_gate(Arc::clone(&api_keys), Arc::clone(&sessions))
+    });
     let metrics_route = match &ui_assets {
         Some(assets) => metrics_route.layer(middleware::from_fn_with_state(
             assets.clone(),

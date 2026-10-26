@@ -61,6 +61,8 @@ The integration files:
 | `tests/remote_connector_test.rs` | Federation: the remote connector against a stub upstream |
 | `tests/static_inventory_test.rs` | Ansible YAML inventories read from disk |
 | `tests/git_test.rs` | Project checkouts through the git CLI adapter |
+| `tests/connectors_test.rs` | `GET /api/v1/connectors`: what each connector runs, the sources using it and their health, the built-ins, admin-only |
+| `tests/migration_test.rs` | Upgrading a 0.34 directory in place: startup converts the fixture under `tests/fixtures/legacy-0.34/`, serves the same ids and keeps the old files in the backup; a conversion that would not load changes nothing and refuses to start; `--migrate-config` and `--check-config` on it (the read-only fallback is a unit test in `src/config/migrate.rs`) |
 | `tests/config_api_test.rs` | The configuration API: what a push reads, validates, writes and reloads — and the four things it refuses (a change that would not load, a stale `If-Match`, a reload that would remove authentication, a key whose env var is missing) |
 
 Integration tests build a real `AppState` via `AppBuilder`, which defaults to the

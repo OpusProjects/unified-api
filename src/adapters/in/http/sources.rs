@@ -812,6 +812,70 @@ pub async fn list_source_groups(
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct GroupDetail {
+    pub name: String,
+    /// Unique hosts in the group
+    pub host_count: usize,
+    pub children: Vec<String>,
+    /// The group's own variables, sorted by name; empty when it has none
+    #[schema(value_type = Object)]
+    pub vars: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+// One group: its variables, children and size, without the rest of the
+// dataset. The variables are otherwise only in /dataset, which carries every
+// host's facts too.
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{id}/groups/{group}",
+    tag = "Sources",
+    params(
+        ("id" = String, Path, description = "Source identifier"),
+        ("group" = String, Path, description = "Group name")
+    ),
+    responses(
+        (status = 200, description = "The group: its variables, its child groups and how many hosts it has", body = GroupDetail),
+        (status = 403, description = "API key not allowed to read this source", body = ErrorBody),
+        (status = 404, description = "Source not in cache, or no such group in it", body = ErrorBody)
+    )
+)]
+pub async fn get_source_group(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthContext>,
+    Path((id, group)): Path<(String, String)>,
+) -> Result<Json<GroupDetail>, ApiError> {
+    if !auth.permissions.allows_source(&id) {
+        return Err(ApiError::source_forbidden(&id));
+    }
+    let not_found = || ApiError::not_found(format!("source '{id}' has no group '{group}'"));
+    let config = state.config();
+    if let Some(view) = config.views.get(&id) {
+        return views::group(&state, &id, view, &group)
+            .map(Json)
+            .ok_or_else(not_found);
+    }
+    let entry = state
+        .cache
+        .get(&id)
+        .ok_or_else(|| ApiError::source_not_cached(&id))?;
+    let found = entry.dataset.groups.get(&group).ok_or_else(not_found)?;
+    Ok(Json(GroupDetail {
+        name: group.clone(),
+        host_count: found
+            .hosts
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        children: found.children.clone(),
+        vars: found
+            .vars
+            .as_ref()
+            .map(|v| v.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default(),
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct HostList {
     pub source_id: String,
     pub total_hosts: usize,

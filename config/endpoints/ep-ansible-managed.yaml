@@ -1,0 +1,11 @@
+---
+# A constructed inventory: merge both sources, but return only the hosts the
+# inventory of record has. src-infra still contributes its variables and its
+# groups for those hosts — it just cannot add hosts of its own.
+endpoints:
+  - name: ep-ansible-managed
+    description: "Managed Hosts Only"
+    sources: ["src-section9", "src-infra"]
+    output: "ansible"
+    limit:
+      by_hosts_from_inventory: "src-section9"

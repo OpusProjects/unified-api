@@ -156,3 +156,60 @@ async fn the_ui_files_are_read_only() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+// With keys configured, a browser that is not signed in is sent to the login
+// form by the server, with the page it asked for as `next`: the app never
+// loads only to find out it is signed out (a flash of the overview, then the
+// login page). Its files still load: the login page needs some, and they are
+// not secrets.
+#[tokio::test]
+async fn a_signed_out_browser_goes_to_the_login_form_before_the_app_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), INDEX).unwrap();
+    std::fs::create_dir(dir.path().join("assets")).unwrap();
+    std::fs::write(dir.path().join("assets/index-3f2a.js"), "console.log(1)").unwrap();
+    let ui = unified_api::config::UiConfig {
+        enabled: true,
+        assets_dir: Some(dir.path().to_str().unwrap().to_string()),
+        ..Default::default()
+    };
+    let app = unified_api::AppBuilder::new()
+        .ui(ui)
+        .api_key(Some("secret".into()))
+        .build();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/sources/src-a?x=1")
+                .header(header::ACCEPT, BROWSER)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(resp.status().is_redirection(), "{}", resp.status());
+    assert_eq!(
+        resp.headers()[header::LOCATION],
+        "/api/v1/login?next=/sources/src-a%3Fx%3D1"
+    );
+
+    // The app's files are not gated.
+    let (status, _, _, body) = get(&app, "/assets/index-3f2a.js", "*/*").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "console.log(1)");
+
+    // A session that does not exist (expired, or made up) is not signed in.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get("/")
+                .header(header::ACCEPT, BROWSER)
+                .header(header::COOKIE, "uapi_session=made-up")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()[header::LOCATION], "/api/v1/login?next=/");
+}

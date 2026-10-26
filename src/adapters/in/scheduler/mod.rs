@@ -380,6 +380,7 @@ pub fn start_supervisor(
 
             let mut handles = start_sync_tasks(Arc::clone(&state), stop_rx.clone());
             handles.extend(start_project_tasks(Arc::clone(&state), stop_rx.clone()));
+            handles.extend(start_federation_task(Arc::clone(&state), stop_rx.clone()));
             // A project that arrived WITH this reload has no checkout yet, and
             // the scripts of any source pointing into it would be missing
             // until its first periodic pull — which for a project without an
@@ -408,6 +409,81 @@ pub fn start_supervisor(
             }
         }
     })
+}
+
+// How often the federation map is pushed down to the peers. Each edge shows
+// it with its age, and drops it after ten missed pushes.
+const FEDERATION_PUSH_SECONDS: u64 = 60;
+
+// Tell every peer where it sits in the federation (application::topology::
+// push_federation). Only on an instance that reads from another one: with no
+// remote sources there is nobody to tell, and no task. Part of the generation
+// like the others, so a reload that adds or removes the last remote source
+// starts or ends it.
+fn start_federation_task(
+    state: Arc<AppState>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let config = state.config();
+    let has_peers = config
+        .sources
+        .values()
+        .any(|s| crate::domain::topology::remote_url(s).is_some());
+    if !has_peers {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        // Logged when a push starts or stops failing, not every minute.
+        let mut failing: std::collections::HashSet<String> = Default::default();
+        // After the first syncs have had a moment, so the first map pushed
+        // already says how the pulls are going.
+        let mut ticker = interval(Duration::from_secs(FEDERATION_PUSH_SECONDS));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        ticker.reset_after(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = shutdown.changed() => return,
+            }
+            let config = state.config();
+            let push = crate::application::topology::push_federation(
+                crate::application::topology::Inputs {
+                    sources: &config.sources,
+                    cache: state.cache.as_ref(),
+                    health: state.sync_health.as_ref(),
+                    secrets: state.secrets.as_ref(),
+                    peers: Arc::clone(&state.peers),
+                    name: config.name.as_deref(),
+                },
+                config.url.as_deref(),
+                config.endpoints.len(),
+            );
+            // Cut short at shutdown, unlike a sync: it only reads here and
+            // writes a picture there, and waiting on a dead peer's timeouts
+            // would spend the drain's grace period on nothing.
+            let outcomes = tokio::select! {
+                outcomes = push => outcomes,
+                _ = shutdown.changed() => return,
+            };
+            for (url, outcome) in outcomes {
+                use crate::ports::peer::PushError;
+                match outcome {
+                    Ok(()) | Err(PushError::Unsupported) => {
+                        if failing.remove(&url) {
+                            info!(peer = %url, "Federation map reaches the peer again");
+                        }
+                    }
+                    Err(PushError::Failed(reason)) => {
+                        if failing.insert(url.clone()) {
+                            warn!(peer = %url, error = %reason, "Could not push the federation map");
+                        } else {
+                            debug!(peer = %url, error = %reason, "Federation push still failing");
+                        }
+                    }
+                }
+            }
+        }
+    }))
 }
 
 // The project tasks, wired from the state rather than from main's locals —
@@ -1063,8 +1139,8 @@ mod tests {
     async fn a_cron_scheduled_enricher_runs_and_records_health() {
         let enricher: crate::domain::enricher::Enricher = serde_saphyr::from_str(concat!(
             "name: cron-merge\n",
-            "target_id: src-target\n",
-            "source_id: src-extra\n",
+            "target: src-target\n",
+            "source: src-extra\n",
             "fields: [\"role\"]\n",
             "schedule: \"* * * * * *\"\n",
         ))
@@ -1196,7 +1272,7 @@ mod tests {
     #[tokio::test]
     async fn a_scheduled_enricher_runs_and_records_health() {
         let enricher: crate::domain::enricher::Enricher = serde_saphyr::from_str(
-            "name: e\ntarget_id: src-t\nsource_id: src-s\nfields: [\"f\"]\nsync_interval_seconds: 1\n",
+            "name: e\ntarget: src-t\nsource: src-s\nfields: [\"f\"]\nsync_interval_seconds: 1\n",
         )
         .expect("enricher fixture");
         let mut enrichers = HashMap::new();
@@ -1404,6 +1480,7 @@ mod tests {
         let previous = state.config();
         state.swap_config(Arc::new(crate::RuntimeConfig {
             sources: after,
+            connectors: previous.connectors.clone(),
             credentials: previous.credentials.clone(),
             views: previous.views.clone(),
             enrichers: previous.enrichers.clone(),
@@ -1419,6 +1496,8 @@ mod tests {
             refresh_max_concurrent: previous.refresh_max_concurrent,
             ldap: previous.ldap.clone(),
             ui_home: previous.ui_home.clone(),
+            url: previous.url.clone(),
+            name: previous.name.clone(),
         }));
         state.reload.bump();
 

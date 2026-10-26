@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyDef {
+    // The display label: the item's `description`, falling back to its
+    // identity (see config::take). The identity is the map key — what
+    // references, URLs and cache keys use.
     pub name: String,
 
     // Environment variable that holds the secret value of this key

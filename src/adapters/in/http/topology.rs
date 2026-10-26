@@ -5,11 +5,11 @@ use std::sync::Arc;
 use utoipa::IntoParams;
 
 use crate::AppState;
-use crate::adapters::r#in::http::auth::AuthContext;
+use crate::adapters::r#in::http::auth::{AuthContext, AuthMethod};
 use crate::adapters::r#in::http::error::ApiError;
 use crate::adapters::r#in::http::error::ErrorBody;
 use crate::application::topology::{Inputs, MAX_DEPTH, describe};
-use crate::domain::topology::Topology;
+use crate::domain::topology::{Federation, FederationPush, Topology};
 
 // Declared as query parameters here: the handler takes them wrapped in a
 // Result (to answer a malformed one as JSON), which hides the Query<T> the
@@ -53,6 +53,7 @@ pub async fn get_topology(
             health: state.sync_health.as_ref(),
             secrets: state.secrets.as_ref(),
             peers: Arc::clone(&state.peers),
+            name: config.name.as_deref(),
         },
         |id| auth.permissions.allows_source(id),
         query.depth.unwrap_or(2).min(MAX_DEPTH),
@@ -61,77 +62,72 @@ pub async fn get_topology(
     Ok(Json(if auth.permissions.is_admin() {
         topology
     } else {
-        for_restricted(topology)
+        topology.redacted()
     }))
 }
 
-// What a restricted caller may see of the peers behind the sources it reads.
-// The peers were asked with THIS instance's key, which may be an admin key
-// over there: their own peers, URLs and counts are that key's view, not the
-// caller's, so only each peer's version is kept. And why a peer was not
-// asked stays generic: the resolver's message names env vars and Vault
-// paths, which /credentials keeps for admins.
-fn for_restricted(mut topology: Topology) -> Topology {
-    for peer in &mut topology.peers {
-        if let Some(instance) = peer.instance.as_mut() {
-            instance.sources = None;
-            instance.peers = Vec::new();
+// An instance that reads from this one says what the federation looks like
+// from there (application::topology::push_federation, every minute).
+//
+// Any API key may push: the instance above holds the restricted key its
+// remote sources read with, and requiring admin would mean handing it more
+// than it reads. What a push can do is bounded by that: it replaces the
+// sender's own picture (stored under its key's identity, its `name`), shown
+// to admins only, and changes nothing else. A browser session cannot push,
+// whether it signed in through the directory or with a key: a session has no
+// key identity to store the map under (its label is not unique, and could
+// overwrite another key's entry), and no instance pushes through one.
+#[utoipa::path(
+    put,
+    path = "/api/v1/topology/federation",
+    tag = "Topology",
+    request_body = FederationPush,
+    responses(
+        (status = 204, description = "Stored under the sending key's name, replacing that key's previous push"),
+        (status = 400, description = "The body is not a federation push", body = ErrorBody),
+        (status = 401, description = "Not authenticated", body = ErrorBody),
+        (status = 403, description = "A browser session (signed in through the UI, with a key or a directory account) rather than an API key sent with the request", body = ErrorBody)
+    )
+)]
+pub async fn put_federation(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+    body: Result<Json<FederationPush>, axum::extract::rejection::JsonRejection>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    // A key sent with the request is the only way to have a `key_id`; an
+    // open instance (no keys at all) has nobody to tell apart.
+    let sender = match (auth.method, auth.key_id) {
+        (AuthMethod::ApiKey, Some(id)) => id,
+        (AuthMethod::Open, _) => "open".to_string(),
+        _ => {
+            return Err(ApiError::forbidden(
+                "a federation map is pushed by another instance, with an API key",
+            ));
         }
-        if peer
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("not asked:") && !e.contains("depth limit"))
-        {
-            peer.error = Some("not asked: this instance cannot authenticate to it".to_string());
-        }
-    }
-    topology
+    };
+    let Json(push) = body.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    state.federation.record(sender, push);
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::topology::Peer;
-
-    fn peer(instance: Option<Topology>, error: Option<&str>) -> Peer {
-        Peer {
-            url: "https://edge.example".to_string(),
-            sources: Vec::new(),
-            instance: instance.map(Box::new),
-            error: error.map(str::to_string),
-        }
+// The maps pushed here, newest first: on an edge, the federation it belongs
+// to. Admin-only: it is the sender's whole map, other instances included.
+#[utoipa::path(
+    get,
+    path = "/api/v1/topology/federation",
+    tag = "Topology",
+    responses(
+        (status = 200, description = "One entry per instance that reads from this one and pushed its map in the last ten minutes. Empty on an instance nothing reads from", body = [Federation]),
+        (status = 401, description = "Not authenticated", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody)
+    )
+)]
+pub async fn get_federation(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(auth): axum::Extension<AuthContext>,
+) -> Result<Json<Vec<Federation>>, ApiError> {
+    if !auth.permissions.is_admin() {
+        return Err(ApiError::admin_only());
     }
-
-    #[test]
-    fn a_restricted_caller_sees_a_peers_version_and_no_secret_locations() {
-        let behind = Topology {
-            version: "0.33.0".to_string(),
-            sources: Some(12),
-            peers: vec![peer(None, None)],
-        };
-        let topology = Topology {
-            version: "0.34.0".to_string(),
-            sources: Some(1),
-            peers: vec![
-                peer(Some(behind), None),
-                peer(None, Some("not asked: Env var 'EDGE_TOKEN' not set")),
-                peer(None, Some("not asked: depth limit reached")),
-            ],
-        };
-        let seen = for_restricted(topology);
-        let instance = seen.peers[0].instance.as_ref().unwrap();
-        assert_eq!(instance.version, "0.33.0");
-        assert!(instance.peers.is_empty() && instance.sources.is_none());
-        assert!(
-            !seen.peers[1]
-                .error
-                .as_deref()
-                .unwrap()
-                .contains("EDGE_TOKEN")
-        );
-        assert_eq!(
-            seen.peers[2].error.as_deref(),
-            Some("not asked: depth limit reached")
-        );
-    }
+    Ok(Json(state.federation.list()))
 }

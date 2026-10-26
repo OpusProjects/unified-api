@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::domain::topology::Topology;
-use crate::ports::peer::{PeerFuture, PeerPort, PeerRequest};
+use crate::domain::topology::{FederationPush, Topology};
+use crate::ports::peer::{PeerFuture, PeerPort, PeerRequest, PushError, PushFuture};
 
 // PeerPort → the peer's own HTTP API, with the key the remote sources use.
 //
@@ -52,6 +52,15 @@ impl PeerPort for HttpPeers {
             self.verified.clone()
         };
         Box::pin(describe(client, request))
+    }
+
+    fn push(&self, request: PeerRequest, body: FederationPush) -> PushFuture {
+        let client = if request.insecure_tls {
+            self.insecure.clone()
+        } else {
+            self.verified.clone()
+        };
+        Box::pin(push(client, request, body))
     }
 }
 
@@ -124,6 +133,7 @@ async fn ask(client: &reqwest::Client, request: &PeerRequest) -> Result<Topology
             }
             let index: Index = read_json(index, "index").await?;
             Ok(Topology {
+                name: None,
                 version: index.version,
                 sources: None,
                 peers: Vec::new(),
@@ -132,6 +142,32 @@ async fn ask(client: &reqwest::Client, request: &PeerRequest) -> Result<Topology
         401 => Err("refused the key (401)".to_string()),
         403 => Err("the key may not describe it (403)".to_string()),
         other => Err(format!("answered HTTP {other}")),
+    }
+}
+
+async fn push(
+    client: reqwest::Client,
+    request: PeerRequest,
+    body: FederationPush,
+) -> Result<(), PushError> {
+    let mut call = client
+        .put(format!("{}/api/v1/topology/federation", request.url))
+        .timeout(Duration::from_secs(request.timeout_seconds))
+        .json(&body);
+    if let Some(key) = &request.api_key {
+        call = call.header("x-api-key", key);
+    }
+    let response = call
+        .send()
+        .await
+        .map_err(|e| PushError::Failed(unreachable_message(&e)))?;
+    match response.status().as_u16() {
+        200..=299 => Ok(()),
+        // Older than the route: a 404, or a 405 where only GET /topology
+        // answers under that path's prefix.
+        404 | 405 => Err(PushError::Unsupported),
+        401 => Err(PushError::Failed("refused the key (401)".to_string())),
+        other => Err(PushError::Failed(format!("answered HTTP {other}"))),
     }
 }
 

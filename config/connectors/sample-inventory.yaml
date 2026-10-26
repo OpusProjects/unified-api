@@ -1,0 +1,14 @@
+---
+# A connector says HOW to read a kind of system: which script, in which
+# project, with which arguments. Every source of that system names it
+# (`connector: sample-inventory`) and adds only what is its own: credentials,
+# config, schedule, TTLs. See docs/connectors.md.
+connectors:
+  - name: sample-inventory
+    description: "Sample inventory script"
+    type: "script"                      # script (default) | ssh
+    project: "prj-connectors-infra"     # the checkout `path` resolves in
+    path: "tests/adapters/out/connectors/inventory.py"
+    # script_args: ["--list"]           # for an Ansible dynamic inventory script
+    # output_format: "ansible"          # native (default) | ansible
+    # timeout_seconds: 300              # default; a source may override it

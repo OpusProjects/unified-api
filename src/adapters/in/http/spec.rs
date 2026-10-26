@@ -43,17 +43,26 @@ fn document() -> &'static utoipa::openapi::OpenApi {
     DOC.get_or_init(ApiDoc::openapi)
 }
 
+// Templates whose last capture takes the rest of the path, slashes included
+// (`{*file}` in the router; OpenAPI has no such syntax, so the spec says
+// `{file}` and this list says the rest).
+const GREEDY: [&str; 1] = ["/api/v1/config/{file}"];
+
 // Does a concrete path match a route template? Segment by segment, with
 // `{name}` matching exactly one segment — the same rule axum's router uses, so
 // the template this finds is the template that handled the request.
 fn matches(template: &str, path: &str) -> bool {
     let template = template.trim_end_matches('/');
     let path = path.trim_end_matches('/');
-    let mut t = template.split('/');
+    let greedy = GREEDY.contains(&template);
+    let mut t = template.split('/').peekable();
     let mut p = path.split('/');
     loop {
         match (t.next(), p.next()) {
             (None, None) => return true,
+            (Some(t_seg), Some(p_seg)) if greedy && t.peek().is_none() => {
+                return !p_seg.is_empty() && t_seg.starts_with('{');
+            }
             (Some(t), Some(p)) => {
                 let wildcard = t.starts_with('{') && t.ends_with('}');
                 if !wildcard && t != p {
@@ -198,6 +207,15 @@ mod tests {
             "/api/v1/sources/src-d42/hosts/web01"
         ));
         assert!(matches("/api/v1/sources", "/api/v1/sources"));
+        // A configuration file can sit in folders.
+        assert!(matches(
+            "/api/v1/config/{file}",
+            "/api/v1/config/sources/acme/src-d42-acme.yaml"
+        ));
+        assert!(!matches(
+            "/api/v1/sources/{id}",
+            "/api/v1/sources/src-d42/sync"
+        ));
     }
 
     #[test]

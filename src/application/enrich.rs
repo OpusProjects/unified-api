@@ -505,7 +505,7 @@ mod tests {
     }
 
     fn script_enricher() -> Enricher {
-        serde_saphyr::from_str("name: spy\ntarget_id: src-a\nscript_path: /bin/true\n")
+        serde_saphyr::from_str("name: spy\ntarget: src-a\nscript_path: /bin/true\n")
             .expect("enricher fixture")
     }
 
@@ -672,10 +672,8 @@ mod tests {
     }
 
     fn declarative_enricher() -> Enricher {
-        serde_saphyr::from_str(
-            "name: d\ntarget_id: src-a\nsource_id: src-b\nfields: [\"infinibox\"]\n",
-        )
-        .expect("enricher fixture")
+        serde_saphyr::from_str("name: d\ntarget: src-a\nsource: src-b\nfields: [\"infinibox\"]\n")
+            .expect("enricher fixture")
     }
 
     #[tokio::test]
@@ -960,8 +958,7 @@ mod tests {
     }
 
     fn enricher_without_fields() -> Enricher {
-        serde_saphyr::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\n")
-            .expect("enricher fixture")
+        serde_saphyr::from_str("name: d\ntarget: src-a\nsource: src-b\n").expect("enricher fixture")
     }
 
     // No `fields` means every var the source declares -- the way being in a
@@ -1063,7 +1060,7 @@ mod tests {
         );
 
         let enricher: Enricher =
-            serde_saphyr::from_str("name: d\ntarget_id: src-a\nsource_id: src-b\nfields: []\n")
+            serde_saphyr::from_str("name: d\ntarget: src-a\nsource: src-b\nfields: []\n")
                 .expect("enricher fixture");
 
         run_enricher(
@@ -1083,11 +1080,8 @@ mod tests {
     }
 
     fn enricher_yaml(extra: &str) -> Enricher {
-        serde_saphyr::from_str(&format!(
-            "name: d\ntarget_id: src-a\nsource_id: src-b\n{}",
-            extra
-        ))
-        .expect("enricher fixture")
+        serde_saphyr::from_str(&format!("name: d\ntarget: src-a\nsource: src-b\n{}", extra))
+            .expect("enricher fixture")
     }
 
     // Two sources of vars, one target, and the real shape of the problem: the
@@ -1287,7 +1281,7 @@ mod tests {
         // Config validation refuses this at startup, but the domain type can
         // exist: the use case must answer with words, not a panic
         let enricher: Enricher =
-            serde_saphyr::from_str("name: bare\ntarget_id: src-a\n").expect("fixture");
+            serde_saphyr::from_str("name: bare\ntarget: src-a\n").expect("fixture");
         let outcome = run_enricher(
             &cache,
             &SpyEnricher::default(),
@@ -1321,7 +1315,7 @@ mod tests {
         };
         // project_id exercises the checkout resolution branch on the way in
         let enricher: Enricher = serde_saphyr::from_str(
-            "name: hung\ntarget_id: src-a\nscript_path: /bin/true\nproject_id: prj-x\ntimeout_seconds: 5\n",
+            "name: hung\ntarget: src-a\nscript_path: /bin/true\nproject: prj-x\ntimeout_seconds: 5\n",
         )
         .expect("fixture");
 

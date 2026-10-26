@@ -9,7 +9,7 @@ Consumers get one address for "the facts" and stop needing to know which
 datacenter — and therefore which source — a host lives in.
 
 - [The problem it solves](#the-problem-it-solves)
-- [Configuration — `views.yaml`](#configuration--viewsyaml)
+- [Configuration — `views` items](#configuration--views-items)
 - [Where it answers](#where-it-answers)
 - [Ownership is declared, not inferred](#ownership-is-declared-not-inferred)
 - [Advertised ownership](#advertised-ownership)
@@ -22,7 +22,7 @@ datacenter — and therefore which source — a host lives in.
 
 ## The problem it solves
 
-[Federation](on-demand-refresh.md) solved half of this. `connector_type: remote`
+[Federation](on-demand-refresh.md) solved half of this. `connector: remote`
 means a central needs no credentials and no SSH path into a datacenter: the edge
 that owns the hosts does the gathering, and the central holds its dataset.
 
@@ -64,25 +64,31 @@ Right shape, wrong mechanism. A view filters in Rust and keeps refresh.
 
 ---
 
-## Configuration — `views.yaml`
+## Configuration — `views` items
 
-A view is declared like any other entity, naming the sources it merges.
+A view is declared like any other item, under `views:` in any file of the
+configuration directory, naming the sources it merges.
 
 ```yaml
-vw-facts-all:
-  name: "Facts, both datacenters"
-  members:
-    - source: "src-ssh-dc1"           # where the facts come from
-      owns:
-        source: "src-d42"             # inventory the pattern resolves against
-        groups: ["datacenter_dc1"]
-    - source: "src-edge-dc2"          # a remote (federated) member works too
-      owns:
-        source: "src-d42"
-        groups: ["datacenter_dc2"]
-        hosts: ["appliance01.dc2.example"]   # claimed literally as well
-  # ttl_seconds: 30                   # optional; absent = inherit the owner's
+# views/vw-facts-all.yaml
+views:
+  - name: vw-facts-all                # the id consumers read, on the source routes
+    description: "Facts, both datacenters"
+    members:
+      - source: "src-ssh-dc1"           # where the facts come from
+        owns:
+          source: "src-d42"             # inventory the pattern resolves against
+          groups: ["datacenter_dc1"]
+      - source: "src-edge-dc2"          # a remote (federated) member works too
+        owns:
+          source: "src-d42"
+          groups: ["datacenter_dc2"]
+          hosts: ["appliance01.dc2.example"]   # claimed literally as well
+    # ttl_seconds: 30                   # optional; absent = inherit the owner's
 ```
+
+A view's `name` shares the source id space: a view and a source with the same
+name fail startup, since both would answer on `/api/v1/sources/{id}`.
 
 | Field | Meaning |
 |---|---|
@@ -97,10 +103,10 @@ An `owns` with neither `groups` nor `hosts` is a **catch-all**: everything its
 ownership source knows. Useful as a last member ("whatever the others did not
 claim"), dangerous as a first one — hence the ordering rule being explicit.
 
-Unknown keys inside a view are a hard startup error, unlike the rest of the
-config. Ownership is the routing table: `grups:` instead of `groups:` would
-otherwise deserialize into an empty pattern, and an empty pattern claims
-everything.
+Unknown keys inside a view are a hard startup error, as they are everywhere in
+the configuration — and here it matters most. Ownership is the routing table:
+`grups:` instead of `groups:` would otherwise deserialize into an empty pattern,
+and an empty pattern claims everything.
 
 ---
 
@@ -135,15 +141,16 @@ facts from there.
 
 ### Auth
 
-A view is granted exactly like a source, by its id under `sources:` in
-`api_keys.yaml`. A key granted the view needs **no** access to the members: the
+A view is granted exactly like a source, by its id under `sources:` in an
+`api_keys` item. A key granted the view needs **no** access to the members: the
 view is the contract, the members are internal topology.
 
 ```yaml
-key-forms:
-  name: "AnsibleForms"
-  env: "UNIFIED_API_KEY_FORMS"
-  sources: ["vw-facts-all"]        # not the members
+api_keys:
+  - name: key-forms
+    description: "AnsibleForms"
+    env: "UNIFIED_API_KEY_FORMS"
+    sources: ["vw-facts-all"]        # not the members
 ```
 
 ---

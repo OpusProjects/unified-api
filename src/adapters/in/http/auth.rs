@@ -11,6 +11,10 @@ use subtle::ConstantTimeEq;
 // (main.rs does the resolution at the boundary; nothing here touches env vars).
 #[derive(Clone)]
 pub struct ResolvedApiKey {
+    // The key's identity: its `name` in the api_keys item, what a peer is
+    // recorded under when it pushes the federation map.
+    pub id: String,
+    // Its label (`description`, falling back to the name): logs, Users page.
     pub name: String,
     pub secret: String,
     pub permissions: Permissions,
@@ -127,6 +131,7 @@ pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedAp
         };
 
         keys.push(ResolvedApiKey {
+            id: id.clone(),
             name: def.name.clone(),
             secret,
             permissions,
@@ -137,6 +142,7 @@ pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedAp
         && !secret.is_empty()
     {
         keys.push(ResolvedApiKey {
+            id: "default".to_string(),
             name: "default".to_string(),
             secret,
             permissions: Permissions::Admin,
@@ -182,6 +188,9 @@ pub struct BrowserIdentity {
 pub struct AuthContext {
     // None when the API runs open (no keys configured)
     pub key_name: Option<String>,
+    // The key's identity (its api_keys name), when a key was presented
+    // with the request; None open, or through a browser session.
+    pub key_id: Option<String>,
     pub permissions: Permissions,
     pub method: AuthMethod,
 }
@@ -267,6 +276,7 @@ pub async fn require_api_key(
     if keys.is_empty() {
         request.extensions_mut().insert(AuthContext {
             key_name: None,
+            key_id: None,
             permissions: Permissions::Admin,
             method: AuthMethod::Open,
         });
@@ -345,6 +355,7 @@ pub async fn require_api_key(
         request.extensions_mut().insert(identity.clone());
         request.extensions_mut().insert(AuthContext {
             key_name: Some(auth.key_name),
+            key_id: None,
             permissions: auth.permissions,
             method: match auth.kind {
                 crate::adapters::r#in::http::session::SessionKind::ApiKey => AuthMethod::ApiKey,
@@ -373,6 +384,7 @@ pub async fn require_api_key(
             tracing::Span::current().record("key_name", key.name.as_str());
             request.extensions_mut().insert(AuthContext {
                 key_name: Some(key.name.clone()),
+                key_id: Some(key.id.clone()),
                 permissions: key.permissions.clone(),
                 method: AuthMethod::ApiKey,
             });
@@ -400,7 +412,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join("credentials.yaml"),
-            "cred-ldap:\n  name: \"LDAP\"\n  type: username_password\n  env_prefix: \"LDAP\"\n",
+            "credentials:\n  - name: cred-ldap\n    description: \"LDAP\"\n    type: username_password\n    env_prefix: \"LDAP\"\n",
         )
         .unwrap();
         let cfg = crate::config::load_config(dir.path().to_str().unwrap()).unwrap();
@@ -409,6 +421,7 @@ mod tests {
         assert!(err.contains("no authentication"), "{err}");
 
         let key = ResolvedApiKey {
+            id: "admin".to_string(),
             name: "admin".to_string(),
             secret: "s".to_string(),
             permissions: Permissions::Admin,
@@ -431,6 +444,7 @@ mod tests {
 
     fn admin_key(name: &str, secret: &str) -> ResolvedApiKey {
         ResolvedApiKey {
+            id: name.to_string(),
             name: name.to_string(),
             secret: secret.to_string(),
             permissions: Permissions::Admin,

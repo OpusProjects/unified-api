@@ -66,6 +66,7 @@ pub struct ReloadReport {
     // therefore need a restart to take effect
     pub restart_required: Vec<String>,
     pub sources: SectionDelta,
+    pub connectors: SectionDelta,
     pub views: SectionDelta,
     pub enrichers: SectionDelta,
     pub endpoints: SectionDelta,
@@ -158,6 +159,7 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
 fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
     RuntimeConfig {
         sources: cfg.sources.clone(),
+        connectors: cfg.connectors.clone(),
         credentials: cfg.credentials.clone(),
         views: cfg.views.clone(),
         enrichers: cfg.enrichers.clone(),
@@ -173,6 +175,12 @@ fn runtime_config(cfg: &AppConfig) -> RuntimeConfig {
         refresh_max_concurrent: cfg.server.refresh_max_concurrent,
         ldap: cfg.server.ui.ldap.clone(),
         ui_home: cfg.server.ui.home().to_string(),
+        url: cfg
+            .server
+            .url
+            .as_deref()
+            .map(|url| crate::domain::topology::without_userinfo(url.trim_end_matches('/'))),
+        name: cfg.server.name.clone(),
     }
 }
 
@@ -186,6 +194,7 @@ fn diff(
 ) -> ReloadReport {
     let mut report = ReloadReport {
         sources: SectionDelta::between(&previous.sources, &next.sources),
+        connectors: SectionDelta::between(&previous.connectors, &next.connectors),
         views: SectionDelta::between(&previous.views, &next.views),
         enrichers: SectionDelta::between(&previous.enrichers, &next.enrichers),
         endpoints: SectionDelta::between(&previous.endpoints, &next.endpoints),
@@ -197,6 +206,7 @@ fn diff(
     let mut applied = Vec::new();
     for (name, delta) in [
         ("sources", &report.sources),
+        ("connectors", &report.connectors),
         ("views", &report.views),
         ("enrichers", &report.enrichers),
         ("endpoints", &report.endpoints),
@@ -224,6 +234,12 @@ fn diff(
     }
     if previous.shutdown_grace_seconds != next.shutdown_grace_seconds {
         applied.push("server.shutdown_grace_seconds".to_string());
+    }
+    if previous.url != next.url {
+        applied.push("server.url".to_string());
+    }
+    if previous.name != next.name {
+        applied.push("server.name".to_string());
     }
     if previous.refresh_timeout_seconds != next.refresh_timeout_seconds {
         applied.push("server.refresh_timeout_seconds".to_string());

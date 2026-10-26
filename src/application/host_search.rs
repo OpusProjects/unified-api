@@ -234,7 +234,7 @@ mod tests {
 
     fn endpoint(sources: &[&str], limit: Option<&str>) -> OutputEndpoint {
         let mut yaml = format!(
-            "name: e\nsource_ids: [{}]\noutput: ansible\n",
+            "name: e\nsources: [{}]\noutput: ansible\n",
             sources.join(", ")
         );
         if let Some(l) = limit {

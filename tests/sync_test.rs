@@ -50,13 +50,14 @@ fn test_source(scenario: &str) -> Source {
 
     Source {
         name: "Test Source".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
@@ -771,13 +772,14 @@ async fn sync_infra_source() {
         "src-infra".to_string(),
         Source {
             name: "Infrastructure Data".to_string(),
-            project_id: "test".to_string(),
+            project_id: Some("test".to_string()),
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
             output_format: Default::default(),
             hosts_from_source: None,
+            connector: "script-test".to_string(),
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -871,13 +873,14 @@ async fn endpoint_combines_sources() {
         "src-infra".to_string(),
         Source {
             name: "Infra Data".to_string(),
-            project_id: "test".to_string(),
+            project_id: Some("test".to_string()),
             script_path: "tests/adapters/out/connectors/infra.py".to_string(),
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
             output_format: Default::default(),
             hosts_from_source: None,
+            connector: "script-test".to_string(),
             connector_type: ConnectorType::Script,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
@@ -1888,13 +1891,14 @@ async fn a_limited_render_does_not_shrink_the_cache() {
 fn granular_source(host_args: Vec<String>, host_sync_updates_group_vars: bool) -> Source {
     Source {
         name: "Granular".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: "tests/adapters/out/connectors/granular.py".to_string(),
         script_args: vec!["--list".to_string()],
         host_args,
         host_sync_updates_group_vars,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
@@ -2098,6 +2102,7 @@ async fn list_endpoints_hides_the_transform_from_a_restricted_key() {
         .sources(HashMap::new())
         .endpoints(endpoints)
         .api_keys(vec![ResolvedApiKey {
+            id: "awx".to_string(),
             name: "awx".to_string(),
             secret: "awx".to_string(),
             permissions: Permissions::Scoped {

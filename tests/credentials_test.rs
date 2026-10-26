@@ -49,11 +49,13 @@ fn app() -> axum::Router {
         .credentials(credentials, Default::default())
         .api_keys(vec![
             ResolvedApiKey {
+                id: "admin".to_string(),
                 name: "admin".to_string(),
                 secret: "adm".to_string(),
                 permissions: Permissions::Admin,
             },
             ResolvedApiKey {
+                id: "awx".to_string(),
                 name: "awx".to_string(),
                 secret: "awx".to_string(),
                 permissions: Permissions::Scoped {

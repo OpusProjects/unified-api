@@ -11,6 +11,7 @@
 //     the app, or a client would read a 200 HTML page as an answer.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -20,11 +21,18 @@ use axum::response::{IntoResponse, Response};
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::adapters::r#in::http::auth::ApiKeyRegistry;
 use crate::adapters::r#in::http::error::ApiError;
+use crate::adapters::r#in::http::session::{COOKIE_NAME, SessionStore, cookie_value};
 
 #[derive(Clone)]
 pub struct UiAssets {
     dir: PathBuf,
+    // Who may see the app's pages: a browser with no session is sent to the
+    // login form by the server, before the app loads, instead of loading the
+    // app only for it to find out it is signed out and redirect itself (a
+    // flash of the overview, then the login page).
+    gate: Option<(Arc<ApiKeyRegistry>, Arc<SessionStore>)>,
 }
 
 impl UiAssets {
@@ -38,12 +46,58 @@ impl UiAssets {
                 "server.ui.assets_dir has no index.html: the UI will not load"
             );
         }
-        Self { dir }
+        Self { dir, gate: None }
+    }
+
+    pub fn with_gate(mut self, keys: Arc<ApiKeyRegistry>, sessions: Arc<SessionStore>) -> Self {
+        self.gate = Some((keys, sessions));
+        self
+    }
+
+    // Where a browser asking for `request` must go first: the login form,
+    // when keys are configured (no keys = an open API, and so an open app)
+    // and the request carries no live session. Only page loads are gated:
+    // the app's own files (scripts, styles, icons) are not secrets, and the
+    // login page needs some of them.
+    fn sign_in_first(&self, request: &Request) -> Option<Response> {
+        let (keys, sessions) = self.gate.as_ref()?;
+        if keys.load().is_empty() || !is_page_load(request) {
+            return None;
+        }
+        let signed_in = request
+            .headers()
+            .get(header::COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|c| cookie_value(c, COOKIE_NAME))
+            .is_some_and(|token| sessions.get(token).is_some());
+        if signed_in {
+            return None;
+        }
+        let next = request
+            .uri()
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| "/".to_string());
+        let login = format!(
+            "/api/v1/login?next={}",
+            crate::adapters::r#in::http::login::query_escape(&next)
+        );
+        Some(axum::response::Redirect::to(&login).into_response())
     }
 
     fn index(&self) -> PathBuf {
         self.dir.join("index.html")
     }
+}
+
+// A browser navigating to a page, as opposed to fetching one of the app's
+// files: it asks for HTML. The app's scripts and styles ask for something else.
+fn is_page_load(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
 }
 
 // Paths that belong to the API: a miss there is the API's 404, not the app.
@@ -66,6 +120,9 @@ pub async fn serve(State(assets): State<UiAssets>, request: Request) -> Response
         .into_response();
     }
 
+    if let Some(redirect) = assets.sign_in_first(&request) {
+        return redirect;
+    }
     let service = ServeDir::new(&assets.dir).fallback(ServeFile::new(assets.index()));
     let response = match service.oneshot(request).await {
         Ok(response) => response.map(Body::new),
@@ -105,6 +162,9 @@ pub async fn page_for_browsers(
         .is_some_and(|accept| accept.contains("text/html"));
     if !wants_html {
         return next.run(request).await;
+    }
+    if let Some(redirect) = assets.sign_in_first(&request) {
+        return redirect;
     }
     let response = match ServeFile::new(assets.index()).oneshot(request).await {
         Ok(response) => response.map(Body::new),

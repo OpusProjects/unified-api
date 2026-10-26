@@ -68,8 +68,14 @@ pub struct SourceDetail {
 
 #[derive(Serialize, ToSchema)]
 pub struct Gathering {
+    /// The connector this source names: a connector item
+    /// (`/api/v1/connectors/{id}`) or a built-in (`remote`, `static_inventory`)
+    pub connector: String,
     pub connector_type: ConnectorType,
-    pub project_id: String,
+    /// The project whose checkout holds the script (from the connector) or
+    /// the inventory (a static_inventory source's own). Null for remote and
+    /// ssh sources, which run nothing from a checkout
+    pub project_id: Option<String>,
     pub script_path: String,
     pub sync_mode: SyncMode,
     pub timeout_seconds: u64,
@@ -142,6 +148,7 @@ pub async fn get_source(
         dataset_bytes: entry.as_ref().and_then(|e| e.serialized_len()),
         sync_health: state.sync_health.get(&id).map(Into::into),
         gathering: auth.permissions.is_admin().then(|| Gathering {
+            connector: source.connector.clone(),
             connector_type: source.connector_type.clone(),
             project_id: source.project_id.clone(),
             script_path: source.script_path.clone(),

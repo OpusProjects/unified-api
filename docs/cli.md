@@ -1,12 +1,14 @@
 # Command-line interface (CLI)
 
 Unified API is a single binary — all runtime behaviour is controlled through
-environment variables and YAML configuration files, plus one flag
-(`--check-config`) for validating configuration without starting anything. This
+environment variables and YAML configuration files, plus two flags:
+`--check-config` validates configuration without starting anything, and
+`--migrate-config` converts a 0.34 configuration directory to item files. This
 page documents how to start, stop and operate the service from the command line.
 
 - [Running the binary](#running-the-binary)
 - [Validating configuration (`--check-config`)](#validating-configuration---check-config)
+- [Converting a 0.34 directory (`--migrate-config`)](#converting-a-034-directory---migrate-config)
 - [Environment variables](#environment-variables)
 - [Log level tuning](#log-level-tuning)
 - [Health checks](#health-checks)
@@ -50,8 +52,8 @@ vars, so missing credentials are **not** an error here).
 
 ```bash
 CONFIG_DIR=./config unified-api --check-config
-# configuration OK (./config): 4 sources, 1 views, 2 credentials, ...   → exit 0
-# configuration INVALID (./config): unknown field `porT` ...            → exit 1
+# configuration OK (./config): 4 sources, 3 connectors, 1 views, 2 credentials, ...   → exit 0
+# configuration INVALID (./config): sources/a.yaml: source 'src-a': unknown field `ttl_second` ...   → exit 1
 ```
 
 Exit `0` means this directory would start; exit `1` prints every validation
@@ -66,6 +68,51 @@ deploy:
          ghcr.io/opusprojects/unified-api:latest --check-config
 ```
 
+On a directory still in the **0.34 layout** (`sources.yaml` and the other fixed
+files, keyed by id), `--check-config` does not fail and does not write: it
+converts the directory in a scratch copy, validates THAT, and says so —
+
+```
+configuration OK (./config) in the 0.34 layout: startup would convert it (converted
+credentials.yaml, sources.yaml, ... into 15 item files; connector 'd42' extracted from:
+src-d42-a, src-d42-b; ...); run --migrate-config to do it now
+```
+
+— because the question CI asks is whether this version will start on the
+directory, and since startup migrates, it will exactly when the conversion
+loads. The checkout may well be mounted read-only; nothing is written to it.
+
+---
+
+## Converting a 0.34 directory (`--migrate-config`)
+
+```bash
+unified-api --migrate-config ./config     # or the directory in CONFIG_DIR, or ./config
+```
+
+Converts a directory in the 0.34 layout to item files in place, prints what it
+did, and exits — the same code startup runs on its own (see
+[configuration → upgrading](configuration.md#upgrading-from-034)), offered as a
+command so a configuration **repository** can be converted once and committed.
+A repository and a pod upgraded in place end up with the same files.
+
+```
+converted credentials.yaml, endpoints.yaml, enrichers.yaml, projects.yaml, sources.yaml into 15 item files
+connector 'd42' extracted from: src-d42-a, src-d42-b
+connector 'ssh-gather-facts' extracted from: src-ssh-dc1
+source 'src-ssh-dc1': its project_id was dropped — an ssh connector runs nothing from a checkout
+migrated ./config; the old files are in ./config/.legacy-config-20261025T185536Z
+```
+
+- The old files move to `.legacy-config-<UTC timestamp>/`, hidden so the loader
+  skips it. Comments are not carried into the new files (they are not data);
+  they are in the backup. Commit the new files and delete the backup when done.
+- Nothing moves unless the converted directory loads: a failure prints
+  `migration of ./config FAILED, nothing was changed: ...` and exits `1`.
+- A directory already in the item-file layout prints `... is already in the
+  item-file layout; nothing to do` and exits `0`, so the command is safe to
+  run twice.
+
 ---
 
 ## Environment variables
@@ -75,12 +122,12 @@ variables. None are mandatory — the defaults are safe for local development.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONFIG_DIR` | `config` (relative to CWD) | Path to the directory containing the YAML configuration files |
+| `CONFIG_DIR` | `config` (relative to CWD) | Path to the configuration directory (`config.yaml` plus item files) |
 | `UNIFIED_API_KEY` | *(unset — auth disabled)* | Static API key for `/api/v1/*` routes. Compared in constant time. Health, metrics and Swagger remain public |
 | `RUST_LOG` | `info` | Log level filter ([`tracing` / `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax) |
 
-Credentials are resolved from additional env vars whose names come from
-`credentials.yaml` — see [configuration](configuration.md) for the
+Credentials are resolved from additional env vars whose names come from the
+`credentials` items — see [configuration](configuration.md) for the
 `env_prefix`/`secret_keys` pattern.
 
 ---
@@ -195,8 +242,8 @@ The process exits with one of two codes, so a supervisor can tell a clean shutdo
 
 | Code | Meaning |
 |---|---|
-| `0` | Clean shutdown (SIGTERM / Ctrl-C), or `--check-config` found the configuration valid |
-| `1` | Fatal startup error — configuration file missing or invalid, bind failure, etc. The error is logged to stderr. Also `--check-config` with an invalid configuration |
+| `0` | Clean shutdown (SIGTERM / Ctrl-C), `--check-config` found the configuration valid, or `--migrate-config` converted the directory (or had nothing to do) |
+| `1` | Fatal startup error — configuration file missing or invalid, a 0.34 directory whose conversion would not load, bind failure, etc. The error is logged to stderr. Also `--check-config` with an invalid configuration, and a failed `--migrate-config` |
 
 ---
 

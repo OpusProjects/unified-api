@@ -22,7 +22,13 @@ use crate::ports;
 // half of an old configuration and half of a new one), and the next request
 // picks up the new one.
 pub struct RuntimeConfig {
+    // Each source with its connector already folded in (SourceDef::resolve):
+    // what a sync reads.
     pub sources: HashMap<String, Source>,
+    // The connector items, as written. Read only to describe them (the
+    // /connectors listing) — a sync never looks here, its source already
+    // carries everything the connector said.
+    pub connectors: HashMap<String, crate::domain::connector::Connector>,
     // Carried but never resolved from here — the secrets chain holds its own
     // copy. It lives in the snapshot so a reload can say WHICH credential
     // changed, which is the first question asked when a sync starts failing
@@ -69,6 +75,12 @@ pub struct RuntimeConfig {
     pub ldap: Option<crate::domain::ldap::LdapConfig>,
     // `server.ui.home`: where a sign-in with no page to return to lands.
     pub ui_home: String,
+    // `server.url`: this instance's address, sent with the federation map.
+    // Read per push, so it reloads.
+    pub url: Option<String>,
+    // `server.name`: what the instance is called on the Topology page, in
+    // its own answer and in the map it pushes. Read per request.
+    pub name: Option<String>,
 }
 
 // Bumped on every reload, and watched by the scheduler: the tasks of the
@@ -168,6 +180,9 @@ pub struct AppState {
     // Asks other unified-api instances to describe themselves, for the
     // federation map. Read-only and never on the data path.
     pub peers: Arc<dyn ports::peer::PeerPort>,
+    // The federation maps instances reading from this one pushed here, so an
+    // edge can show where it sits (it maps nothing itself).
+    pub federation: Arc<crate::application::topology::FederationStore>,
 
     // The browsable HTML API's settings. Static like `projects_dir`, and for
     // the same reason: it decides which middlewares and routes are in the
@@ -280,17 +295,25 @@ impl AppState {
     // None = the id is not in sources.yaml, same contract as sources.get().
     pub fn source_for_sync(&self, id: &str) -> Option<crate::domain::source::Source> {
         let mut source = self.config().sources.get(id)?.clone();
-        if !matches!(source.connector_type, ConnectorType::Ssh) {
+        // Only script and static_inventory sources read a file on this
+        // machine; ssh runs its script_path remotely and remote speaks HTTP,
+        // and neither carries a project.
+        if let Some(project_id) = source.project_id.clone()
+            && !matches!(
+                source.connector_type,
+                ConnectorType::Ssh | ConnectorType::Remote
+            )
+        {
             source.script_path = crate::application::scripts::resolve_script_path(
                 &self.projects_dir,
                 id,
-                &source.project_id,
+                &project_id,
                 &source.script_path,
             );
             // Same per-execution stance for the project's virtualenv: if one
             // exists on disk, the process adapter puts it on the child's PATH
             if let Some(bin) =
-                crate::application::scripts::venv_bin_dir(&self.projects_dir, &source.project_id)
+                crate::application::scripts::venv_bin_dir(&self.projects_dir, &project_id)
             {
                 source
                     .config

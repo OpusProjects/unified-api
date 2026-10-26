@@ -90,6 +90,22 @@ impl GitPort for CliGit {
             Ok(())
         })
     }
+
+    fn revision(&self, dir: &Path) -> crate::ports::git::RevisionFuture<'_> {
+        let dir = dir.to_path_buf();
+        Box::pin(async move {
+            let mut cmd = Command::new("git");
+            cmd.args(["-C", dir.to_str()?, "rev-parse", "HEAD"]);
+            cmd.env("GIT_TERMINAL_PROMPT", "0");
+            cmd.kill_on_drop(true);
+            let output = cmd.output().await.ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (!sha.is_empty()).then_some(sha)
+        })
+    }
 }
 
 fn path_str(path: &Path) -> Result<&str, GitError> {

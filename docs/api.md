@@ -10,13 +10,15 @@ reference; the spec is generated from the code and is always authoritative.
 - [Sources](#sources)
 - [Enrichers](#enrichers)
 - [Output endpoints](#output-endpoints)
+- [Connectors (admin-only)](#connectors-admin-only)
 - [Projects (admin-only)](#projects-admin-only)
+- [Configuration (admin-only)](#configuration-admin-only)
 
 ---
 
 ## Authentication
 
-API keys are defined in `api_keys.yaml` (see [configuration](configuration.md));
+API keys are defined as `api_keys` items (see [configuration](configuration.md#api_keys));
 each key's secret lives in the environment variable the definition names, never
 in the YAML. The legacy `UNIFIED_API_KEY` environment variable still works and
 acts as one extra admin key. Either header authenticates:
@@ -75,8 +77,8 @@ dashboard's origin needs no restart.
 ```
 
 The message distinguishes cases that share a status code — `404` from
-`/dataset` means "not in the cache", `404` from `/sync` means "not in
-`sources.yaml`", and a `404` from `DELETE .../hosts/{hostname}` names whichever
+`/dataset` means "not in the cache", `404` from `/sync` means "not
+configured", and a `404` from `DELETE .../hosts/{hostname}` names whichever
 of the two is missing. Treat the text as loggable, not matchable: branch on the
 status code, read the message.
 
@@ -167,7 +169,7 @@ be routed at all. An unmatched `?group=` is still an empty result.
 
 `DELETE /api/v1/sources/{id}` drops the cached entry and reports how many
 hosts went with it. It removes **cached data, not configuration**: a source
-still listed in `sources.yaml` will be refilled by its next scheduled sync or
+still configured will be refilled by its next scheduled sync or
 an explicit `POST .../sync`. The point is a source you have *removed* from
 config, whose entry would otherwise be served — and re-persisted in
 snapshots — until the next restart.
@@ -425,18 +427,47 @@ be a real number, boolean, or nested structure.
 
 ---
 
+## Connectors (admin-only)
+
+What each [connector](connectors.md#connectors-and-sources) runs, which sources
+use it, and how they are doing — restricted keys always get `403`, since a
+connector names a script, its project and its arguments.
+
+| Route | Meaning |
+|---|---|
+| `GET /api/v1/connectors` | Every connector item, then the two built-ins (`remote`, `static_inventory`, flagged `built_in: true`) |
+| `GET /api/v1/connectors/{id}` | One of them; `404` when it is neither an item nor a built-in |
+
+Each carries `connector_id`, `name` (the description, or the id),
+`connector_type` (`script`, `ssh`, `remote`, `static_inventory`), `built_in`,
+`project_id`, `path`, `script_args`, `host_args`, `output_format` (null for ssh
+and the built-ins), `timeout_seconds` (null for the built-ins), `used_by` — each
+source naming it, with `source_id`, `name`, the `timeout_seconds` it actually
+syncs under (its override or the connector's), `failing` and `synced` — and
+`health`, those sources' sync health counted: `sources`, `healthy`, `failing`,
+`never_synced`. A broken script reads as a connector whose sources all fail at
+once. Full example in [connectors](connectors.md#inspecting-connectors-apiv1connectors).
+
+Connectors are additive to what the API always answered: `GET /api/v1/sources/{id}`
+names the source's connector as `gathering.connector`, and `gathering.project_id`
+is null for remote and ssh sources (nothing runs from a checkout); `GET
+/api/v1/projects` lists under `used_by.connectors` the connectors whose scripts
+live in each checkout; and `GET /api/v1/` links `connectors` for an admin key.
+
+---
+
 ## Projects (admin-only)
 
 Operational routes for git project checkouts — restricted keys always get `403`.
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/projects` | Configured projects with `checkout_present`, their sync settings and `sync_health` |
+| `GET /api/v1/projects` | Configured projects with `checkout_present`, their sync settings, `sync_health`, and `used_by` (the `connectors`, `sources`, `enrichers` and `endpoints` that run from the checkout — `connectors` is new in 0.35) |
 | `POST /api/v1/projects/{id}/sync` | Clone/update the checkout to the branch tip, on demand |
 
 The sync route is how a pipeline in the scripts repository rolls new script
 versions without restarting the app (see
-[configuration → projects.yaml](configuration.md#projectsyaml)): `200` with the
+[configuration → projects](configuration.md#projects)): `200` with the
 duration on success, `502` when git fails (bad URL, auth, network), `404` for
 an unknown project id. Scripts are re-read from disk on every execution, so an
 updated checkout takes effect on the next run.
@@ -451,10 +482,10 @@ files describe the estate.
 
 | Route | Meaning |
 |---|---|
-| `GET /api/v1/config` | Every file with its sha256, what is missing, whether it still loads, whether the process is running it |
-| `GET /api/v1/config/{file}` | One file verbatim; `ETag` is the sha256, `If-None-Match` answers `304` |
-| `PUT /api/v1/config/{file}` | Replace one file (raw YAML body) |
-| `DELETE /api/v1/config/{file}` | Remove one optional file |
+| `GET /api/v1/config` | Every file (at any depth) with its sha256, what is missing (only ever `config.yaml`), whether it still loads, whether the process is running it |
+| `GET /api/v1/config/{path}` | One file verbatim, by its path with slashes (`sources/dc1/src-d42.yaml`); `ETag` is the sha256, `If-None-Match` answers `304` |
+| `PUT /api/v1/config/{path}` | Create or replace one file (raw YAML body); folders are created |
+| `DELETE /api/v1/config/{path}` | Remove one file, and the folders it leaves empty |
 | `PUT /api/v1/config` | Replace the whole directory in one transaction |
 | `POST /api/v1/config/validate` | Dry run — the same checks as `--check-config`, nothing written |
 | `POST /api/v1/config/reload` | Apply what is on disk to the running process |
@@ -463,7 +494,8 @@ Writes take `?reload=true` to apply the change as part of the write. Status
 codes: `400` the directory would not load (body carries `errors`, an array of
 every problem, alongside the usual `error`), `409` it would break the running
 process (a key's env var is missing, or authentication would be turned off),
-`412` `If-Match` did not match, `404` not a configuration file.
+`412` `If-Match` did not match, `404` not a configuration path. The summary and
+reload report count `connectors` beside the other sections.
 
 Nothing is written unless the whole proposed directory validates, and nothing
 is applied unless it can be applied completely. Full contract, including which

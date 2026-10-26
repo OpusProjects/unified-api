@@ -144,11 +144,13 @@ use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey};
 fn keys() -> Vec<ResolvedApiKey> {
     vec![
         ResolvedApiKey {
+            id: "admin".to_string(),
             name: "admin".to_string(),
             secret: "adm".to_string(),
             permissions: Permissions::Admin,
         },
         ResolvedApiKey {
+            id: "limited".to_string(),
             name: "limited".to_string(),
             secret: "lim".to_string(),
             permissions: Permissions::Scoped {
@@ -189,6 +191,10 @@ async fn post_project_sync_clones_on_demand() {
     let (status, body) = request(app.clone(), "GET", "/api/v1/projects", "adm").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"checkout_present\":false"));
+    assert!(
+        body.contains("\"revision\":null"),
+        "no checkout, no commit: {body}"
+    );
 
     // On-demand sync clones it
     let (status, body) =
@@ -199,6 +205,10 @@ async fn post_project_sync_clones_on_demand() {
 
     let (_, body) = request(app, "GET", "/api/v1/projects", "adm").await;
     assert!(body.contains("\"checkout_present\":true"));
+    // The commit the checkout is at: which scripts this instance runs.
+    let list: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+    let revision = list[0]["revision"].as_str().unwrap_or_default();
+    assert_eq!(revision.len(), 40, "{body}");
 }
 
 #[tokio::test]

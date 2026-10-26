@@ -109,13 +109,14 @@ fn app_with_duplicate_group_members() -> axum::Router {
 fn script_source(script_path: &str) -> unified_api::domain::source::Source {
     unified_api::domain::source::Source {
         name: "Test Source".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: script_path.to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: unified_api::domain::source::ConnectorType::Script,
         sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
         credential_ids: vec![],
@@ -235,6 +236,27 @@ async fn list_source_groups_returns_names_and_counts() {
     assert!(groups[0].get("hosts").is_none());
 }
 
+// One group: its variables and size, without the rest of the dataset.
+#[tokio::test]
+async fn get_source_group_returns_its_vars() {
+    let (status, body) = get(
+        app_with_demo_data(),
+        "/api/v1/sources/src-demo/groups/section9",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let group: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(group["name"], "section9");
+    assert_eq!(group["host_count"], 1);
+    assert_eq!(group["vars"]["ntp_server"], "ntp.section9.net");
+    assert!(group.get("hosts").is_none());
+
+    // A group the source does not have: 404, saying which.
+    let (status, body) = get(app_with_demo_data(), "/api/v1/sources/src-demo/groups/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("no group 'nope'"), "{body}");
+}
+
 #[tokio::test]
 async fn list_source_hosts_returns_sorted_names_only() {
     let (status, body) = get(app_with_demo_data(), "/api/v1/sources/src-demo/hosts").await;
@@ -333,13 +355,14 @@ async fn readyz_returns_503_before_sync() {
         "src-test".to_string(),
         unified_api::domain::source::Source {
             name: "Test".to_string(),
-            project_id: "test".to_string(),
+            project_id: Some("test".to_string()),
             script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
             output_format: Default::default(),
             hosts_from_source: None,
+            connector: "script-test".to_string(),
             connector_type: unified_api::domain::source::ConnectorType::Script,
             sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
             credential_ids: vec![],
@@ -372,13 +395,14 @@ async fn readyz_require_all_sources_waits_for_every_source() {
             id.to_string(),
             unified_api::domain::source::Source {
                 name: "Test".to_string(),
-                project_id: "test".to_string(),
+                project_id: Some("test".to_string()),
                 script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
                 script_args: vec![],
                 host_args: vec![],
                 host_sync_updates_group_vars: false,
                 output_format: Default::default(),
                 hosts_from_source: None,
+                connector: "script-test".to_string(),
                 connector_type: unified_api::domain::source::ConnectorType::Script,
                 sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
                 credential_ids: vec![],
@@ -910,11 +934,13 @@ async fn get_with_key(app: axum::Router, path: &str, key: &str) -> (StatusCode, 
 fn app_with_scoped_keys() -> axum::Router {
     let keys = vec![
         ResolvedApiKey {
+            id: "admin".to_string(),
             name: "admin".to_string(),
             secret: "admin-secret".to_string(),
             permissions: Permissions::Admin,
         },
         ResolvedApiKey {
+            id: "alpha-only".to_string(),
             name: "alpha-only".to_string(),
             secret: "alpha-secret".to_string(),
             permissions: Permissions::Scoped {
@@ -1505,6 +1531,7 @@ async fn endpoint_errors_carry_a_body_like_every_other_route() {
     let app = unified_api::AppBuilder::new()
         .endpoints(endpoints)
         .api_keys(vec![ResolvedApiKey {
+            id: "scoped".to_string(),
             name: "scoped".to_string(),
             secret: "scoped-secret".to_string(),
             permissions: Permissions::Scoped {
@@ -1535,6 +1562,7 @@ async fn an_unknown_endpoint_id_says_so() {
     let app = unified_api::AppBuilder::new()
         .endpoints(HashMap::new())
         .api_keys(vec![ResolvedApiKey {
+            id: "admin".to_string(),
             name: "admin".to_string(),
             secret: "admin-secret".to_string(),
             permissions: Permissions::Admin,
@@ -1566,7 +1594,7 @@ async fn a_script_appearing_in_a_checkout_after_boot_is_used_by_the_next_sync() 
     let projects_dir = tempfile::tempdir().unwrap();
 
     let mut source = script_source("fetch.py");
-    source.project_id = "prj-test".to_string();
+    source.project_id = Some("prj-test".to_string());
     let mut sources = std::collections::HashMap::new();
     sources.insert("src-checkout".to_string(), source);
 
@@ -1705,7 +1733,7 @@ async fn responses_carry_a_request_id() {
 // =========================================================================
 fn app_with_declarative_enricher() -> (axum::Router, std::sync::Arc<unified_api::AppState>) {
     let enricher: unified_api::domain::enricher::Enricher = serde_saphyr::from_str(
-        "name: Copy infinibox\ntarget_id: src-demo\nsource_id: src-storage\nfields: [\"infinibox\"]\n",
+        "name: Copy infinibox\ntarget: src-demo\nsource: src-storage\nfields: [\"infinibox\"]\n",
     )
     .expect("enricher fixture");
     let mut enrichers = std::collections::HashMap::new();
@@ -1804,7 +1832,7 @@ async fn running_an_unknown_enricher_is_a_404_naming_it() {
 #[tokio::test]
 async fn metrics_exposes_task_health_gauges() {
     let enricher: unified_api::domain::enricher::Enricher =
-        serde_saphyr::from_str("name: E\ntarget_id: src-demo\nscript_path: e.py\n").unwrap();
+        serde_saphyr::from_str("name: E\ntarget: src-demo\nscript_path: e.py\n").unwrap();
     let mut enrichers = std::collections::HashMap::new();
     enrichers.insert("en-gauges".to_string(), enricher);
     let project: unified_api::domain::project::GitProject =
@@ -1890,7 +1918,7 @@ async fn an_enrichers_trigger_reaches_the_script_inside_source_config() {
     );
     let enricher: unified_api::domain::enricher::Enricher = serde_saphyr::from_str(concat!(
         "name: Probe\n",
-        "target_id: src-probe\n",
+        "target: src-probe\n",
         "script_path: \"tests/adapters/out/enrichers/env_probe.py\"\n",
     ))
     .expect("enricher fixture");
@@ -2024,7 +2052,7 @@ fn app_for_group_var_enrichment() -> (axum::Router, std::sync::Arc<unified_api::
     let enrichers = HashMap::from([(
         "en-vars".to_string(),
         serde_saphyr::from_str::<Enricher>(
-            "name: vars\ntarget_id: src-target\nsource_id: src-vars\nfields: [\"cmdb_role\"]\n",
+            "name: vars\ntarget: src-target\nsource: src-vars\nfields: [\"cmdb_role\"]\n",
         )
         .expect("enricher fixture"),
     )]);

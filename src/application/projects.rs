@@ -255,7 +255,7 @@ mod tests {
         let git = StubGit { fail_with: None };
 
         let project: GitProject = serde_saphyr::from_str(
-            "name: Test\ngit_url: \"https://example.com/repo.git\"\ncredential_id: \"cred-ghost\"\n",
+            "name: Test\ngit_url: \"https://example.com/repo.git\"\ncredential: \"cred-ghost\"\n",
         )
         .expect("project fixture");
 

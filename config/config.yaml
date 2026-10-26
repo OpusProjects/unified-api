@@ -3,7 +3,7 @@ server:
   port: 8182
   # The web UI on this same address: the image ships a build of unified-ui at
   # /usr/share/unified-api/ui. Sign-in is the API's own login page (an API key,
-  # or LDAP: docs/ldap-login.md); with no api_keys.yaml the API is open and so
+  # or LDAP: docs/ldap-login.md); with no api_keys items the API is open and so
   # is the UI. Remove the block for an API without a UI. See docs/ui.md.
   ui:
     enabled: true
@@ -19,7 +19,7 @@ server:
 # Optional: let an admin key read, write and reload this directory over HTTP,
 # so a configuration pipeline can push a change instead of publishing an
 # artifact this instance has to pull. OFF by default — turning it on means an
-# admin key can rewrite every file the loader reads, api_keys.yaml included.
+# admin key can rewrite every file the loader reads, api_keys included.
 # See docs/config-api.md.
 # config_api:
 #   enabled: true

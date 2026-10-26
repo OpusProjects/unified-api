@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    AppConfig, CONFIG_FILES, ConfigErrors, REQUIRED_CONFIG_FILE, load_config_detailed,
+    AppConfig, ConfigErrors, REQUIRED_CONFIG_FILE, config_files, load_config_detailed,
 };
 use crate::ports::config_store::{ConfigChange, ConfigFileStat, ConfigStorePort};
 
@@ -45,33 +45,46 @@ impl FsConfigStore {
         &self.dir
     }
 
-    // The contents every known file WOULD have with `change` applied: what is
-    // on disk, plus the writes, minus the deletions (and minus everything the
-    // payload does not name, when pruning).
+    // The contents every file WOULD have with `change` applied: what is on
+    // disk, plus the writes, minus the deletions (and minus everything the
+    // payload does not name, when pruning). Paths are relative to the
+    // directory, with `/`, at any depth.
     fn effective(&self, change: &ConfigChange) -> Result<BTreeMap<String, String>, String> {
         let mut files = BTreeMap::new();
 
-        for name in CONFIG_FILES {
-            if change.prune && !change.write.contains_key(name) {
-                continue;
-            }
-            if change.delete.contains(name) {
-                continue;
-            }
-            if let Some(contents) = change.write.get(name) {
-                files.insert(name.to_string(), contents.clone());
-                continue;
-            }
-            match std::fs::read_to_string(self.dir.join(name)) {
-                Ok(contents) => {
-                    files.insert(name.to_string(), contents);
+        if !change.prune {
+            for name in config_files(&self.dir)? {
+                if change.delete.contains(&name) || change.write.contains_key(&name) {
+                    continue;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("read '{}': {}", name, e)),
+                match std::fs::read_to_string(self.dir.join(&name)) {
+                    Ok(contents) => {
+                        files.insert(name, contents);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(format!("read '{}': {}", name, e)),
+                }
+            }
+        }
+        for (name, contents) in &change.write {
+            if !change.delete.contains(name) {
+                files.insert(name.clone(), contents.clone());
             }
         }
 
         Ok(files)
+    }
+
+    // After files are removed, the folders they leave empty go too, up to
+    // (never including) the configuration directory itself: an empty folder
+    // is not configuration, and a pruned push should leave exactly its tree.
+    fn remove_empty_parents(&self, name: &str) {
+        let mut dir = self.dir.join(name);
+        while dir.pop() && dir != self.dir && dir.starts_with(&self.dir) {
+            if std::fs::remove_dir(&dir).is_err() {
+                break;
+            }
+        }
     }
 
     fn stat_of(&self, name: &str, contents: &str) -> ConfigFileStat {
@@ -138,9 +151,9 @@ impl Drop for Staging {
 impl ConfigStorePort for FsConfigStore {
     fn stat_all(&self) -> Result<Vec<ConfigFileStat>, String> {
         let mut stats = Vec::new();
-        for name in CONFIG_FILES {
-            match std::fs::read_to_string(self.dir.join(name)) {
-                Ok(contents) => stats.push(self.stat_of(name, &contents)),
+        for name in config_files(&self.dir)? {
+            match std::fs::read_to_string(self.dir.join(&name)) {
+                Ok(contents) => stats.push(self.stat_of(&name, &contents)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(format!("read '{}': {}", name, e)),
             }
@@ -188,7 +201,12 @@ impl ConfigStorePort for FsConfigStore {
             )])
         })?;
         for (name, contents) in &files {
-            std::fs::write(stage.path.join(name), contents)
+            let path = stage.path.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| ConfigErrors::new(vec![format!("stage '{}': {}", name, e)]))?;
+            }
+            std::fs::write(&path, contents)
                 .map_err(|e| ConfigErrors::new(vec![format!("stage '{}': {}", name, e)]))?;
         }
 
@@ -215,7 +233,16 @@ impl ConfigStorePort for FsConfigStore {
             if std::fs::read_to_string(&target).is_ok_and(|current| current == *contents) {
                 continue;
             }
-            let tmp = self.dir.join(format!(".{}.tmp", name));
+            // The temp file sits next to its target (a rename is only atomic
+            // within one filesystem) and is hidden, so the loader skips it.
+            let parent = target.parent().unwrap_or(&self.dir).to_path_buf();
+            std::fs::create_dir_all(&parent)
+                .map_err(|e| format!("create '{}': {}", parent.display(), e))?;
+            let file_name = target
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let tmp = parent.join(format!(".{}.tmp", file_name));
             std::fs::write(&tmp, contents)
                 .map_err(|e| format!("write '{}': {}", tmp.display(), e))?;
             staged.push((tmp, target));
@@ -233,12 +260,12 @@ impl ConfigStorePort for FsConfigStore {
 
         // Whatever `files` does not contain is gone — either explicitly
         // deleted or pruned away by a whole-directory push.
-        for name in CONFIG_FILES {
-            if files.contains_key(name) {
+        for name in config_files(&self.dir)? {
+            if files.contains_key(&name) {
                 continue;
             }
-            match std::fs::remove_file(self.dir.join(name)) {
-                Ok(()) => {}
+            match std::fs::remove_file(self.dir.join(&name)) {
+                Ok(()) => self.remove_empty_parents(&name),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(format!("remove '{}': {}", name, e)),
             }
@@ -281,11 +308,11 @@ mod tests {
         let store = FsConfigStore::new(dir.path());
         let before = std::fs::read_to_string(dir.path().join("config.yaml")).expect("read");
 
-        // A source pointing at a project nobody declared: valid YAML, invalid
+        // A connector pointing at a project nobody declared: valid YAML, invalid
         // configuration — the case that must never reach the disk.
         let change = writing(&[(
-            "sources.yaml",
-            "src-a:\n  name: \"A\"\n  project_id: \"prj-ghost\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+            "connectors.yaml",
+            "connectors:\n  - name: src-a\n    description: \"A\"\n    project: \"prj-ghost\"\n    path: \"x.py\"\n",
         )]);
 
         let errors = store.load(&change).err().expect("must be rejected");
@@ -294,7 +321,7 @@ mod tests {
             "errors: {:?}",
             errors.errors
         );
-        assert!(!dir.path().join("sources.yaml").exists());
+        assert!(!dir.path().join("connectors.yaml").exists());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("config.yaml")).expect("read"),
             before
@@ -306,7 +333,7 @@ mod tests {
         let dir = dir_with_minimal_config();
         let store = FsConfigStore::new(dir.path());
 
-        let _ = store.load(&writing(&[("sources.yaml", "not: [valid\n")]));
+        let _ = store.load(&writing(&[("connectors.yaml", "not: [valid\n")]));
         let _ = store.load(&writing(&[("enrichers.yaml", "")]));
 
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
@@ -325,7 +352,7 @@ mod tests {
 
         let change = writing(&[(
             "credentials.yaml",
-            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+            "credentials:\n  - name: cred-a\n    description: \"A\"\n    type: \"token\"\n    env_prefix: \"A\"\n",
         )]);
         store.load(&change).expect("valid");
         store.commit(&change).expect("commits");
@@ -361,7 +388,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let change = writing(&[(
             "credentials.yaml",
-            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+            "credentials:\n  - name: cred-a\n    description: \"A\"\n    type: \"token\"\n    env_prefix: \"A\"\n",
         )]);
         store.commit(&change).expect("commits");
 
@@ -392,7 +419,7 @@ mod tests {
         let dir = dir_with_minimal_config();
         std::fs::write(
             dir.path().join("credentials.yaml"),
-            "cred-a:\n  name: \"A\"\n  type: \"token\"\n  env_prefix: \"A\"\n",
+            "credentials:\n  - name: cred-a\n    description: \"A\"\n    type: \"token\"\n    env_prefix: \"A\"\n",
         )
         .expect("write");
         let store = FsConfigStore::new(dir.path());
@@ -443,12 +470,12 @@ mod tests {
         let dir = dir_with_minimal_config();
         std::fs::write(
             dir.path().join("projects.yaml"),
-            "prj-a:\n  name: \"A\"\n  git_url: \"https://example.invalid/a.git\"\n",
+            "projects:\n  - name: prj-a\n    git_url: \"https://example.invalid/a.git\"\n",
         )
         .expect("write");
         std::fs::write(
-            dir.path().join("sources.yaml"),
-            "src-a:\n  name: \"A\"\n  project_id: \"prj-a\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+            dir.path().join("connectors.yaml"),
+            "connectors:\n  - name: src-a\n    project: \"prj-a\"\n    path: \"x.py\"\n",
         )
         .expect("write");
         let store = FsConfigStore::new(dir.path());
@@ -473,14 +500,14 @@ mod tests {
 
         let errors = store
             .load(&writing(&[(
-                "sources.yaml",
-                "src-a:\n  ttl_seconds: \"not a number\"\n",
+                "connectors.yaml",
+                "connectors:\n  - name: src-a\n    timeout_seconds: \"not a number\"\n",
             )]))
             .err()
             .expect("must be rejected");
 
         assert!(
-            errors.errors[0].starts_with("sources.yaml:"),
+            errors.errors[0].starts_with("connectors.yaml:"),
             "a parse error has to say which of eight files it is about: {:?}",
             errors.errors
         );
@@ -524,5 +551,40 @@ mod tests {
             "errors: {:?}",
             errors.errors
         );
+    }
+
+    #[test]
+    fn files_in_folders_are_written_and_pruned_folders_go_away() {
+        let dir = dir_with_minimal_config();
+        let store = FsConfigStore::new(dir.path());
+        let change = writing(&[(
+            "credentials/team-a/cred-a.yaml",
+            "credentials:\n  - name: cred-a\n    type: token\n    env_prefix: A\n",
+        )]);
+        let cfg = store.load(&change).expect("valid");
+        assert!(cfg.credentials.contains_key("cred-a"));
+        store.commit(&change).expect("commit");
+        assert!(dir.path().join("credentials/team-a/cred-a.yaml").exists());
+        let names: Vec<String> = store
+            .stat_all()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(
+            names.contains(&"credentials/team-a/cred-a.yaml".to_string()),
+            "{names:?}"
+        );
+
+        // A whole-directory push without it: the file goes, and so do the
+        // folders it leaves empty.
+        let config = std::fs::read_to_string(dir.path().join("config.yaml")).unwrap();
+        let prune = ConfigChange {
+            write: [("config.yaml".to_string(), config)].into_iter().collect(),
+            prune: true,
+            ..ConfigChange::default()
+        };
+        store.commit(&prune).expect("commit");
+        assert!(!dir.path().join("credentials").exists());
     }
 }

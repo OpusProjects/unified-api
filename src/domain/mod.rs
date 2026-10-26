@@ -1,5 +1,6 @@
 pub mod api_key;
 pub mod cache_entry;
+pub mod connector;
 pub mod credential;
 pub mod dataset;
 pub mod endpoint;

@@ -39,6 +39,7 @@ use ports::secrets::SecretsPort;
 // and build() finalizes the construction.
 pub struct AppBuilder {
     sources: HashMap<String, Source>,
+    connectors: HashMap<String, domain::connector::Connector>,
     views: HashMap<String, View>,
     enrichers: HashMap<String, Enricher>,
     endpoints: HashMap<String, OutputEndpoint>,
@@ -64,12 +65,15 @@ pub struct AppBuilder {
     refresh_max_concurrent: usize,
     shutdown_grace_seconds: u64,
     max_body_bytes: usize,
+    url: Option<String>,
+    name: Option<String>,
 }
 
 impl AppBuilder {
     pub fn new() -> Self {
         Self {
             sources: HashMap::new(),
+            connectors: HashMap::new(),
             views: HashMap::new(),
             enrichers: HashMap::new(),
             endpoints: HashMap::new(),
@@ -99,6 +103,8 @@ impl AppBuilder {
             shutdown_grace_seconds: 20,
             // axum's own default, mirrored like the three above
             max_body_bytes: 2 * 1024 * 1024,
+            url: None,
+            name: None,
         }
     }
 
@@ -111,6 +117,13 @@ impl AppBuilder {
 
     pub fn sources(mut self, sources: HashMap<String, Source>) -> Self {
         self.sources = sources;
+        self
+    }
+
+    // The connector items, for the /connectors listing. Sources built in code
+    // already carry what their connector says; this is only what is shown.
+    pub fn connectors(mut self, connectors: HashMap<String, domain::connector::Connector>) -> Self {
+        self.connectors = connectors;
         self
     }
 
@@ -176,6 +189,7 @@ impl AppBuilder {
     // boot is not a cost worth a partially-moved struct.
     pub fn from_config(mut self, cfg: &config::AppConfig) -> Self {
         self.sources = cfg.sources.clone();
+        self.connectors = cfg.connectors.clone();
         self.views = cfg.views.clone();
         self.enrichers = cfg.enrichers.clone();
         self.endpoints = cfg.endpoints.clone();
@@ -191,6 +205,14 @@ impl AppBuilder {
         self.refresh_max_concurrent = cfg.server.refresh_max_concurrent;
         self.shutdown_grace_seconds = cfg.server.shutdown_grace_seconds;
         self.max_body_bytes = cfg.server.max_body_bytes;
+        // As a reload reads it (application::config): one spelling, no
+        // credentials, so boot and reload agree.
+        self.url = cfg
+            .server
+            .url
+            .as_deref()
+            .map(|url| crate::domain::topology::without_userinfo(url.trim_end_matches('/')));
+        self.name = cfg.server.name.clone();
         // What this process is built from, kept whether or not the config
         // API is on: GET /settings shows the restart-only values in force.
         self.live_settings = Some(config::RestartOnlySettings::from_config(cfg));
@@ -214,6 +236,7 @@ impl AppBuilder {
     pub fn api_key(mut self, api_key: Option<String>) -> Self {
         if let Some(secret) = api_key {
             self.api_keys.push(ResolvedApiKey {
+                id: "default".to_string(),
                 name: "default".to_string(),
                 secret,
                 permissions: Permissions::Admin,
@@ -295,6 +318,7 @@ impl AppBuilder {
             secrets_swap: reloadable,
             config: std::sync::RwLock::new(Arc::new(RuntimeConfig {
                 sources: self.sources,
+                connectors: self.connectors,
                 credentials: self.credentials,
                 views: self.views,
                 enrichers: self.enrichers,
@@ -310,6 +334,8 @@ impl AppBuilder {
                 refresh_max_concurrent: self.refresh_max_concurrent,
                 ldap: self.ui.ldap.clone(),
                 ui_home: self.ui.home().to_string(),
+                url: self.url,
+                name: self.name,
             })),
             config_store: self.config_store,
             live_settings: std::sync::RwLock::new(self.live_settings),
@@ -320,6 +346,7 @@ impl AppBuilder {
             sessions: std::sync::Arc::new(crate::adapters::r#in::http::session::SessionStore::new()),
             directory: self.directory,
             peers: self.peers,
+            federation: Arc::new(crate::application::topology::FederationStore::new()),
             sync_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),
             advertised_scopes: Arc::new(domain::source::AdvertisedScopeRegistry::new()),
             enrich_health: Arc::new(domain::sync_health::SyncHealthRegistry::new()),

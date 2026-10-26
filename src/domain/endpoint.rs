@@ -6,10 +6,15 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OutputEndpoint {
+    // The display label: the item's `description`, falling back to its
+    // identity (see config::take). The identity is the map key — what
+    // references, URLs and cache keys use.
     pub name: String,
 
-    // Which sources feed this endpoint
-    #[serde(default)]
+    // Which sources feed this endpoint (`sources:` in the item file — every
+    // reference dropped its `_id` suffix in 0.35; the Rust field kept its
+    // name, which is also the one the API answers with)
+    #[serde(default, rename = "sources")]
     pub source_ids: Vec<String>,
 
     // How the datasets become the response. Exactly one of these is set
@@ -29,7 +34,7 @@ pub struct OutputEndpoint {
 
     // Project whose checkout contains the script (script_path only; None = the
     // path is a plain filesystem path, absolute or relative to the working dir)
-    #[serde(default)]
+    #[serde(default, rename = "project")]
     pub project_id: Option<String>,
 
     // Free config for the transformer (builtin or script)

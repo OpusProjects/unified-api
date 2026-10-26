@@ -468,7 +468,7 @@ fn action_bar(ctx: &PageContext, template: &str, value: &Value) -> String {
         let target = format!("{}{}", ctx.path, action.suffix);
         let label = match (action.method, action.suffix.as_str()) {
             ("DELETE", "") => "Evict cache".to_string(),
-            ("POST", "/sync") => "Sync now".to_string(),
+            ("POST", "/sync") => "Sync".to_string(),
             ("POST", suffix) => {
                 // Title-cased by character, not by byte: `name[..1]` panics on
                 // an empty suffix and on any multi-byte first character, and
@@ -991,7 +991,7 @@ mod tests {
             }
         });
         let html = page(&c, &source);
-        assert!(html.contains("Sync now"));
+        assert!(html.contains(">Sync<"));
         assert!(html.contains("Evict cache"));
     }
 

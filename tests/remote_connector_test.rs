@@ -79,13 +79,14 @@ async fn spawn_open_edge() -> String {
 fn remote_source(url: &str) -> Source {
     Source {
         name: "Datacenter A".to_string(),
-        project_id: "prj-unused".to_string(),
+        project_id: Some("prj-unused".to_string()),
         script_path: "src-edge".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "remote".to_string(),
         connector_type: ConnectorType::Remote,
         sync_mode: Default::default(),
         credential_ids: vec![],
@@ -340,13 +341,14 @@ async fn central_cache_entry_keeps_the_origin_age() {
 
     let source = Source {
         name: "Datacenter A".to_string(),
-        project_id: "prj-unused".to_string(),
+        project_id: Some("prj-unused".to_string()),
         script_path: "src-edge".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "remote".to_string(),
         connector_type: ConnectorType::Remote,
         sync_mode: Default::default(),
         credential_ids: vec![],
@@ -558,13 +560,14 @@ async fn spawn_gathering_edge() -> (String, std::sync::Arc<unified_api::AppState
 
     let edge_source = Source {
         name: "Edge inventory".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: "tests/adapters/out/connectors/inventory.py".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: Default::default(),
         credential_ids: vec![],

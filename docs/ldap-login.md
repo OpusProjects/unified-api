@@ -3,7 +3,7 @@
 The browsable UI's login form can take a directory account (LDAP or Active
 Directory) as well as an API key. People log in with the username and password
 they already have; what they may touch is decided by **access rules in this
-service's configuration**, in the same vocabulary `api_keys.yaml` uses.
+service's configuration**, in the same vocabulary the `api_keys` items use.
 
 The directory says who someone is and which groups they belong to. It never
 decides access by itself: a new group in AD grants nothing until a rule names
@@ -21,7 +21,7 @@ server:
     home: "/"                               # where a sign-in lands; see "Sessions"
     ldap:
       url: "ldaps://ldap.example.com:636"   # or ldap://...:389 with starttls: true
-      bind_credential: cred-ldap            # credentials.yaml: username = bind DN, password
+      bind_credential: cred-ldap            # a credentials item: username = bind DN, password
       search_base: "OU=Users,DC=example,DC=com"
       # user_filter: "(sAMAccountName={username})"   # the default (Active Directory)
       # group_attribute: memberOf                     # the default
@@ -39,14 +39,16 @@ server:
           endpoints: [ep-ansible-vmware]
 ```
 
-The service account comes from `credentials.yaml` like any connector
-credential, so it can live in env vars, a file or Vault:
+The service account is a `credentials` item like any source's credential, so it
+can live in env vars, a file or Vault:
 
 ```yaml
-cred-ldap:
-  name: "LDAP service account"
-  type: username_password
-  vault_path: unified-api/ldap      # or env_prefix / secret_file
+# credentials/cred-ldap.yaml
+credentials:
+  - name: cred-ldap
+    description: "LDAP service account"
+    type: username_password
+    vault_path: unified-api/ldap      # or env_prefix / secret_file
 ```
 
 Its `username` is the **bind DN** (`CN=svc-unified,OU=Service,DC=example,DC=com`)
@@ -72,7 +74,7 @@ attribute.
 
 - `ldap://` without `starttls: true`, since every password would cross the
   network in clear text;
-- a `bind_credential` that is not in `credentials.yaml`;
+- a `bind_credential` that names no `credentials` item;
 - a `user_filter` without `{username}`;
 - an empty `access` list, or a rule naming no groups and no users;
 - a rule naming a source or endpoint that does not exist;

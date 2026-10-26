@@ -1,0 +1,17 @@
+---
+# A source says WHICH instance of a system: its connector, its credentials, its
+# config, when to sync and how long the data stays fresh. `name` is its
+# identity — the id in every URL and reference; `description` is the label.
+sources:
+  - name: src-section9
+    description: "Section 9 Inventory"
+    connector: "sample-inventory"
+    credentials: ["cred-section9-api"]
+    # schedule: "0 */1 * * *"    # cron (UTC) instead of the interval — pick one
+    sync_interval_seconds: 60
+    ttl_seconds: 3600
+    ttl_overrides:
+      groups:
+        production: 900
+      hosts:
+        motoko.section9.net: 300

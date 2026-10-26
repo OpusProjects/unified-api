@@ -44,7 +44,7 @@ fn config_dir(key_env: &str) -> tempfile::TempDir {
 
 fn api_keys_yaml(key_env: &str) -> String {
     format!(
-        "key-pipeline:\n  name: \"pipeline\"\n  env: \"{}\"\n  role: \"admin\"\n",
+        "api_keys:\n  - name: key-pipeline\n    description: \"pipeline\"\n    env: \"{}\"\n    role: \"admin\"\n",
         key_env
     )
 }
@@ -149,9 +149,10 @@ fn json(body: &str) -> serde_json::Value {
 }
 
 // A source that references a project declared in the same push.
-const PROJECTS: &str =
-    "prj-inv:\n  name: \"Inventory\"\n  git_url: \"https://example.invalid/i.git\"\n";
-const SOURCES: &str = "src-dc4:\n  name: \"DC4\"\n  project_id: \"prj-inv\"\n  script_path: \"inv.py\"\n  ttl_seconds: 300\n";
+const PROJECTS: &str = "projects:\n  - name: prj-inv\n    description: \"Inventory\"\n    git_url: \"https://example.invalid/i.git\"\n";
+// A source and the connector it names, in one file: a file may hold several
+// sections.
+const SOURCES: &str = "connectors:\n  - name: inv\n    project: \"prj-inv\"\n    path: \"inv.py\"\nsources:\n  - name: src-dc4\n    description: \"DC4\"\n    connector: inv\n    ttl_seconds: 300\n";
 
 // =========================================================================
 // It is off unless it is turned on
@@ -186,6 +187,7 @@ async fn a_restricted_key_cannot_read_the_configuration() {
     let (app, _) = unified_api::AppBuilder::new()
         .from_config(&cfg)
         .api_keys(vec![ResolvedApiKey {
+            id: "consumer".to_string(),
             name: "consumer".to_string(),
             secret: KEY.to_string(),
             permissions: Permissions::Scoped {
@@ -226,16 +228,12 @@ async fn the_inventory_names_what_is_there_and_what_is_not() {
         .collect();
     assert_eq!(
         names,
-        vec!["config.yaml", "projects.yaml", "api_keys.yaml"],
-        "listed in the order the loader reads them"
+        vec!["api_keys.yaml", "config.yaml", "projects.yaml"],
+        "listed by path, the order the loader reads them"
     );
-    assert!(
-        inventory["missing"]
-            .as_array()
-            .expect("missing")
-            .iter()
-            .any(|n| n == "sources.yaml")
-    );
+    // Only config.yaml is ever required; every other file is an item file
+    // that is there or not.
+    assert_eq!(inventory["missing"], serde_json::json!([]));
     assert_eq!(inventory["valid"], true);
     assert_eq!(inventory["reload_pending"], false);
     assert_eq!(inventory["generation"], 0);
@@ -272,13 +270,62 @@ async fn a_file_is_served_verbatim_and_revalidates_with_its_etag() {
 }
 
 #[tokio::test]
-async fn a_name_the_loader_does_not_read_is_a_404_naming_the_ones_it_does() {
+async fn a_path_the_loader_would_never_read_is_a_404_naming_the_rule() {
     let dir = config_dir("UNIFIED_API_TEST_KEY_UNKNOWN");
     let (app, _) = app_at(dir.path());
 
-    let (status, body) = send(&app, get("/api/v1/config/secrets.yaml")).await;
+    for bad in ["secrets.json", ".hidden.yaml", "a/.git/x.yaml"] {
+        let (status, body) = send(&app, get(&format!("/api/v1/config/{bad}"))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+        assert!(body.contains("not a configuration path"), "body: {}", body);
+    }
+    // A valid path that is simply not there yet.
+    let (status, body) = send(&app, get("/api/v1/config/sources/x.yaml")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(body.contains("credentials.yaml"), "body: {}", body);
+    assert!(body.contains("not present"), "body: {}", body);
+}
+
+// A file in a folder is read, written and deleted by its path, slashes
+// included, and the folders a delete leaves empty go with it.
+#[tokio::test]
+async fn a_file_in_a_folder_is_addressed_by_its_path() {
+    let dir = config_dir("UNIFIED_API_TEST_KEY_NESTED");
+    write(dir.path(), "projects.yaml", PROJECTS);
+    let (app, state) = app_at(dir.path());
+
+    let (status, body) = send(
+        &app,
+        put_yaml(
+            "/api/v1/config/sources/dc4/src-dc4.yaml?reload=true",
+            SOURCES,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        read(dir.path(), "sources/dc4/src-dc4.yaml").as_deref(),
+        Some(SOURCES)
+    );
+    assert!(state.config().sources.contains_key("src-dc4"));
+    assert!(state.config().connectors.contains_key("inv"));
+
+    let (status, body) = send(&app, get("/api/v1/config/sources/dc4/src-dc4.yaml")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, SOURCES);
+
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/config/sources/dc4/src-dc4.yaml?reload=true")
+        .header("x-api-key", KEY)
+        .body(axum::body::Body::empty())
+        .expect("request");
+    let (status, body) = send(&app, delete).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !dir.path().join("sources").exists(),
+        "the emptied folders go too"
+    );
+    assert!(state.config().sources.is_empty());
 }
 
 #[tokio::test]
@@ -306,8 +353,8 @@ async fn validation_reports_every_problem_at_once_and_writes_nothing() {
 
     let body = serde_json::json!({
         "files": {
-            "sources.yaml": "src-a:\n  name: \"A\"\n  project_id: \"prj-ghost\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
-            "enrichers.yaml": "enr-a:\n  name: \"A\"\n  target_id: \"src-nowhere\"\n  script_path: \"e.py\"\n"
+            "sources.yaml": "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-a\n    project: \"prj-ghost\"\n    path: \"x.py\"\n",
+            "enrichers.yaml": "enrichers:\n  - name: enr-a\n    description: \"A\"\n    target: \"src-nowhere\"\n    script_path: \"e.py\"\n"
         }
     });
     let request = Request::builder()
@@ -344,7 +391,7 @@ async fn a_write_that_would_not_load_is_refused_and_the_directory_is_untouched()
         &app,
         put_yaml(
             "/api/v1/config/sources.yaml",
-            "src-a:\n  name: \"A\"\n  project_id: \"prj-ghost\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+            "connectors:\n  - name: c-a\n    project: \"prj-ghost\"\n    path: \"x.py\"\nsources:\n  - name: src-a\n    connector: c-a\n    ttl_seconds: 60\n",
         ),
     )
     .await;
@@ -569,8 +616,7 @@ async fn a_key_whose_env_var_is_missing_fails_the_whole_operation() {
     let dir = config_dir("UNIFIED_API_TEST_KEY_ABSENT");
     let (app, _) = app_at(dir.path());
 
-    let keys =
-        "key-new:\n  name: \"new\"\n  env: \"UNIFIED_API_TEST_ABSENT_VAR\"\n  role: \"admin\"\n";
+    let keys = "api_keys:\n  - name: key-new\n    description: \"new\"\n    env: \"UNIFIED_API_TEST_ABSENT_VAR\"\n    role: \"admin\"\n";
     let (status, body) = send(
         &app,
         put_yaml("/api/v1/config/api_keys.yaml?reload=true", keys),
@@ -597,7 +643,7 @@ async fn a_reloaded_key_file_is_in_force_on_the_next_request() {
 
     // SAFETY: a name unique to this test, so no other test observes it.
     unsafe { std::env::set_var("UNIFIED_API_TEST_ROTATED_KEY", "rotated-secret") };
-    let keys = "key-rotated:\n  name: \"rotated\"\n  env: \"UNIFIED_API_TEST_ROTATED_KEY\"\n  role: \"admin\"\n";
+    let keys = "api_keys:\n  - name: key-rotated\n    description: \"rotated\"\n    env: \"UNIFIED_API_TEST_ROTATED_KEY\"\n    role: \"admin\"\n";
 
     let (status, body) = send(
         &app,

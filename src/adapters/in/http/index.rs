@@ -78,6 +78,9 @@ pub struct ApiIndex {
     /// Admin-only route; absent for a restricted key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projects: Option<&'static str>,
+    /// Admin-only route; absent for a restricted key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connectors: Option<&'static str>,
     /// Admin-only, and only when config_api.enabled is on
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<&'static str>,
@@ -119,6 +122,7 @@ pub async fn api_index(
         enrichers: "/api/v1/enrichers",
         endpoints: "/api/v1/endpoints",
         projects: admin.then_some("/api/v1/projects"),
+        connectors: admin.then_some("/api/v1/connectors"),
         // Same condition the config handlers enforce: the routes exist in the
         // router either way, and answer 403 when no store is configured.
         config: (admin && state.config_store.is_some()).then_some("/api/v1/config"),

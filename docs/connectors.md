@@ -2,13 +2,15 @@
 
 Everything pluggable in Unified API is an **executable** speaking JSON. Any language
 works — the shipped examples under `tests/` are Python. This page defines the
-three contracts.
+three contracts, and the connector item that says how a source reaches its system.
 
 - [The Dataset shape](#the-dataset-shape)
-- [Source connectors (`connector_type: script`)](#source-connectors-connector_type-script)
-- [Source connectors (`connector_type: ssh`)](#source-connectors-connector_type-ssh)
-- [Static inventory sources (`connector_type: static_inventory`)](#static-inventory-sources-connector_type-static_inventory)
-- [Remote sources — federation (`connector_type: remote`)](#remote-sources--federation-connector_type-remote)
+- [Connectors and sources](#connectors-and-sources)
+- [Script connectors (`type: script`)](#script-connectors-type-script)
+- [SSH connectors (`type: ssh`)](#ssh-connectors-type-ssh)
+- [Static inventory sources (`connector: static_inventory`)](#static-inventory-sources-connector-static_inventory)
+- [Remote sources — federation (`connector: remote`)](#remote-sources--federation-connector-remote)
+- [Inspecting connectors (`/api/v1/connectors`)](#inspecting-connectors-apiv1connectors)
 - [Enrichers](#enrichers)
 - [Output endpoints](#output-endpoints)
 - [Testing your script](#testing-your-script)
@@ -40,20 +42,91 @@ only meaningful in enricher output.
 
 ---
 
-## Source connectors (`connector_type: script`)
+## Connectors and sources
+
+A **connector** says HOW to talk to a kind of system: which script, from which
+project, with which arguments, and how to read what it prints. A **source** says
+WHICH instance of that system — its credentials, its `config`, its schedule and
+TTLs — and names its connector. Ten Device42 tenants are ten sources and one
+connector; before connectors existed, the script path, its arguments and its
+output format were copied into each of the ten, and drifted apart one edit at a
+time.
+
+```yaml
+# connectors/d42.yaml
+connectors:
+  - name: d42
+    description: "Device42 inventory script"
+    type: "script"                      # script (default) | ssh
+    project: "prj-inventory"            # the checkout `path` resolves in
+    path: "dynamic/d42/inventory.py"
+    script_args: ["--list"]
+    output_format: "ansible"
+    # timeout_seconds: 300              # default; a source may override it
+
+# sources/src-d42-acme.yaml
+sources:
+  - name: src-d42-acme
+    description: "Device42 Acme"
+    connector: "d42"
+    credentials: ["cred-d42-acme"]
+    sync_interval_seconds: 300
+    ttl_seconds: 3600
+    config:
+      tenant: "acme"
+```
+
+| Connector field | Meaning |
+|---|---|
+| `type` | `script` (default) or `ssh` |
+| `project` | The project whose checkout holds the script. Required for a script connector whose `path` is relative; refused on ssh, whose `path` runs on the remote host |
+| `path` | script: the file to run, inside the project checkout (or absolute). ssh: the remote command for `gather_mode: script`, or a label such as `gather_facts` for the built-in gather modes |
+| `script_args` | CLI arguments, verbatim. On ssh, appended to the remote command in `script` gather mode |
+| `host_args` | Script only: CLI arguments for a host-scoped sync, replacing `script_args` (see below) |
+| `output_format` | Script only: `native` (default) or `ansible` (see below) |
+| `timeout_seconds` | Bound on one sync (default 300). A source may set its own to override it — the tenant ten times bigger than the others |
+
+Anything that describes the script or the protocol is the connector's; anything
+about one instance — credentials, `config`, cadence, TTLs, and cache policy such
+as `sync_mode` and `host_sync_updates_group_vars` — stays on the source. The
+full split is in [configuration](configuration.md#source-or-connector).
+
+Settings that look active and are not are refused at startup rather than
+ignored: `project`, `host_args` or `output_format` on an ssh connector, a
+relative script `path` without a `project`, and `project` / `path` on any source
+that is not `static_inventory`.
+
+Two connectors are **built in** and need no item, because there is nothing about
+their HOW to configure — the protocol is fixed, and the WHERE is per source:
+
+| `connector:` | What it reads | The source sets |
+|---|---|---|
+| `remote` | Another unified-api instance | `config.url` and `config.source` (the source id there) |
+| `static_inventory` | An Ansible YAML inventory in a project checkout | `project` and `path` |
+
+Their names are reserved: a connector item called `remote` or `static_inventory`
+fails startup. `project` + `path` mean the same thing everywhere — a file inside
+that project's checkout — whether it is a connector's script or a static source's
+inventory.
+
+---
+
+## Script connectors (`type: script`)
 
 The connector script is executed on every sync and must print a Dataset to stdout.
 
-**Input (command line):** the source's `script_args` list is passed verbatim as
+**Input (command line):** the connector's `script_args` list is passed verbatim as
 CLI arguments (no shell involved, so no quoting concerns). This is how scripts
 that implement the standard Ansible dynamic inventory interface get their
 `--list`:
 
 ```yaml
-src-d42:
-  script_path: "d42_inventory.py"
-  script_args: ["--list"]
-  output_format: "ansible"   # see below — such scripts emit Ansible JSON
+connectors:
+  - name: d42
+    project: "prj-inventory"
+    path: "d42_inventory.py"
+    script_args: ["--list"]
+    output_format: "ansible"   # see below — such scripts emit Ansible JSON
 ```
 
 Without `script_args` the script is invoked bare, exactly as before.
@@ -75,8 +148,8 @@ Anything else a script needs must travel in its `config` map or a credential.
 **Output:** the full Dataset JSON on stdout. Exit non-zero to fail the sync; stderr
 is captured into the error message.
 
-**Time limit:** the script must finish within the source's `timeout_seconds`
-(default 300). A slower run is aborted and the sync fails with
+**Time limit:** the script must finish within the source's `timeout_seconds`, or
+the connector's when the source sets none (default 300). A slower run is aborted and the sync fails with
 `sync timed out after Ns` — a hung script never blocks the scheduler or an API call.
 The process is **killed**, not merely abandoned, so a script that wedges does not
 accumulate a live copy per sync interval. Write scripts to be interruptible at any
@@ -103,14 +176,16 @@ single host or group without paying for a full inventory pull.
 
 `scope`/`target` reach the script inside `SOURCE_CONFIG`, which is a convention
 of ours. Inventory scripts have their own: Ansible defines `--list` and
-`--host <hostname>`. A source can name the arguments a **host-scoped** sync
+`--host <hostname>`. A connector can name the arguments a **host-scoped** sync
 should use, and they replace `script_args` for that run:
 
 ```yaml
-src-d42:
-  script_path: "connectors/d42_inventory.py"
-  script_args: ["--list"]
-  host_args: ["--host-with-groups", "{target}"]
+connectors:
+  - name: d42
+    project: "prj-inventory"
+    path: "connectors/d42_inventory.py"
+    script_args: ["--list"]
+    host_args: ["--host-with-groups", "{target}"]
 ```
 
 `{target}` is substituted with the requested hostnames, comma-joined — the same
@@ -130,8 +205,8 @@ per-host calls vestigial, Ansible's own `--host` was usually implemented as
 "fetch everything, then filter" — but a script that CAN fetch one host should be
 asked for one host.
 
-`host_args` is refused at startup on any source that is not a script source: the
-other connectors are not spawned with CLI arguments at all.
+`host_args` is refused at startup on an ssh connector, and the built-ins have no
+place for it: none of them is spawned with CLI arguments at all.
 
 #### What a host-scoped sync writes
 
@@ -188,11 +263,18 @@ print(json.dumps({"hostvars": inventory.hostvars, "groups": inventory.groups}))
 ```
 
 ```yaml
-src-d42:
-  script_path: "connectors/d42_inventory.py"
-  script_args: ["--list"]
-  host_args: ["--host-with-groups", "{target}"]
-  host_sync_updates_group_vars: true
+connectors:
+  - name: d42
+    project: "prj-inventory"
+    path: "connectors/d42_inventory.py"
+    script_args: ["--list"]
+    host_args: ["--host-with-groups", "{target}"]
+
+sources:
+  - name: src-d42
+    connector: "d42"
+    host_sync_updates_group_vars: true   # cache policy: the source's, not the script's
+    ttl_seconds: 3600
 ```
 
 The pay-off is in what the granular call does NOT do. Registering a new machine
@@ -207,15 +289,17 @@ script.
 
 Scripts written for Ansible print a different JSON shape than the Dataset:
 hostvars under `_meta.hostvars` and groups as top-level keys. With
-`output_format: "ansible"` on the source, that output is converted to a
+`output_format: "ansible"` on the connector, that output is converted to a
 Dataset on the fly — any existing dynamic inventory script works unmodified
 (pair it with `script_args: ["--list"]`):
 
 ```yaml
-src-d42:
-  script_path: "d42_inventory.py"
-  script_args: ["--list"]
-  output_format: "ansible"
+connectors:
+  - name: d42
+    project: "prj-inventory"
+    path: "d42_inventory.py"
+    script_args: ["--list"]
+    output_format: "ansible"
 ```
 
 Conversion rules:
@@ -231,7 +315,7 @@ Conversion rules:
 - Malformed input is an **error that fails the sync**, naming the offending
   group — never a silent skip.
 
-**Misconfiguration safety net:** if a source left on the default
+**Misconfiguration safety net:** if a connector left on the default
 `output_format: native` parses to 0 hosts and 0 groups but the output contains
 `_meta`, the sync logs a WARN suggesting `output_format: "ansible"`. (Both
 Dataset fields are optional in JSON, so Ansible output "parses fine" as an
@@ -239,10 +323,35 @@ empty inventory — that silent zero is the failure mode this flag exists for.)
 
 ---
 
-## Source connectors (`connector_type: ssh`)
+## SSH connectors (`type: ssh`)
 
 The native SSH connector needs no script on the API host — it connects to the fleet
-in parallel and builds the Dataset from what it finds.
+in parallel and builds the Dataset from what it finds. The connector item holds
+only what runs remotely; which hosts, as whom, and how is the source's:
+
+```yaml
+# connectors/ssh-facts.yaml
+connectors:
+  - name: ssh-facts
+    description: "SSH fact gathering"
+    type: "ssh"
+    path: "gather_facts"        # a label in facts mode; the remote command in script mode
+
+# sources/src-ssh-dc1.yaml
+sources:
+  - name: src-ssh-dc1
+    connector: "ssh-facts"
+    credentials: ["cred-ssh-infra"]
+    sync_interval_seconds: 300
+    ttl_seconds: 600
+    config:
+      hosts: "host1.example.com,host2.example.com"
+      gather_mode: "facts"
+```
+
+`path` is never resolved in a checkout — nothing runs locally — which is why an
+ssh connector refuses `project`, and refuses `host_args` and `output_format` too:
+it builds its own command per host and its own dataset.
 
 **Source `config` keys:**
 
@@ -252,7 +361,7 @@ in parallel and builds the Dataset from what it finds.
 | `port` | `22` | SSH port |
 | `concurrency` | `50` | Max parallel connections (tokio semaphore) |
 | `ssh_connect_timeout_seconds` | `30` | Per-host connection/exec timeout |
-| `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs `script_path` remotely |
+| `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs the connector's `path` remotely |
 | `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
 | `ssh_legacy_algorithms` | `false` | `"true"` additionally offers SHA-1 KEX/MACs (appended last, modern servers still pick modern ones) for OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` |
 | `ssh_known_hosts` | — | Path to an OpenSSH `known_hosts` file. When set, every server key is checked against it **before authentication**: an unknown or mismatched host is refused (it lands in `unreachable`, so its last known data is kept), and the refusal logs both fingerprints. A server presenting an OpenSSH host *certificate* is refused too — verification is defined over plain host keys. Unset = any server key is accepted, and every sync warns about it |
@@ -275,9 +384,9 @@ without negotiation, the same key "mysteriously" works with the OpenSSH
 client but not through the API. ed25519/ecdsa keys are unaffected (no hash
 to negotiate).
 
-In `script` mode, `script_args` are appended to the remote command
-(`script_path arg1 arg2 ...`); in `facts` mode they are ignored (the remote
-command is fixed).
+In `script` mode, the connector's `script_args` are appended to the remote command
+(`path arg1 arg2 ...`); in `facts` mode they are ignored (the remote command is
+fixed).
 
 ### Dynamic host lists (`hosts_from_source`)
 
@@ -286,19 +395,20 @@ Instead of a static `config.hosts`, an SSH source can take its hosts from
 source says WHAT exists, SSH says HOW it is doing":
 
 ```yaml
-src-fleet-facts:
-  connector_type: "ssh"
-  credential_ids: ["cred-fleet-ssh"]
-  sync_interval_seconds: 300
-  ttl_seconds: 600
-  hosts_from_source:
-    source: "src-netbox"              # any source: script, static, even ssh
-    match_pattern:                    # absent = every host in the dataset
-      groups: ["linux", "proxmox_vms"]
-      hosts: ["extra01.example.com"]
-    connect_via: "ansible_host_then_hostname"
-  config:
-    gather_mode: "facts"
+sources:
+  - name: src-fleet-facts
+    connector: "ssh-facts"
+    credentials: ["cred-fleet-ssh"]
+    sync_interval_seconds: 300
+    ttl_seconds: 600
+    hosts_from_source:
+      source: "src-netbox"              # any source: script, static, even ssh
+      match_pattern:                    # absent = every host in the dataset
+        groups: ["linux", "proxmox_vms"]
+        hosts: ["extra01.example.com"]
+      connect_via: "ansible_host_then_hostname"
+    config:
+      gather_mode: "facts"
 ```
 
 Semantics:
@@ -331,15 +441,15 @@ others — it just occupies one of the `concurrency` slots until its timeout
 (up to 2× `ssh_connect_timeout_seconds` with a fallback strategy).
 
 > `ssh_connect_timeout_seconds` bounds a **single host** connection; the
-> source-level `timeout_seconds` (default 300) separately bounds the **whole
-> sync** across all hosts. They are different knobs.
+> connector's `timeout_seconds` (default 300, overridable per source) separately
+> bounds the **whole sync** across all hosts. They are different knobs.
 
 **Credentials:** expects `username` (or `ssh_username`) and an `ssh_key_path` /
 `key_path` from `file_keys` — see [configuration](configuration.md).
 
 ---
 
-## Static inventory sources (`connector_type: static_inventory`)
+## Static inventory sources (`connector: static_inventory`)
 
 For classic Ansible **static YAML inventories** — an `inventory.yaml` with the
 `all/children/hosts` tree plus optional `group_vars/` and `host_vars/`
@@ -358,20 +468,22 @@ accumulate, and a host inherits the vars of every ancestry its group is declared
 under. Naming the same host in both declarations lists it once.
 
 ```yaml
-src-inventory-linux:
-  name: "Linux static inventory"
-  connector_type: "static_inventory"
-  project_id: "prj-inventories"        # git repo holding the inventory
-  script_path: "inventory.yaml"        # path to the file inside the checkout
-  sync_interval_seconds: 300
-  ttl_seconds: 600
+sources:
+  - name: src-inventory-linux
+    description: "Linux static inventory"
+    connector: "static_inventory"        # built in: no connector item
+    project: "prj-inventories"           # git repo holding the inventory
+    path: "inventory.yaml"               # the file inside the checkout
+    sync_interval_seconds: 300
+    ttl_seconds: 600
 ```
 
-`script_path` doubles as "path to the inventory file"; with a git project it
-resolves inside the checkout, so the project's periodic pull (or the
-on-demand `POST /api/v1/projects/{id}/sync`) is what brings in new data — the
-next source sync reads the updated files. `script_args`, `output_format`,
-credentials and `SOURCE_CONFIG` don't apply to this connector.
+A built-in connector, so the source names the file itself: `project` + `path`, the
+same pair a script connector uses for its script. Both are required. The path
+resolves inside the checkout, so the project's periodic pull (or the on-demand
+`POST /api/v1/projects/{id}/sync`) is what brings in new data — the next source
+sync reads the updated files. Arguments, output formats, credentials and
+`SOURCE_CONFIG` don't apply to this connector.
 
 **What lands where:**
 
@@ -413,7 +525,7 @@ value whose type matters.
 
 ---
 
-## Remote sources — federation (`connector_type: remote`)
+## Remote sources — federation (`connector: remote`)
 
 Another unified-api instance is the source. This is how multi-datacenter
 setups compose: one instance per DC does the local work (SSH with LAN
@@ -421,29 +533,33 @@ latency, local credentials, local firewall rules), and a central instance
 aggregates them — consumers only ever talk to the central.
 
 ```yaml
-# on the central
-src-dc1:
-  name: "Datacenter A"
-  connector_type: "remote"
-  project_id: "prj-unused"          # required by schema; unused here
-  script_path: "src-ssh"            # the source id ON THE REMOTE instance
-  credential_ids: ["cred-edge-dc1"] # token credential = the remote API key
-  sync_interval_seconds: 120
-  ttl_seconds: 600
-  config:
-    url: "https://unified-api-dc1.example.com"
-    # http_timeout_seconds: "30"    # default 30
-    # insecure_tls: "true"          # self-signed remotes; opt-in, never default
+# on the central: sources/src-dc1.yaml
+sources:
+  - name: src-dc1
+    description: "Datacenter A"
+    connector: "remote"                # built in: no connector item
+    credentials: ["cred-edge-dc1"]     # token credential = the remote API key
+    sync_interval_seconds: 120
+    ttl_seconds: 600
+    config:
+      url: "https://unified-api-dc1.example.com"
+      source: "src-ssh"                # the source id ON THE REMOTE instance
+      # http_timeout_seconds: "30"     # default 30
+      # insecure_tls: "true"           # self-signed remotes; opt-in, never default
 ```
+
+Both `config.url` and `config.source` are required, and `project` / `path` are
+refused: nothing runs from a checkout.
 
 On the edge, give the central a **restricted API key** (least privilege):
 
 ```yaml
-# api_keys.yaml on the edge
-key-central:
-  name: "Central aggregator"
-  env: "UNIFIED_API_KEY_CENTRAL"
-  sources: ["src-ssh"]
+# on the edge: api_keys/key-central.yaml
+api_keys:
+  - name: key-central
+    description: "Central aggregator"
+    env: "UNIFIED_API_KEY_CENTRAL"
+    sources: ["src-ssh"]
 ```
 
 **How it works:** `GET /dataset` on the remote returns exactly the Dataset a
@@ -474,6 +590,48 @@ keeps serving the last good dataset from its cache (stale beats nothing).
 Centrals can themselves be federated by another instance — regions → global
 with no extra machinery. Combine with an output endpoint listing all the DC
 sources to serve one merged world view.
+
+---
+
+## Inspecting connectors (`/api/v1/connectors`)
+
+Which connectors exist, what each one runs, which sources use it and how those
+sources are doing — admin-only, like projects, since a connector names the
+script, its project and its arguments for every source of a system:
+
+```bash
+curl -s localhost:8182/api/v1/connectors -H "X-API-Key: $ADMIN_KEY"
+curl -s localhost:8182/api/v1/connectors/d42 -H "X-API-Key: $ADMIN_KEY"
+```
+
+```json
+{
+  "connector_id": "d42",
+  "name": "Device42 inventory script",
+  "connector_type": "script",
+  "built_in": false,
+  "project_id": "prj-inventory",
+  "path": "dynamic/d42/inventory.py",
+  "script_args": ["--list"],
+  "host_args": [],
+  "output_format": "ansible",
+  "timeout_seconds": 300,
+  "used_by": [
+    {"source_id": "src-d42-a", "name": "Device42 tenant A", "timeout_seconds": 300, "failing": false, "synced": true},
+    {"source_id": "src-d42-b", "name": "Device42 tenant B", "timeout_seconds": 900, "failing": true, "synced": true}
+  ],
+  "health": {"sources": 2, "healthy": 1, "failing": 1, "never_synced": 0}
+}
+```
+
+The list holds the connector items first, then the two built-ins
+(`built_in: true`, `connector_type` `remote` / `static_inventory`, null
+`project_id`, `path`, `output_format` and `timeout_seconds`), so every source's
+`connector:` resolves to a row. `used_by[].timeout_seconds` is the bound that
+source actually syncs under — its override, or the connector's — and `health`
+counts its sources' sync health at a glance: one broken script shows up as a
+connector whose sources all fail at once. `output_format` is null for ssh.
+`GET /api/v1/sources/{id}` names the connector under `gathering.connector`.
 
 ---
 
@@ -508,7 +666,7 @@ script is running are not lost (the enricher only overwrites hosts it returns).
 > **Return the host's full variable map, not only your own keys.** A script
 > enricher's `hostvars` entry *replaces* the host's map rather than patching it key
 > by key, so any key you omit is dropped. The dataset arrives on stdin precisely so
-> you can carry the rest through. (A *declarative* enricher — `source_id` +
+> you can carry the rest through. (A *declarative* enricher — `source` +
 > `fields` — has no such constraint: it writes only the fields it owns.)
 
 ---
@@ -541,8 +699,9 @@ clear error when exceeded.
 
 ## Testing your script
 
-Wire it into `config/sources.yaml` (or enrichers/endpoints) pointing at your file,
-`cargo run`, then drive it through the API:
+Wire it into a connector item pointing at your file (`config/connectors/mine.yaml`)
+and a source naming it (`config/sources/src-mine.yaml`) — or an enricher or
+endpoint item — then `cargo run` and drive it through the API:
 
 ```bash
 curl -X POST localhost:8182/api/v1/sources/src-mine/sync

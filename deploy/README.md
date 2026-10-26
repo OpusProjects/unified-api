@@ -11,8 +11,16 @@ apply files instead of copy-pasting from prose, and so CI can validate them
   PVC; `kubectl apply -k deploy/k8s/`. You supply the named ConfigMap and
   Secrets:
 
+A ConfigMap is flat (`--from-file` does not recurse, and a key cannot hold a `/`), while the
+configuration is item files in folders (`sources/`, `connectors/`...). The loader does not care
+where a file sits — the top-level key says what it holds — so flatten the tree into the keys, as
+below, or give each key a `path:` under `items:` in the volume to rebuild the folders. A
+directory that changes often is better pushed with the configuration API onto a PVC.
+
 ```bash
-kubectl create configmap unified-api-config --from-file=config/
+# config/sources/src-a.yaml becomes the key sources-src-a.yaml
+kubectl create configmap unified-api-config $(cd config && find . -name '*.yaml' \
+  | sed 's|^\./||' | while read -r f; do printf -- '--from-file=%s=config/%s ' "${f//\//-}" "$f"; done)
 kubectl create secret generic unified-api-env --from-env-file=.env
 kubectl create secret generic unified-api-secrets \
   --from-file=ssh-private-key=secrets/id_ed25519 \

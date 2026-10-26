@@ -1,0 +1,12 @@
+---
+# The same connector as src-section9, another instance of it: only the config
+# (and the cadence) differ.
+sources:
+  - name: src-section9-large
+    description: "Section 9 Large Inventory"
+    connector: "sample-inventory"
+    # Cron cadence (UTC): every 2 hours on the hour, instead of an interval
+    schedule: "0 */2 * * *"
+    ttl_seconds: 7200
+    config:
+      scenario: "large"

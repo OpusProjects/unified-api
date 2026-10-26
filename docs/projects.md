@@ -4,7 +4,7 @@ Git repositories that carry the code the app executes: connector scripts,
 enrichers, output transformers, static inventories. A **project** is a
 checkout the app clones, keeps up to date, and resolves script paths into —
 so rolling a new script version is a `git push`, not an image rebuild. Field
-reference lives in [configuration → projects.yaml](configuration.md#projectsyaml).
+reference lives in [configuration → projects](configuration.md#projects).
 
 - [The lifecycle](#the-lifecycle)
 - [Boot never blocks on git](#boot-never-blocks-on-git)
@@ -18,7 +18,7 @@ reference lives in [configuration → projects.yaml](configuration.md#projectsya
 
 ## The lifecycle
 
-One directory per project id under `projects.dir` (default `./projects`),
+One directory per project name under `projects.dir` (default `./projects`),
 created by a shallow clone and updated by fetch + hard reset — local drift in
 a checkout is deliberately discarded, because the repository is the truth.
 
@@ -57,17 +57,26 @@ the first source has synced, exactly as without projects.
 
 ## How script paths resolve
 
-A *relative* `script_path` whose file exists inside the checkout runs from
-there (`<projects.dir>/<project_id>/<script_path>`); otherwise the configured
-path is kept as-is, so image-baked and mounted scripts keep working.
+Three kinds of item point into a checkout, and all say it the same way:
+
+| Item | Names the project | Names the file |
+|---|---|---|
+| A script [connector](connectors.md#connectors-and-sources) | `project` | `path` |
+| A `static_inventory` source | `project` | `path` |
+| An enricher or endpoint (optional) | `project` | `script_path` |
+
+A *relative* path whose file exists inside the checkout runs from there
+(`<projects.dir>/<project>/<path>`); otherwise the configured path is kept
+as-is, so image-baked and mounted scripts keep working.
 
 Resolution happens at **every execution**, not once at boot: a script that
 first appears after startup — a slow clone, a pipeline's first push to a new
 project — is used on the very next run, no restart. A checkout that exists
 but lacks the named file logs a warning and keeps the configured path. SSH
-sources are never resolved; their `script_path` is a remote command. Sources
-always declare `project_id`; enrichers and endpoints may add an optional one
-to resolve their scripts the same way.
+connectors are never resolved — their `path` is a remote command — which is why
+they refuse a `project`. Remote sources run nothing locally and name no project
+at all. `GET /api/v1/projects` lists under `used_by` the connectors, sources,
+enrichers and endpoints that run from each checkout.
 
 ---
 
@@ -111,13 +120,13 @@ curl -s -H "x-api-key: $ADMIN_KEY" -X POST $BASE/api/v1/projects/prj-connectors/
 
 ## Private repositories
 
-A `credential_id` on the project authenticates the clone and every pull —
+A `credential` on the project authenticates the clone and every pull —
 without ever putting the secret on a command line (argv is world-readable in
 `/proc` while git runs).
 
 A `token` (or username/password) credential becomes a Basic-auth header passed
 through `GIT_CONFIG_*` environment variables; an `ssh_key` credential sets
-`GIT_SSH_COMMAND` pointing at the key file. See [secrets](configuration.md#credentialsyaml)
+`GIT_SSH_COMMAND` pointing at the key file. See [secrets](configuration.md#credentials)
 for how credentials resolve.
 
 ---

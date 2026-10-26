@@ -5,7 +5,7 @@ more cached datasets through a transformer and returns whatever the consumer
 needs — the builtin `ansible` transformer renders a merged Ansible inventory
 for AWX and AnsibleForms. A transformer is either a **builtin** (`output:`, run
 in-process) or an external **script** (`script_path:`). Field reference lives in
-[configuration → endpoints.yaml](configuration.md#endpointsyaml).
+[configuration → endpoints](configuration.md#endpoints).
 
 - [What an endpoint is](#what-an-endpoint-is)
 - [Builtin transformers](#builtin-transformers)
@@ -25,12 +25,14 @@ never writes to the cache — it renders what is already there, at request time,
 every time.
 
 ```yaml
-ep-awx-full:
-  name: "Full AWX inventory"
-  source_ids: ["src-d42", "src-fleet-facts", "src-inventory"]
-  output: ansible                  # a builtin — or script_path: for a script
-  config:                          # static transformer settings
-    filter: "os=OracleLinux"
+# endpoints/ep-awx-full.yaml
+endpoints:
+  - name: ep-awx-full
+    description: "Full AWX inventory"
+    sources: ["src-d42", "src-fleet-facts", "src-inventory"]
+    output: ansible                  # a builtin — or script_path: for a script
+    config:                          # static transformer settings
+      filter: "os=OracleLinux"
 ```
 
 Endpoints read cached **sources**, never views — a view has no cache entry of
@@ -115,7 +117,7 @@ and anything structured as compact JSON, quoted per RFC 4180. Renders are
 deterministic — identical inventory renders byte-for-byte identically, so
 responses diff cleanly across instances and across time.
 
-The script-only knobs (`script_path`, `script_args`, `project_id`,
+The script-only knobs (`script_path`, `script_args`, `project`,
 `timeout_seconds`) are config errors on a builtin endpoint, named at load —
 a builtin runs in-process, so none of them can mean anything.
 
@@ -129,12 +131,13 @@ it keeps arrives with every variable, group and membership the other sources
 gave it.
 
 ```yaml
-ep-awx-managed:
-  name: "Only what the CMDB manages"
-  source_ids: ["src-cmdb", "src-vmware", "src-facts"]
-  output: ansible
-  limit:
-    by_hosts_from_inventory: "src-cmdb"
+endpoints:
+  - name: ep-awx-managed
+    description: "Only what the CMDB manages"
+    sources: ["src-cmdb", "src-vmware", "src-facts"]
+    output: ansible
+    limit:
+      by_hosts_from_inventory: "src-cmdb"
 ```
 
 That endpoint merges three sources and returns the hosts `src-cmdb` lists —
@@ -145,7 +148,7 @@ inventory: one source decides *who is in*, the others decide *what is known*.
 
 | Rule | Effect |
 |---|---|
-| `by_hosts_from_inventory` | Keep only the hosts this source has — the same hosts `GET /sources/{id}/hosts` returns for it. It must be one of the endpoint's `source_ids` |
+| `by_hosts_from_inventory` | Keep only the hosts this source has — the same hosts `GET /sources/{id}/hosts` returns for it. It must be one of the endpoint's `sources` |
 
 Three things worth knowing:
 
@@ -167,7 +170,7 @@ Three things worth knowing:
   emptied is "nothing", and the group goes — leaving, like any dropped group, a
   `children` entry on its parent that no longer resolves (see above).
 
-Config errors, all named at load: a limit naming a source outside `source_ids`
+Config errors, all named at load: a limit naming a source outside `sources`
 (the intersection would be against data the endpoint never reads and never
 waits for), a `limit:` with no rule in it, and a misspelled rule name.
 
@@ -190,7 +193,7 @@ becomes the HTTP response body verbatim.
 | stdout | The response body, as-is. Output starting with `{` or `[` is served as `application/json`, anything else as `text/plain` |
 
 The script decides the format entirely — inventory JSON, INI, CSV, plain
-text. With `project_id` set, the script path resolves inside the checkout at
+text. With `project` set, the script path resolves inside the checkout at
 every execution and the project's [virtualenv](projects.md#python-virtualenvs)
 leads its PATH.
 
@@ -233,7 +236,7 @@ cannot read the underlying sources raw. The endpoint is the product: a
 consumer given `ep-awx-full` gets the merged inventory without also getting
 `GET /sources/{id}/dataset` on the members.
 
-Restricted keys list endpoint ids under `endpoints:` in `api_keys.yaml`;
+Restricted keys list endpoint ids under `endpoints:` in their `api_keys` item;
 `GET /api/v1/endpoints` filters to what the key may run and reports each
 endpoint's `sources_ready` / `sources_missing`.
 

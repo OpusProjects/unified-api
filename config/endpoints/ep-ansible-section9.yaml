@@ -1,0 +1,8 @@
+---
+endpoints:
+  - name: ep-ansible-section9
+    description: "Section 9 Only"
+    sources: ["src-section9", "src-infra"]
+    output: "ansible"
+    config:
+      filter: "datacenter=section9"

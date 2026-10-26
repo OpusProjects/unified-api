@@ -13,9 +13,15 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Enricher {
+    // The display label: the item's `description`, falling back to its
+    // identity (see config::take). The identity is the map key — what
+    // references, URLs and cache keys use.
     pub name: String,
 
-    // The dataset being enriched — ex: "src-ssh-pq-facts"
+    // The dataset being enriched — ex: "src-ssh-pq-facts". References are
+    // written without the `_id` suffix in the item files (`target:`); the
+    // Rust field keeps its name because the API still answers `target_id`.
+    #[serde(rename = "target")]
     pub target_id: String,
 
     // Script that performs the enrichment (required for script-based mode)
@@ -28,11 +34,11 @@ pub struct Enricher {
 
     // Project whose checkout contains the script (None = script_path is a
     // plain filesystem path, absolute or relative to the working directory)
-    #[serde(default)]
+    #[serde(default, rename = "project")]
     pub project_id: Option<String>,
 
     // Declarative merge: the source dataset to copy fields from
-    #[serde(default)]
+    #[serde(default, rename = "source")]
     pub source_id: Option<String>,
 
     // Declarative merge: which keys to take from the source, on a group's vars

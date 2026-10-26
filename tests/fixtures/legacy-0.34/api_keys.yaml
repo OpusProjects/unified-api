@@ -1,0 +1,13 @@
+---
+key-automation:
+  name: "Automation controller"
+  env: "UNIFIED_API_KEY_AUTOMATION"
+  role: "admin"
+
+# Restricted: two endpoints and one view, nothing else.
+key-dashboard:
+  name: "Status dashboard"
+  env: "UNIFIED_API_KEY_DASHBOARD"
+  role: "restricted"
+  sources: ["vw-pq-facts"]
+  endpoints: ["ep-ansible-full"]

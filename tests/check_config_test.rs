@@ -65,7 +65,7 @@ fn a_broken_cross_reference_fails_like_startup_would() {
     // A source naming a project that does not exist — valid YAML, invalid config
     std::fs::write(
         dir.path().join("sources.yaml"),
-        "src-a:\n  name: \"A\"\n  project_id: \"prj-missing\"\n  script_path: \"x.py\"\n  ttl_seconds: 60\n",
+        "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\nconnectors:\n  - name: c-src-a\n    project: \"prj-missing\"\n    path: \"x.py\"\n",
     )
     .unwrap();
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+use super::connector::{self, Connector, ConnectorKind};
 use super::dataset::Dataset;
 use super::sync_mode::SyncMode;
 
@@ -11,12 +12,14 @@ pub enum ConnectorType {
     #[default]
     Script,
     Ssh,
-    // Ansible static YAML inventory read from disk (script_path = path to
-    // the inventory file, typically inside a git project checkout)
+    // Ansible static YAML inventory read from disk: the built-in
+    // `static_inventory` connector (the source's `path`, inside its
+    // `project` checkout)
     StaticInventory,
     // Federation: fetch another unified-api instance's cached dataset over
-    // HTTP (script_path = the source id ON THE REMOTE instance; config.url =
-    // the remote base URL). Ages are propagated so freshness stays truthful.
+    // HTTP — the built-in `remote` connector (config.url = the remote base
+    // URL, config.source = the source id ON THE REMOTE instance). Ages are
+    // propagated so freshness stays truthful.
     Remote,
 }
 
@@ -34,13 +37,54 @@ pub enum OutputFormat {
     Ansible,
 }
 
-// Unknown keys are config typos: fail startup naming the key instead of
-// silently applying a default (the policy is explained once, in config.rs).
+impl OutputFormat {
+    // As written after `output_format:` in a connector, for anything that
+    // shows the configuration back (the connectors listing).
+    pub fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Native => "native",
+            OutputFormat::Ansible => "ansible",
+        }
+    }
+}
+
+// A source as it RUNS: the per-instance settings from its item file, with
+// its connector's settings resolved into it at load (see SourceDef::resolve).
+//
+// Resolving once, at load, is what lets everything downstream — sync, the
+// scheduler, the connectors, the views — keep reading one flat struct, and it
+// means a reload that changes a connector shows up as a change to every source
+// using it, which is exactly the set of sources whose next sync behaves
+// differently.
+//
+// Configuration files are NEVER read as this: their shape is SourceDef.
+// `Deserialize` is here for code that builds a resolved source from a compact
+// description of it — tests, mostly — which is why most fields have a default
+// a fixture can leave out. (`deny_unknown_fields` still applies: a fixture
+// with a typo fails like a file would.)
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
+    // The display label: the item's description, or its identity.
     pub name: String,
-    pub project_id: String,
+
+    // The connector this source names (`connector:` in its file) — an item
+    // name, or one of the built-ins in domain::connector::BUILT_IN.
+    #[serde(default)]
+    pub connector: String,
+
+    // ---- resolved from the connector -------------------------------------
+    #[serde(default)]
+    pub connector_type: ConnectorType,
+
+    // The checkout a relative script_path (or static inventory path) resolves
+    // in. None for remote and ssh, which run nothing from a checkout.
+    #[serde(default)]
+    pub project_id: Option<String>,
+
+    // What the connector adapter is handed: the script for script, the
+    // remote command for ssh (both from the connector's `path`), the inventory file for static_inventory and the
+    // source id ON THE REMOTE instance for remote.
     pub script_path: String,
 
     // CLI arguments passed to the script, e.g. ["--list"] for scripts that
@@ -66,6 +110,18 @@ pub struct Source {
     #[serde(default)]
     pub host_args: Vec<String>,
 
+    // Format of the script's stdout (script connector only)
+    #[serde(default)]
+    pub output_format: OutputFormat,
+
+    // Maximum seconds a sync may run before it is aborted — protects the
+    // scheduler and API from a hung connector script. The source's own
+    // timeout_seconds when it sets one, else its connector's (default 300).
+    #[serde(default = "crate::domain::default_timeout_seconds")]
+    pub timeout_seconds: u64,
+
+    // ---- the source's own settings ---------------------------------------
+
     // Whether a host-scoped sync also takes the vars of the groups it places
     // its hosts in. Off by default: a granular call answers about a HOST, and
     // letting it redefine what a group means for every other member is a bigger
@@ -75,21 +131,10 @@ pub struct Source {
     pub host_sync_updates_group_vars: bool,
 
     #[serde(default)]
-    pub connector_type: ConnectorType,
-
-    // Format of the script's stdout (script connector only)
-    #[serde(default)]
-    pub output_format: OutputFormat,
-
-    // Maximum seconds a sync may run before it is aborted — protects the
-    // scheduler and API from a hung connector script (default 300)
-    #[serde(default = "crate::domain::default_timeout_seconds")]
-    pub timeout_seconds: u64,
-
-    #[serde(default)]
     pub sync_mode: SyncMode,
 
-    // Vec<String> = list of credential IDs that the connector needs
+    // Vec<String> = list of credential ids that the connector needs
+    // (`credentials:` in the file)
     #[serde(default)]
     pub credential_ids: Vec<String>,
 
@@ -100,6 +145,7 @@ pub struct Source {
     // sources get no startup jitter (the times were chosen deliberately) but
     // back off on failure exactly like interval sources, by letting
     // occurrences pass.
+    #[serde(default)]
     pub schedule: Option<String>,
 
     // Automatic sync interval in seconds (simple alternative to cron)
@@ -145,6 +191,220 @@ pub struct Source {
     // Free config for the connector (api_url, filters, etc.)
     #[serde(default)]
     pub config: HashMap<String, String>,
+}
+
+// A source as written in its item file (`sources:`). Only what is particular
+// to THIS instance of a system: which connector, which credentials, which
+// `config`, when to sync and how long data stays fresh. How to talk to the
+// system lives on the connector it names.
+//
+// `name` is the display label (the file's `description`, falling back to the
+// identity — see config::take); the identity is the map key.
+//
+// Unknown keys are config typos: fail startup naming the key instead of
+// silently applying a default (the policy is explained once, in config.rs).
+// That is also what turns a 0.34 source pasted into a 0.35 file into an error
+// naming `connector_type` or `script_path`, rather than a source that half
+// works.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SourceDef {
+    pub name: String,
+
+    // A connector item's name, or a built-in: `remote`, `static_inventory`.
+    pub connector: String,
+
+    #[serde(default)]
+    pub credentials: Vec<String>,
+
+    // static_inventory only: the project whose checkout holds the inventory,
+    // and the file inside it. Every other connector carries its own project.
+    #[serde(default)]
+    pub project: Option<String>,
+
+    #[serde(default)]
+    pub path: Option<String>,
+
+    // Overrides the connector's timeout for this source only.
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+
+    #[serde(default)]
+    pub host_sync_updates_group_vars: bool,
+
+    #[serde(default)]
+    pub sync_mode: SyncMode,
+
+    #[serde(default)]
+    pub schedule: Option<String>,
+
+    #[serde(default)]
+    pub sync_interval_seconds: Option<u64>,
+
+    pub ttl_seconds: u64,
+
+    #[serde(default)]
+    pub ttl_overrides: TtlOverrides,
+
+    #[serde(default)]
+    pub hosts_from_source: Option<HostsFromSource>,
+
+    #[serde(default)]
+    pub allow_on_demand_refresh: bool,
+
+    #[serde(default)]
+    pub advertise_scope: Option<AdvertisedScope>,
+
+    #[serde(default)]
+    pub config: HashMap<String, String>,
+}
+
+impl SourceDef {
+    // The runtime source: this item plus its connector. Every problem that
+    // can be known from the two of them is returned, so one load names all
+    // of them; references to other items (projects, credentials, sources)
+    // are checked afterwards by config validation, against the resolved set.
+    pub fn resolve(
+        &self,
+        id: &str,
+        connectors: &HashMap<String, Connector>,
+    ) -> Result<Source, Vec<String>> {
+        let mut errors = Vec::new();
+        let default_timeout = crate::domain::default_timeout_seconds();
+
+        // (connector_type, project, script_path, script_args, host_args,
+        // output_format, connector timeout)
+        let resolved = match self.connector.as_str() {
+            connector::REMOTE => {
+                for key in ["url", "source"] {
+                    if !self.config.contains_key(key) {
+                        errors.push(format!(
+                            "Source '{id}' uses the remote connector but has no '{key}' in \
+                             config — set config.url to the other instance and config.source \
+                             to the source id there"
+                        ));
+                    }
+                }
+                self.refuse_location(id, "remote", &mut errors);
+                let remote_id = self.config.get("source").cloned().unwrap_or_default();
+                Some((
+                    ConnectorType::Remote,
+                    None,
+                    remote_id,
+                    Vec::new(),
+                    Vec::new(),
+                    OutputFormat::Native,
+                    default_timeout,
+                ))
+            }
+            connector::STATIC_INVENTORY => {
+                if self.project.is_none() {
+                    errors.push(format!(
+                        "Source '{id}' uses the static_inventory connector but sets no \
+                         project — name the project whose checkout holds the inventory"
+                    ));
+                }
+                let path = match &self.path {
+                    Some(path) if !path.trim().is_empty() => path.clone(),
+                    _ => {
+                        errors.push(format!(
+                            "Source '{id}' uses the static_inventory connector but sets no \
+                             path — the inventory file inside the project checkout"
+                        ));
+                        String::new()
+                    }
+                };
+                Some((
+                    ConnectorType::StaticInventory,
+                    self.project.clone(),
+                    path,
+                    Vec::new(),
+                    Vec::new(),
+                    OutputFormat::Native,
+                    default_timeout,
+                ))
+            }
+            name => match connectors.get(name) {
+                None => {
+                    errors.push(format!(
+                        "Source '{id}' references unknown connector '{name}'"
+                    ));
+                    None
+                }
+                Some(c) => {
+                    self.refuse_location(id, name, &mut errors);
+                    let kind = match c.kind {
+                        ConnectorKind::Script => ConnectorType::Script,
+                        ConnectorKind::Ssh => ConnectorType::Ssh,
+                    };
+                    Some((
+                        kind,
+                        c.project.clone(),
+                        c.path.clone(),
+                        c.script_args.clone(),
+                        c.host_args.clone(),
+                        c.output_format.unwrap_or_default(),
+                        c.timeout_seconds,
+                    ))
+                }
+            },
+        };
+
+        let Some((
+            connector_type,
+            project_id,
+            script_path,
+            script_args,
+            host_args,
+            output_format,
+            connector_timeout,
+        )) = resolved
+        else {
+            return Err(errors);
+        };
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        Ok(Source {
+            name: self.name.clone(),
+            connector: self.connector.clone(),
+            connector_type,
+            project_id,
+            script_path,
+            script_args,
+            host_args,
+            output_format,
+            timeout_seconds: self.timeout_seconds.unwrap_or(connector_timeout),
+            host_sync_updates_group_vars: self.host_sync_updates_group_vars,
+            sync_mode: self.sync_mode.clone(),
+            credential_ids: self.credentials.clone(),
+            schedule: self.schedule.clone(),
+            sync_interval_seconds: self.sync_interval_seconds,
+            ttl_seconds: self.ttl_seconds,
+            ttl_overrides: self.ttl_overrides.clone(),
+            hosts_from_source: self.hosts_from_source.clone(),
+            allow_on_demand_refresh: self.allow_on_demand_refresh,
+            advertise_scope: self.advertise_scope.clone(),
+            config: self.config.clone(),
+        })
+    }
+
+    // `project` and `path` are the static_inventory connector's: on any other
+    // source they would look like they select a script, and they do not.
+    fn refuse_location(&self, id: &str, connector: &str, errors: &mut Vec<String>) {
+        for (key, set) in [
+            ("project", self.project.is_some()),
+            ("path", self.path.is_some()),
+        ] {
+            if set {
+                errors.push(format!(
+                    "Source '{id}' sets {key}, which only a static_inventory source uses — \
+                     the '{connector}' connector decides what runs"
+                ));
+            }
+        }
+    }
 }
 
 // An explicit ownership claim for scope advertising — the same group/host
@@ -455,6 +715,108 @@ mod tests {
         serde_saphyr::from_str(yaml).unwrap()
     }
 
+    // A source item resolved against two connectors: `facts` (ssh) and `inv`
+    // (a script). `body` is the rest of the item, after its connector.
+    fn resolved(connector: &str, body: &str) -> Result<Source, Vec<String>> {
+        let connectors: HashMap<String, Connector> = [
+            ("facts", "name: facts\ntype: ssh\npath: gather_facts\n"),
+            (
+                "inv",
+                "name: inv\nproject: prj\npath: inv.py\nscript_args: [\"--list\"]\noutput_format: ansible\ntimeout_seconds: 120\n",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, yaml)| (id.to_string(), serde_saphyr::from_str(yaml).unwrap()))
+        .collect();
+        let def: SourceDef = serde_saphyr::from_str(&format!(
+            "name: s\nconnector: {connector}\nttl_seconds: 60\n{body}"
+        ))
+        .expect("source fixture");
+        def.resolve("src-s", &connectors)
+    }
+
+    fn source(connector: &str, body: &str) -> Source {
+        resolved(connector, body).expect("resolves")
+    }
+
+    #[test]
+    fn a_source_takes_how_from_its_connector_and_which_from_itself() {
+        let s = source("inv", "credentials: [cred-a]\nconfig:\n  tenant: a\n");
+        assert_eq!(s.connector, "inv");
+        assert_eq!(s.connector_type, ConnectorType::Script);
+        assert_eq!(s.project_id.as_deref(), Some("prj"));
+        assert_eq!(s.script_path, "inv.py");
+        assert_eq!(s.script_args, vec!["--list"]);
+        assert_eq!(s.output_format, OutputFormat::Ansible);
+        assert_eq!(s.timeout_seconds, 120, "the connector's timeout");
+        assert_eq!(s.credential_ids, vec!["cred-a"]);
+        assert_eq!(s.config["tenant"], "a");
+
+        let s = source("inv", "timeout_seconds: 900\n");
+        assert_eq!(
+            s.timeout_seconds, 900,
+            "a source may override its connector"
+        );
+    }
+
+    #[test]
+    fn the_built_in_connectors_take_their_location_from_the_source() {
+        let s = source(
+            "remote",
+            "config:\n  url: \"https://edge.example\"\n  source: src-ssh-facts\n",
+        );
+        assert_eq!(s.connector_type, ConnectorType::Remote);
+        assert_eq!(s.script_path, "src-ssh-facts");
+        assert_eq!(s.project_id, None);
+
+        let s = source(
+            "static_inventory",
+            "project: prj\npath: static/inventory.yaml\n",
+        );
+        assert_eq!(s.connector_type, ConnectorType::StaticInventory);
+        assert_eq!(s.script_path, "static/inventory.yaml");
+        assert_eq!(s.project_id.as_deref(), Some("prj"));
+    }
+
+    #[test]
+    fn what_a_connector_needs_from_its_source_is_named() {
+        let errors = resolved("remote", "").unwrap_err().join("\n");
+        assert!(
+            errors.contains("no 'url'") && errors.contains("no 'source'"),
+            "{errors}"
+        );
+
+        let errors = resolved("static_inventory", "").unwrap_err().join("\n");
+        assert!(
+            errors.contains("no project") && errors.contains("no path"),
+            "{errors}"
+        );
+
+        let errors = resolved("inv", "project: prj\npath: x.yaml\n")
+            .unwrap_err()
+            .join("\n");
+        assert!(
+            errors.contains("sets project") && errors.contains("sets path"),
+            "{errors}"
+        );
+
+        let errors = resolved("ghost", "").unwrap_err().join("\n");
+        assert!(
+            errors.contains("Source 'src-s' references unknown connector 'ghost'"),
+            "{errors}"
+        );
+    }
+
+    #[test]
+    fn a_0_34_source_fails_naming_the_keys_that_moved() {
+        let err = serde_saphyr::from_str::<SourceDef>(
+            "name: s\nconnector_type: script\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
+        )
+        .expect_err("legacy keys are unknown keys")
+        .to_string();
+        assert!(err.contains("connector_type"), "{err}");
+    }
+
     #[test]
     fn empty_pattern_selects_every_host() {
         let (specs, warnings) = hfs("source: src-a\n").resolve(&dataset());
@@ -544,13 +906,13 @@ mod tests {
 
     #[test]
     fn an_explicit_advertise_scope_beats_the_derived_pattern() {
-        let source: Source = serde_saphyr::from_str(concat!(
-            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
-            "connector_type: \"ssh\"\n",
-            "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n    groups: [\"derived\"]\n",
-            "advertise_scope:\n  groups: [\"explicit\"]\n",
-        ))
-        .expect("source fixture");
+        let source = source(
+            "facts",
+            concat!(
+                "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n    groups: [\"derived\"]\n",
+                "advertise_scope:\n  groups: [\"explicit\"]\n",
+            ),
+        );
 
         let claim = source.advertised_scope().expect("declared");
         assert_eq!(claim.groups, vec!["explicit"]);
@@ -559,13 +921,13 @@ mod tests {
 
     #[test]
     fn a_hosts_from_source_pattern_is_the_advertised_scope() {
-        let source: Source = serde_saphyr::from_str(concat!(
-            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
-            "connector_type: \"ssh\"\n",
-            "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n",
-            "    groups: [\"datacenter_dc2\"]\n    hosts: [\"appliance.dc2.example\"]\n",
-        ))
-        .expect("source fixture");
+        let source = source(
+            "facts",
+            concat!(
+                "hosts_from_source:\n  source: \"src-inv\"\n  match_pattern:\n",
+                "    groups: [\"datacenter_dc2\"]\n    hosts: [\"appliance.dc2.example\"]\n",
+            ),
+        );
 
         let claim = source.advertised_scope().expect("declared");
         assert_eq!(claim.groups, vec!["datacenter_dc2"]);
@@ -575,12 +937,7 @@ mod tests {
 
     #[test]
     fn an_empty_pattern_advertises_a_spelled_out_catch_all() {
-        let source: Source = serde_saphyr::from_str(concat!(
-            "name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n",
-            "connector_type: \"ssh\"\n",
-            "hosts_from_source:\n  source: \"src-inv\"\n",
-        ))
-        .expect("source fixture");
+        let source = source("facts", "hosts_from_source:\n  source: \"src-inv\"\n");
 
         let claim = source.advertised_scope().expect("declared");
         assert!(claim.groups.is_empty() && claim.hosts.is_empty());
@@ -592,9 +949,7 @@ mod tests {
 
     #[test]
     fn an_ordinary_source_makes_no_claim() {
-        let source: Source =
-            serde_saphyr::from_str("name: s\nproject_id: p\nscript_path: x\nttl_seconds: 60\n")
-                .expect("source fixture");
+        let source = source("inv", "");
         assert!(source.advertised_scope().is_none());
     }
 }

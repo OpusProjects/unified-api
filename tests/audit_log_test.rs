@@ -24,6 +24,7 @@ impl std::io::Write for CapturedLog {
 
 fn admin_key() -> Vec<ResolvedApiKey> {
     vec![ResolvedApiKey {
+        id: "key-ops".to_string(),
         name: "key-ops".to_string(),
         secret: "sekrit".to_string(),
         permissions: Permissions::Admin,
@@ -172,7 +173,7 @@ fn config_app(key_env: &str) -> (axum::Router, tempfile::TempDir) {
     std::fs::write(
         dir.path().join("api_keys.yaml"),
         format!(
-            "key-audit:\n  name: \"auditor\"\n  env: \"{}\"\n  role: \"admin\"\n",
+            "api_keys:\n  - name: key-audit\n    description: \"auditor\"\n    env: \"{}\"\n    role: \"admin\"\n",
             key_env
         ),
     )

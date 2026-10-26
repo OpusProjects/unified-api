@@ -1,0 +1,10 @@
+---
+# SSH: the native connector, nothing installed on the hosts. `path` is what
+# runs remotely — a label such as "gather_facts" for the built-in gather
+# modes, or the command itself for `gather_mode: script`. No project: nothing
+# runs from a checkout.
+connectors:
+  - name: ssh-facts
+    description: "SSH fact gathering"
+    type: "ssh"
+    path: "gather_facts"

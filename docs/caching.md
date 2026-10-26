@@ -181,6 +181,6 @@ writes never wait on disk.
 ## Memory notes
 
 Entries are only removed by `CachePort::remove` (currently unused by any route) or
-process restart; an entry whose source disappears from `sources.yaml` survives in
+process restart; an entry whose source disappears from the configuration survives in
 the cache until then. With inventory-sized payloads this is harmless, but it's worth
 knowing when reading `GET /api/v1/sources` output.

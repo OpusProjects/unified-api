@@ -1,10 +1,10 @@
 # Secrets
 
 How credentials resolve, rotate, and reach the scripts. The one principle
-everything follows: **configuration never holds a secret** — `credentials.yaml`
+everything follows: **configuration never holds a secret** — a `credentials` item
 describes *where* to read each value, and the infrastructure (env vars,
 mounted files, Vault) delivers it. Field reference lives in
-[configuration → credentials.yaml](configuration.md#credentialsyaml).
+[configuration → credentials](configuration.md#credentials).
 
 - [The three backends](#the-three-backends)
 - [Resolution order](#resolution-order)
@@ -119,7 +119,7 @@ are not cached — the next attempt re-asks the backend.
 
 ## API keys are separate
 
-The keys consumers present to *this* API live in `api_keys.yaml`, follow the
+The keys consumers present to *this* API are `api_keys` items, follow the
 same never-in-YAML principle (each definition names the env var holding its
 secret), and are documented with the [API](api.md#authentication).
 

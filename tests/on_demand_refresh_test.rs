@@ -66,13 +66,14 @@ fn counting_source(
 
     Source {
         name: "Counting source".to_string(),
-        project_id: "test".to_string(),
+        project_id: Some("test".to_string()),
         script_path: "tests/adapters/out/connectors/counting.py".to_string(),
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
         output_format: Default::default(),
         hosts_from_source: None,
+        connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
         sync_mode: Default::default(),
         credential_ids: vec![],

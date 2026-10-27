@@ -343,7 +343,7 @@ connectors:
 |---|---|
 | `type` | `script` (default) runs a local process; `ssh` connects to the fleet natively |
 | `project` | The project whose checkout holds the script. Required for a script connector with a relative `path`; on ssh, the project of a script streamed to each host (refused with `location: host`) |
-| `location` | ssh only: `host` (path is on each host: files run or read as facts) or `instance` (a script here, streamed to each host; the default). See [connectors](connectors.md#ssh-connectors-type-ssh) |
+| `location` | ssh only: `host` (path is on each host: files run or read as facts) or `instance` (a script here, streamed to each host; the default with a `project`). See [connectors](connectors.md#ssh-connectors-type-ssh) |
 | `path` | A file, always. script: the one to run, relative to the project checkout or absolute. ssh: a script here, or a file or pattern of files on each host |
 | `script` | ssh only, instead of `path`: the script written in the item, streamed to each host as a file from here would be |
 | `script_args` | CLI arguments, quoted. `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. On ssh, passed to the streamed script or to every executable a host path matches |

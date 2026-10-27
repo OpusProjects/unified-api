@@ -517,7 +517,8 @@ async fn plan(
                 .await
                 .map_err(|e| fail(format!("Cannot read ssh script '{script_path}': {e}")))?;
             Ok(Plan {
-                command: with_args(&stdin_interpreter(&script), args),
+                command: stream_command(&script, args)
+                    .map_err(|e| fail(format!("ssh script '{script_path}': {e}")))?,
                 stdin: Some(script),
                 facts: false,
                 what: "a script streamed to each host",
@@ -528,7 +529,8 @@ async fn plan(
             // the file.
             let script = script_path.as_bytes().to_vec();
             Ok(Plan {
-                command: with_args(&stdin_interpreter(&script), args),
+                command: stream_command(&script, args)
+                    .map_err(|e| fail(format!("the connector's script: {e}")))?,
                 stdin: Some(script),
                 facts: false,
                 what: "the connector's script, streamed to each host",
@@ -547,7 +549,7 @@ async fn plan(
 fn facts_command(pattern: &str, args: &[String]) -> String {
     let run = with_args(r#""$f""#, args);
     format!(
-        r#"for f in {pattern}; do [ -f "$f" ] || continue; n=${{f##*/}}; n=${{n%.*}}; printf '\036%s\n' "$n"; if [ -x "$f" ]; then {run} 2>/dev/null; else cat "$f"; fi; echo; done"#
+        r#"for f in {pattern}; do [ -f "$f" ] || continue; n=${{f##*/}}; m=${{n%.*}}; [ -n "$m" ] && n=$m; printf '\036%s\n' "$n"; if [ -x "$f" ]; then {run} 2>/dev/null; else cat "$f"; fi; echo; done"#
     )
 }
 
@@ -562,42 +564,91 @@ fn with_args(program: &str, args: &[String]) -> String {
     line
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
+use crate::domain::connector::shell_quote;
+
+// The remote command that runs a script sent on standard input. The remote
+// shell reads ALL of it first (s=$(cat)) and only then runs it, with -c,
+// its standard input empty (</dev/null):
+// - a command in the script that reads its standard input (cat, read, ssh,
+//   sudo -S) cannot swallow the lines after it, as `sh -s` let it, which
+//   cut the script short and still exited 0;
+// - nothing is printed before the script has arrived whole, so the output
+//   never fills the channel while the script is still being sent.
+// The interpreter is the one its #! line names, with that line's flags (env
+// and its own options skipped); sh when it names none. A script reaches the
+// host as one argument, which Linux caps at 128 KiB: hence MAX_SCRIPT_BYTES.
+fn stream_command(script: &[u8], args: &[String]) -> Result<String, String> {
+    use crate::domain::connector::MAX_SCRIPT_BYTES;
+    if script.len() > MAX_SCRIPT_BYTES {
+        return Err(format!(
+            "{} bytes, more than {MAX_SCRIPT_BYTES}: put a script that size in a file on the \
+             hosts (location: host)",
+            script.len()
+        ));
+    }
+    let (program, flags) = interpreter(script)?;
+    let name = program.rsplit('/').next().unwrap_or(&program);
+    // How each kind of interpreter takes a program text and its arguments.
+    let (run, argv0) = if ["sh", "bash", "dash", "ash", "ksh", "mksh", "zsh"].contains(&name) {
+        ("-c", true)
+    } else if name.starts_with("python") {
+        ("-c", false)
+    } else if name.starts_with("perl") || name.starts_with("ruby") || name.starts_with("node") {
+        ("-e", false)
+    } else {
+        return Err(format!(
+            "its #! line names {program}, which cannot run a script sent to it: name a shell, \
+             python, perl, ruby or node, or put the script on the hosts (location: host)"
+        ));
+    };
+    let mut line = format!("s=$(cat) && exec {program}");
+    for flag in &flags {
+        line.push(' ');
+        line.push_str(flag);
+    }
+    line.push_str(&format!(" {run} \"$s\""));
+    if argv0 {
+        // What the script sees as $0.
+        line.push_str(&format!(" {program}"));
+    }
+    for arg in args {
+        line.push(' ');
+        line.push_str(&shell_quote(arg));
+    }
+    line.push_str(" </dev/null");
+    Ok(line)
 }
 
-// The remote command that runs a script read from standard input: the
-// interpreter its #! line names (through env or not), sh when it names none.
-// Shells take `-s --`, so the arguments that follow are $1, $2…; Python,
-// Perl, Ruby and the like take `-`.
-fn stdin_interpreter(script: &[u8]) -> String {
+// The interpreter a script's #! line names, and the flags it gives it:
+// `#!/bin/bash -e` is ("/bin/bash", ["-e"]); `#!/usr/bin/env -S python3 -u`
+// is ("python3", ["-u"]). No #! line: sh. Every word must be a plain name
+// or flag: it is written into the remote command line.
+fn interpreter(script: &[u8]) -> Result<(String, Vec<String>), String> {
     let first = script.split(|b| *b == b'\n').next().unwrap_or_default();
     let first = String::from_utf8_lossy(first);
-    let program = first
-        .strip_prefix("#!")
-        .and_then(|rest| {
-            let mut words = rest.split_whitespace();
-            let program = words.next()?;
-            if program.ends_with("/env") {
-                words.next()
-            } else {
-                Some(program)
-            }
-        })
-        .filter(|p| {
-            p.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
-        })
-        .unwrap_or("sh")
-        .to_string();
-    let name = program.rsplit('/').next().unwrap_or(&program);
-    let reads_dash = ["python", "perl", "ruby", "node", "php"]
-        .iter()
-        .any(|interpreter| name.starts_with(interpreter));
-    if reads_dash {
-        format!("{program} -")
-    } else {
-        format!("{program} -s --")
+    let Some(rest) = first.strip_prefix("#!") else {
+        return Ok(("sh".to_string(), Vec::new()));
+    };
+    let mut words: Vec<&str> = rest.split_whitespace().collect();
+    if words.first().is_some_and(|w| w.ends_with("/env")) {
+        words.remove(0);
+        while words.first().is_some_and(|w| w.starts_with('-')) {
+            words.remove(0);
+        }
+    }
+    let plain = |w: &str| {
+        w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | '='))
+    };
+    match words.split_first() {
+        Some((program, flags)) if plain(program) && flags.iter().all(|f| plain(f)) => Ok((
+            program.to_string(),
+            flags.iter().map(|f| f.to_string()).collect(),
+        )),
+        _ => Err(format!(
+            "its #! line '{}' names no plain program",
+            first.trim()
+        )),
     }
 }
 
@@ -1121,17 +1172,41 @@ mod tests {
 
     #[test]
     fn a_streamed_script_runs_in_the_interpreter_it_names() {
-        assert_eq!(stdin_interpreter(b"echo hi\n"), "sh -s --");
+        let run = |script: &[u8]| stream_command(script, &["--x".into()]);
         assert_eq!(
-            stdin_interpreter(b"#!/bin/bash\necho hi\n"),
-            "/bin/bash -s --"
+            run(b"echo hi\n").unwrap(),
+            r#"s=$(cat) && exec sh -c "$s" sh '--x' </dev/null"#
+        );
+        // The #! line's flags are kept.
+        assert_eq!(
+            run(b"#!/bin/bash -e\necho hi\n").unwrap(),
+            r#"s=$(cat) && exec /bin/bash -e -c "$s" /bin/bash '--x' </dev/null"#
+        );
+        // env and its own options are skipped.
+        assert_eq!(
+            run(b"#!/usr/bin/env -S python3 -u\nprint(1)\n").unwrap(),
+            r#"s=$(cat) && exec python3 -u -c "$s" '--x' </dev/null"#
         );
         assert_eq!(
-            stdin_interpreter(b"#!/usr/bin/env python3\nprint(1)\n"),
-            "python3 -"
+            run(b"#!/usr/bin/perl -w\nprint 1\n").unwrap(),
+            r#"s=$(cat) && exec /usr/bin/perl -w -e "$s" '--x' </dev/null"#
         );
-        // Anything that is not a plain program name falls back to sh.
-        assert_eq!(stdin_interpreter(b"#!/bin/sh; rm -rf /\n"), "sh -s --");
+        // What cannot take a script this way, or is not a plain name: said.
+        assert!(
+            run(b"#!/usr/bin/awk -f\n{}\n")
+                .unwrap_err()
+                .contains("cannot run")
+        );
+        assert!(
+            run(b"#!/bin/sh; rm -rf /\n")
+                .unwrap_err()
+                .contains("no plain program")
+        );
+        assert!(
+            run(&vec![b'x'; crate::domain::connector::MAX_SCRIPT_BYTES + 1])
+                .unwrap_err()
+                .contains("more than")
+        );
     }
 
     #[test]

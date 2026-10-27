@@ -11,8 +11,6 @@ sources:
       port: "22"
       concurrency: "50"
       ssh_connect_timeout_seconds: "30"
-      gather_mode: "facts"
-      fact_path: "/etc/ansible/facts.d"
       # Host key verification: point at ssh-keyscan output to refuse unknown or
       # changed server keys BEFORE authenticating (docs/connectors.md). Left
       # commented because startup validation requires the file to exist;

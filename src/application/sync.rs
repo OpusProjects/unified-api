@@ -290,10 +290,6 @@ pub async fn sync_source(
     // enrichment below is part of the same causal chain, so its scripts see
     // the same trigger the connector did.
     let trigger = request.trigger.clone();
-    let operation = match request.scope {
-        SyncScope::Full => "full",
-        SyncScope::Hosts(_) | SyncScope::Group(_) => "partial",
-    };
     let outcome = run_sync(
         cache, connector, secrets, scopes, source_id, source, request,
     )
@@ -353,12 +349,6 @@ pub async fn sync_source(
         "source" => source_id.to_string(),
     )
     .record(outcome.duration_ms as f64 / 1000.0);
-    // Only a script connector calls an external system's API: a static
-    // inventory is a file, ssh logs in to hosts, and remote asks another
-    // instance of this service.
-    if source.connector_type == crate::domain::source::ConnectorType::Script {
-        count_source_request(source_id, operation, outcome.success());
-    }
 
     // Bumped only under the lock and only for the plain full case, so a
     // waiter comparing before/after cannot be satisfied by a scoped slice or
@@ -470,12 +460,17 @@ async fn run_sync(
 
     let args = args_for_scope(source, &scope);
     // Where an ssh connector's path is, for the adapter (its contract, like
-    // hosts_spec above); absent for the inline form.
-    if let Some(location) = source.ssh_location {
-        config.insert(
-            crate::ports::connector::SSH_LOCATION_CONFIG_KEY.to_string(),
-            location.name().to_string(),
-        );
+    // hosts_spec above); absent for one with an inline script. Always set or
+    // removed here, so nothing in the source's own config can stand in for
+    // it (source validation refuses the key too).
+    let location_key = crate::ports::connector::SSH_LOCATION_CONFIG_KEY;
+    match source.ssh_location {
+        Some(location) => {
+            config.insert(location_key.to_string(), location.name().to_string());
+        }
+        None => {
+            config.remove(location_key);
+        }
     }
 
     let start = Instant::now();
@@ -487,7 +482,7 @@ async fn run_sync(
 
     // The timeout protects the scheduler and the API from a hung connector
     // script: without it, a stuck process blocks its sync task forever.
-    let result = match timeout(
+    let executed = timeout(
         Duration::from_secs(source.timeout_seconds),
         connector.execute(
             &source.script_path,
@@ -497,8 +492,20 @@ async fn run_sync(
             &credentials,
         ),
     )
-    .await
-    {
+    .await;
+    // Counted once the script has run (or was stopped by the timeout), not
+    // for a sync that failed before reaching it (a credential missing).
+    // Only a script connector calls an external system's API: a static
+    // inventory is a file, ssh logs in to hosts, and remote asks another
+    // instance of this service.
+    if source.connector_type == crate::domain::source::ConnectorType::Script {
+        let operation = match scope {
+            SyncScope::Full => "full",
+            SyncScope::Hosts(_) | SyncScope::Group(_) => "partial",
+        };
+        count_source_request(source_id, operation, matches!(executed, Ok(Ok(_))));
+    }
+    let result = match executed {
         Ok(result) => result,
         Err(_elapsed) => {
             return SyncOutcome::failed(

@@ -365,6 +365,13 @@ impl SourceDef {
         // What runs is the connector's now; 0.35 asked each source. Refused
         // rather than ignored, so a source still saying it is looked at.
         if ssh.is_some() {
+            if self.config.contains_key(connector::SSH_LOCATION_CONFIG_KEY) {
+                errors.push(format!(
+                    "Source '{id}' sets config.{}, a key unified-api sets itself for its \
+                     ssh connector — remove it: the connector's location decides",
+                    connector::SSH_LOCATION_CONFIG_KEY
+                ));
+            }
             for key in ["gather_mode", "fact_path"] {
                 if self.config.contains_key(key) {
                     errors.push(format!(

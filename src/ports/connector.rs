@@ -77,8 +77,6 @@ pub trait ConnectorPort: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>>;
 }
 
-// The key under which an ssh source's location (`host` or `instance`, see
-// domain::connector::Location) reaches the ssh adapter in its config.
-// Absent: a connector that writes its script inline, handed over as the
-// path.
-pub const SSH_LOCATION_CONFIG_KEY: &str = "ssh_location";
+// The key under which an ssh source's location reaches the ssh adapter in
+// its config; defined with the connector it describes.
+pub use crate::domain::connector::SSH_LOCATION_CONFIG_KEY;

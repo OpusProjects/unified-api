@@ -523,7 +523,15 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                             Vec::new(),
                         )
                     } else {
-                        (None, true, script_path, script_args)
+                        // 0.35 appended the arguments to the command; a
+                        // script's own arguments are $1, $2 instead, so they
+                        // go into its line, quoted.
+                        let mut script = script_path;
+                        for arg in &script_args {
+                            script.push(' ');
+                            script.push_str(&crate::domain::connector::shell_quote(arg));
+                        }
+                        (None, true, script, Vec::new())
                     }
                 } else {
                     (None, false, script_path, script_args)
@@ -1252,6 +1260,31 @@ mod tests {
         assert!(vars.contains("connector: \"static_inventory\""), "{vars}");
         assert!(vars.contains("project: \"prj-inv\""), "{vars}");
         assert!(vars.contains("path: \"static/inventory.yaml\""), "{vars}");
+    }
+
+    #[test]
+    fn a_command_keeps_its_arguments_in_its_script_line() {
+        let dir = dir_with(&[(
+            "sources.yaml",
+            concat!(
+                "src-r:\n  name: \"Report\"\n  connector_type: ssh\n",
+                "  script_path: /usr/local/bin/report\n  script_args: [\"--json\"]\n",
+                "  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n    gather_mode: script\n",
+            ),
+        )]);
+        let plan = plan(dir.path()).unwrap().expect("legacy");
+        let file = plan
+            .files
+            .iter()
+            .find(|(name, _)| name.starts_with("connectors/"))
+            .map(|(_, body)| body.clone())
+            .unwrap();
+        let value = crate::domain::yaml::to_json(&file).unwrap();
+        assert_eq!(
+            value["connectors"][0]["script"],
+            "/usr/local/bin/report '--json'"
+        );
+        assert!(value["connectors"][0].get("script_args").is_none());
     }
 
     #[test]

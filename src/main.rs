@@ -73,8 +73,13 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        match unified_api::config::load_config(&config_dir) {
-            Ok(cfg) => {
+        // As startup loads it: what an older version wrote and this one
+        // converts is reported, and still counts as OK, since it starts.
+        match unified_api::config::load_config_upgrading(std::path::Path::new(&config_dir)) {
+            Ok((cfg, upgraded)) => {
+                for line in &upgraded {
+                    println!("startup converts: {line}");
+                }
                 println!(
                     "configuration OK ({}): {} sources, {} connectors, {} views, \
                      {} credentials, {} enrichers, {} endpoints, {} projects",
@@ -161,8 +166,15 @@ async fn main() {
         }
     };
 
-    let cfg = match unified_api::config::load_config(&config_dir) {
-        Ok(cfg) => cfg,
+    // Upgrading: what an older version wrote is converted in memory, and
+    // said, so this version starts on the files as they are.
+    let cfg = match unified_api::config::load_config_upgrading(std::path::Path::new(&config_dir)) {
+        Ok((cfg, upgraded)) => {
+            for line in upgraded {
+                warn!("{line}");
+            }
+            cfg
+        }
         Err(e) => {
             error!("Failed to load configuration: {}", e);
             std::process::exit(1);

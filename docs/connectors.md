@@ -80,7 +80,7 @@ sources:
 |---|---|
 | `type` | `script` (default) or `ssh` |
 | `project` | The project whose checkout holds the script. Required for a script connector whose `path` is relative; on ssh, the project of a script streamed to each host, refused with `location: host` |
-| `location` | ssh only: where `path` is — `host` (on each host) or `instance` (here, the default). See [SSH connectors](#ssh-connectors-type-ssh) |
+| `location` | ssh only: where `path` is — `host` (on each host) or `instance` (here; the default with a `project`). See [SSH connectors](#ssh-connectors-type-ssh) |
 | `path` | A file, always. script: the one to run, inside the project checkout (or absolute). ssh: a script here, or a file or pattern of files on each host |
 | `script` | ssh only, instead of `path`: the script itself, written in the item |
 | `script_args` | CLI arguments, verbatim and quoted. On ssh, passed to the streamed script, or to every executable a host path matches |
@@ -380,26 +380,36 @@ host its other facts. The path may hold only letters, digits and `/ . _ - + @ : 
 besides the pattern characters: it reaches the host's shell unquoted, so that
 the pattern expands.
 
-**`location: instance`** — `path` is a script on this instance: in `project`'s
-checkout when the connector names one (read from the checkout at every sync,
-so a push is live at the next one), on this instance's disk otherwise. It is
-streamed over the ssh connection to the interpreter its `#!` line names —
-`sh -s --` for a shell (`bash -s --` for `#!/bin/bash`), `python3 -` for
-`#!/usr/bin/env python3` — with `script_args` after it as `$1`, `$2`…, and
-nothing is written on the host: no file in `/tmp` to clean up, and hosts that
-mount `/tmp` noexec run it like any other. What it prints is the host's
-variables, one JSON object.
+**`location: instance`** (the default when `project` is set; write it for an
+absolute path on this instance's disk) — `path` is a script file on this
+instance: in `project`'s checkout (read at every sync, so a push is live at the
+next one), or absolute. It is sent over the ssh connection; the host's shell
+reads it whole, then runs it with the interpreter its `#!` line names and that
+line's flags (`sh` without one; `env` and its options are skipped), with
+`script_args` as its arguments and its own standard input empty — so a `cat`
+or `read` in the script cannot swallow the rest of it. A shell, `python`,
+`perl`, `ruby` or `node` can run a script this way; anything else is refused
+naming it. Nothing is written on the host: no file in `/tmp` to clean up, and
+hosts that mount `/tmp` noexec run it like any other. A script is at most
+100 KiB (it reaches the host's shell as one argument). What it prints is the
+host's variables, one JSON object.
 
 **`script`** — the script written in the item instead of a file: streamed and
 run exactly as a file from here is (its `#!` line, `script_args`, nothing
 written on the host). It takes no `project` or `location`, and an ssh connector
-has `path` or `script`, never both.
+has `path` or `script`, never both. A command with arguments is a script of one
+line: `script: /usr/local/bin/disk-report --json`.
 
 **From 0.35** — 0.35 wrote the command (or a label such as `gather_facts`) in
-`path`, and each source's `config.gather_mode` said what it meant. 0.36 refuses
-both, naming what to write instead; a 0.34 directory migrated at startup is
-written in the new shape directly. Facts become files on the host, a script
-becomes `script`:
+`path`, and each source's `config.gather_mode` said what it meant. 0.36 reads
+that form only at startup: an ssh connector with neither `location`, `project`
+nor `script` is converted in memory, with its sources, and each conversion is
+logged (and printed by `--check-config`, which still exits 0). Facts become
+`location: host` with `path: <fact_path>/*.fact`; a command becomes `script:`,
+its `script_args` quoted into the line as 0.35 appended them; `gather_mode` and
+`fact_path` go from the sources. The files are not touched, so the image can
+roll back, and the config API refuses the old form, naming what to write: move
+the files when convenient.
 
 ```yaml
 # 0.35: a label as the path, the mode on every source

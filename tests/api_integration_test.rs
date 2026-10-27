@@ -628,6 +628,34 @@ async fn metrics_exposes_sync_counters() {
     );
 }
 
+// A sync that fails before its script runs (a credential that cannot be
+// resolved) asks the system nothing: no outgoing request is counted.
+#[tokio::test]
+async fn a_sync_that_never_ran_its_script_counts_no_outgoing_request() {
+    let mut source = script_source("tests/adapters/out/connectors/inventory.py");
+    source.credential_ids = vec!["cred-not-there".into()];
+    let sources = std::collections::HashMap::from([("src-nocred".to_string(), source)]);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-nocred/sync")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (_, body) = get(app, "/metrics").await;
+    assert!(
+        body.contains(r#"unified_api_sync_total{source="src-nocred",result="error"}"#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"unified_api_source_requests_total{source="src-nocred""#),
+        "{body}"
+    );
+}
+
 // Freshness gauges are computed at scrape time from the cache, so they answer
 // "how stale is this source right now" without waiting for a sync to push them
 #[tokio::test]

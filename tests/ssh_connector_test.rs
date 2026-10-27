@@ -380,8 +380,12 @@ async fn a_script_here_is_streamed_to_the_interpreter_it_names() {
     let output = gather_at(Some("instance"), script, &["--short".into(), "it's".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
-    // The interpreter from #!, reading standard input, the arguments quoted.
-    assert_eq!(host["command"], r"/bin/sh -s -- '--short' 'it'\''s'");
+    // Read whole first, then run by the interpreter from #!, the arguments
+    // quoted, its own standard input empty.
+    assert_eq!(
+        host["command"],
+        r#"s=$(cat) && exec /bin/sh -c "$s" /bin/sh '--short' 'it'\''s' </dev/null"#
+    );
     // The file itself, byte for byte, over the connection: nothing written
     // on the host.
     assert_eq!(host["script"], std::fs::read_to_string(script).unwrap());
@@ -432,7 +436,10 @@ async fn an_inline_script_is_streamed_like_a_file() {
     let output = gather_at(None, script, &["--all".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
-    // No #!: sh, reading the script from standard input.
-    assert_eq!(host["command"], "sh -s -- '--all'");
+    // No #!: sh.
+    assert_eq!(
+        host["command"],
+        r#"s=$(cat) && exec sh -c "$s" sh '--all' </dev/null"#
+    );
     assert_eq!(host["script"], script);
 }

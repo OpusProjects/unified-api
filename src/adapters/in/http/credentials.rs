@@ -8,6 +8,7 @@ use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::credentials::{check, users_of};
+use crate::domain::credential::CredentialType;
 
 // The credentials configured on this instance, for the UI's Credentials
 // page: what each one is, where its secrets come from, whether they resolve
@@ -32,6 +33,12 @@ pub struct CredentialInfo {
     /// (only file paths handed to the script)
     pub backend: &'static str,
     pub vault_path: Option<String>,
+    /// The `type: vault` credential a vault_path is read from (absent = the
+    /// deprecated config.yaml secrets.vault)
+    pub vault: Option<String>,
+    /// For a `type: vault` credential: where the Vault is, how it logs in and
+    /// how long it keeps what it read
+    pub vault_connection: Option<VaultConnectionInfo>,
     /// The environment variables read, for an env-backed credential
     pub env_vars: Vec<String>,
     pub secret_file: Option<String>,
@@ -47,6 +54,20 @@ pub struct CredentialInfo {
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct VaultConnectionInfo {
+    pub address: String,
+    pub mount: String,
+    /// `token` (with the variable holding it) or `kubernetes` (with its role)
+    pub auth: &'static str,
+    pub kubernetes_role: Option<String>,
+    /// The environment variable the token is read from, for token auth
+    pub token_env: Option<String>,
+    pub timeout_seconds: u64,
+    /// How long a value read from this Vault is reused
+    pub cache_ttl_seconds: u64,
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct FileKeyInfo {
     pub name: String,
     pub path: String,
@@ -54,6 +75,8 @@ pub struct FileKeyInfo {
 
 #[derive(Serialize, ToSchema)]
 pub struct CredentialUsersInfo {
+    /// For a `type: vault` credential: the credentials reading from it
+    pub credentials: Vec<String>,
     pub sources: Vec<String>,
     pub projects: Vec<String>,
     /// Whether the LDAP login's service account binds with it
@@ -81,7 +104,13 @@ pub async fn list_credentials(
     let mut credentials = Vec::with_capacity(config.credentials.len());
     for (id, credential) in &config.credentials {
         let error = check(state.secrets.as_ref(), id).await;
-        let users = users_of(id, &config.sources, &config.projects, config.ldap.as_ref());
+        let users = users_of(
+            id,
+            &config.credentials,
+            &config.sources,
+            &config.projects,
+            config.ldap.as_ref(),
+        );
 
         // The fields it delivers, whichever form names them.
         let secret_keys = credential.fields();
@@ -101,6 +130,25 @@ pub async fn list_credentials(
             credential_type: credential.credential_type.name(),
             backend: credential.backend(),
             vault_path: credential.vault_path.clone(),
+            vault: credential.vault.clone(),
+            vault_connection: (credential.credential_type == CredentialType::Vault).then(|| {
+                VaultConnectionInfo {
+                    address: credential.address.clone().unwrap_or_default(),
+                    mount: credential
+                        .mount
+                        .clone()
+                        .unwrap_or_else(|| "secret".to_string()),
+                    auth: if credential.kubernetes_role.is_some() {
+                        "kubernetes"
+                    } else {
+                        "token"
+                    },
+                    kubernetes_role: credential.kubernetes_role.clone(),
+                    token_env: credential.env_vars.get("token").cloned(),
+                    timeout_seconds: credential.timeout_seconds.unwrap_or(10),
+                    cache_ttl_seconds: credential.cache_ttl_seconds.unwrap_or(60),
+                }
+            }),
             env_vars: credential.env_var_names(),
             secret_file: credential.secret_file.clone(),
             secret_keys,
@@ -108,6 +156,7 @@ pub async fn list_credentials(
             resolves: error.is_none(),
             error,
             used_by: CredentialUsersInfo {
+                credentials: users.credentials,
                 sources: users.sources,
                 projects: users.projects,
                 ldap: users.ldap,

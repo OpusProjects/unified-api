@@ -450,8 +450,8 @@ What changes when the deployment target is a cluster rather than a single host.
   credential's `env_vars` (e.g. from a Secret via `envFrom`,
   populated by External Secrets Operator); mount files and reference them via
   `secret_file` / `file_keys`; or resolve natively from HashiCorp Vault — give
-  a credential a `vault_path` and configure `secrets.vault:` (token or
-  Kubernetes auth), see [configuration](configuration.md#credentials).
+  a credential `vault:` and a `vault_path`, naming a `type: vault` credential
+  (token or Kubernetes auth), see [configuration](configuration.md#credentials).
   Adoption is per credential, so the three coexist during a migration
 - **API key:** set `UNIFIED_API_KEY` from a Secret; without it the API is open
 - **Replicas:** the cache is per-process and not shared. Multiple replicas each

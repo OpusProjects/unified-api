@@ -11,10 +11,12 @@ use crate::ports::secrets::{SecretsFuture, SecretsPort};
 // Resolution happens on EVERY sync of every source (and every enrichment
 // re-apply behind it). With EnvSecrets that was free — an env read costs
 // nothing — but a secrets backend that is a network call away (Vault) would
-// turn the sync schedule into a request storm against it. The TTL is the
-// rotation trade, stated in the config docs: a rotated secret is picked up
-// within `secrets.cache_ttl_seconds` (default 60); 0 disables the cache, in
-// which case main skips this wrapper entirely.
+// turn the sync schedule into a request storm against it. So each Vault
+// credential sits behind one of these, for its own `cache_ttl_seconds`
+// (default 60; 0 = no wrapper at all). The TTL is the rotation trade, stated
+// in the docs: a value rotated in that Vault is picked up within it. (The
+// deprecated config.yaml `secrets.cache_ttl_seconds`, while set, still puts
+// one in front of the whole chain.)
 //
 // Only SUCCESSES are cached. Errors are retried on the very next resolution —
 // negative caching would turn a transient backend blip into ttl_seconds of

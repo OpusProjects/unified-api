@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-27
+
 ### Added
 
 - `GET /api/v1/sources` and `GET /api/v1/sources/{id}` say whether each source is `federated` (copied from another unified-api), to every caller: what the UI's Sync asks the origin to gather again for.
@@ -14,8 +16,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The image ships unified-ui 0.5.0 (`UI_REF`, was 0.2.0): connectors shown by where they run, six-fact connector overviews, one-line topology cards that fit the screen, name-first cards, live ages, Sync that gathers again for a federated source, and the outgoing requests chart.
 - **Breaking (who writes ssh connectors):** an ssh connector now says what it runs: `location` (`host`, or `instance`, the default with a `project`), or an inline `script`. 0.35's form, a command or a label such as `gather_facts` in `path` with `gather_mode`/`fact_path` on each source, is converted in memory at startup (logged, printed by `--check-config`, files untouched, so the image can roll back): facts become `location: host` with `path: <fact_path>/*.fact` (0.35 also read `*.json` there), a command becomes `script:` with its arguments appended as 0.35 appended them, and a `$HOME` or relative `fact_path` becomes `~/`. Each facts file is now a fact of its own: one that prints nothing or something unreadable becomes an error string for that fact, where 0.35 lost every fact of the host to `raw_output`/`parse_error`. The config API refuses that form, naming what to write, so a configuration repository has to move; a 0.34 directory migrated at startup is written in the new shape.
-
 - **Breaking (who writes script connectors):** a script connector prints Ansible inventory JSON (what `inventory.py --list` prints: host variables under `_meta.hostvars`, each group a top-level key), the one format left: `output_format: native`, the `{"hostvars", "groups"}` shape that was the default, is gone. A script still printing that shape fails its sync saying what to print instead of being read as groups and no host variables. `output_format: ansible` is still accepted and changes nothing, so a configuration can keep it until every instance runs 0.36 (removing it earlier makes 0.35 read the script as `native`: an empty inventory); `native` is dropped in memory at startup with a note that the connector's syncs fail until its script changes, and refused by the config API. `GET /api/v1/connectors` no longer answers `output_format`. Enrichers, outputs and the API keep the Dataset shape.
 - Ansible inventory output is read as Ansible reads it: a host named only in a group (as `ansible-inventory --list` prints a host without variables) is kept with no variables by a full sync, and one listed in `all` or `ungrouped` by any sync, instead of being dropped; `_meta` without `hostvars` is accepted; `all` listing its children no longer warns on every sync; a key a group does not take beside `hosts`/`children`/`vars` is ignored with a warning, and a group with none of them (`host` for `hosts`) fails the sync naming it instead of giving an empty group.
 - The bundled sample project is pinned to this release's tag, so its scripts are the ones this binary reads.
@@ -2195,7 +2197,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.35.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/OpusProjects/unified-api/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/OpusProjects/unified-api/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/OpusProjects/unified-api/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/OpusProjects/unified-api/compare/v0.32.0...v0.33.0

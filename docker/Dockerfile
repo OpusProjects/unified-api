@@ -2,7 +2,7 @@
 # versions; each unified-api release pins the one it ships (UI_REF), so an
 # image always serves the UI it was tested with.
 FROM node:22-alpine AS ui
-ARG UI_REF=v0.2.0
+ARG UI_REF=v0.5.0
 RUN apk add --no-cache git \
     && git clone --depth 1 --branch "$UI_REF" https://github.com/OpusProjects/unified-ui.git /ui
 WORKDIR /ui

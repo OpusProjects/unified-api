@@ -453,17 +453,15 @@ credentials:
   - name: cred-section9-api
     description: "Section 9 API"
     type: "username_password"    # username_password | token | ssh_key
-    env_prefix: "SECTION9"       # reads SECTION9_USERNAME, SECTION9_PASSWORD...
-    secret_keys:                 # our key -> env var suffix (or JSON field)
-      username: "USERNAME"
-      password: "PASSWORD"
+    env_vars:                    # our key -> the full env var name
+      username: "SECTION9_USERNAME"
+      password: "SECTION9_PASSWORD"
 
   - name: cred-ssh-infra
     description: "SSH Infrastructure"
     type: "ssh_key"
-    env_prefix: "INFRA_SSH"
-    secret_keys:
-      username: "USERNAME"
+    env_vars:
+      username: "INFRA_SSH_USERNAME"
     file_keys:                   # our key -> file path; passed as <key>_path
       ssh_key: "/run/secrets/infra-ssh/id_rsa"
 
@@ -477,10 +475,15 @@ credentials:
 ```
 
 Resolution order per credential: `vault_path` (native Vault, see below), or
-`env_prefix` (environment variables) / `secret_file` (a JSON file), plus
-`file_keys` entries which are passed through as `<key>_path` values. A
-credential that fails to resolve **fails the sync** with a clear error — it is
-never silently skipped.
+`env_vars` (environment variables, each named in full) / `secret_file` (a JSON
+file, with `secret_keys` naming its fields), plus `file_keys` entries which
+are passed through as `<key>_path` values. A credential that fails to resolve
+**fails the sync** with a clear error — it is never silently skipped.
+
+The older env form, `env_prefix` + `secret_keys` (`SECTION9` + `{username:
+USERNAME}` reads `SECTION9_USERNAME`), is still read but **deprecated**: startup
+and `--check-config` print the `env_vars` to write instead, and a later release
+refuses it. Setting both forms on one credential is refused.
 
 Native Vault resolution is opt-in via the `secrets.vault:` block in
 `config.yaml` (a `vault_path` without it fails validation at startup):
@@ -668,21 +671,25 @@ at sync time and the periodic re-pull retries.
 
 ## api_keys
 
-API keys with per-consumer permissions. The secret is NEVER here — `env` names
-the environment variable that holds it, so these files can live in git and
-rotation stays an external process (swap the env var, restart).
+API keys with per-consumer permissions. The secret is NEVER here — `env_vars.key`
+names the environment variable that holds it (the same shape as a credential's
+`env_vars`; `key` is its only field), so these files can live in git and
+rotation stays an external process (swap the env var, restart). The older
+`env: <VAR>` is still read but deprecated, like a credential's `env_prefix`.
 
 ```yaml
 # api_keys/consumers.yaml
 api_keys:
   - name: key-awx
     description: "AWX"
-    env: "UNIFIED_API_KEY_AWX"
+    env_vars:
+      key: "UNIFIED_API_KEY_AWX"
     role: "admin"                    # everything
 
   - name: key-forms
     description: "AnsibleForms"
-    env: "UNIFIED_API_KEY_FORMS"
+    env_vars:
+      key: "UNIFIED_API_KEY_FORMS"
     # role defaults to "restricted": only what is listed below
     sources: ["src-ssh-linux"]       # may list/read/sync these sources (or views)
     endpoints: ["ep-ansible-full"]   # may list/run these endpoints
@@ -944,4 +951,4 @@ Everything the process reads from the environment, including where each credenti
 | `UNIFIED_API_KEY` | Legacy single admin key: when set, it authenticates like an admin `api_keys` item (see [API](api.md)); health probes and Swagger stay public |
 | per `api_keys` item | Each key definition names the env var holding its secret |
 | `RUST_LOG` | Log filter, e.g. `debug` or `unified_api=debug` (default `info`) |
-| `<PREFIX>_<SUFFIX>` | Secret values referenced by a credential's `env_prefix`/`secret_keys` |
+| per credential | Secret values, each variable named by a credential's `env_vars` |

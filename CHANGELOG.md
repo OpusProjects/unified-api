@@ -10,10 +10,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - A source's and a project's last runs: `history` on `GET /api/v1/sources/{id}` (its syncs) and on each project in `GET /api/v1/projects` (its pulls), newest first, up to 50 each, in memory since the process started. Each says when it started, how long it took, why (`scheduled`, `manual`, `refresh`, `startup`) and, for a manual run, who (the API key's name or the signed-in user, to admin keys only), and how it ended; a sync what it covered and the hosts and groups it brought, a pull the commit it moved the checkout from and to. A downstream unified-api's on-demand refresh of a federated source reads `refresh` on the origin (its remote connector sends `X-Unified-API-Refresh: 1` with the re-gather), and a refresh that outlasted its budget is a row with its error. See `docs/api.md`.
 - Host and group items: `hosts/<host>.yaml` and `groups/<group>.yaml` say what a source does differently for one host, or for every host in one of its groups, naming the source under `sources:` with its `ttl_seconds`. A host's TTL beats a group's, which beats the source's. A source that does not exist is refused, and so is a view, naming the member to use; `--check-config`, the startup log and the config API's `summary` count `hosts` and `groups`. See `docs/configuration.md#hosts-and-groups`.
+- Credentials name their environment variables in full with `env_vars: {<field>: <VAR>}` (`env_vars: {username: D42_USERNAME}` reads `D42_USERNAME` as `username`), and API keys with `env_vars: {key: <VAR>}`; `env_vars` and `env_prefix` on one credential, `secret_keys` next to `env_vars` without a `vault_path` or `secret_file`, an API key `env_vars` field other than `key`, and an API key with both or neither of `env_vars.key` and `env` are refused at load (see `docs/secrets.md`).
+- Every credential field also reaches the connector under its credential's id, `CREDENTIAL_<ID>_<FIELD>` (the name upper-cased, without a leading `cred-`, anything outside `A-Z0-9` made `_`: `cred-vcenter-aa1`'s `username` is `CREDENTIAL_VCENTER_AA1_USERNAME`), so a source can use one credential per site with the same fields; a field already named after its credential (`avamar_aa1_url` on `cred-avamar-aa1`) is not prefixed again, so hand-prefixed configurations deliver exactly what they did.
 
 ### Changed
 
 - **Breaking (who sets `ttl_overrides`):** a source's `ttl_overrides` moved to host and group items, and a source still setting it is refused, naming the new form: at startup, by `--check-config` and by the config API, with no conversion. Move each `ttl_overrides.hosts` entry to a `hosts/<host>.yaml` and each `ttl_overrides.groups` entry to a `groups/<group>.yaml` naming the source, in the same change as the upgrade. An instance still on the previous version refuses a `hosts` or `groups` item, so the image and the configuration have to change together. A 0.34 directory migrated at startup is written in the new shape.
+- **Breaking (scripts reading a field two credentials share):** `CREDENTIAL_<FIELD>` is delivered only when exactly one of the source's credentials has that field, instead of one credential silently overwriting the other; read `CREDENTIAL_<ID>_<FIELD>`.
+
+### Deprecated
+
+- A credential's `env_prefix` + `secret_keys` and an API key's `env: VAR` still load, with a notice at startup and from `--check-config` naming the `env_vars` to write in their place; a later release refuses them.
 
 ### Fixed
 

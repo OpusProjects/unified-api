@@ -83,8 +83,8 @@ pub async fn list_credentials(
         let error = check(state.secrets.as_ref(), id).await;
         let users = users_of(id, &config.sources, &config.projects, config.ldap.as_ref());
 
-        let mut secret_keys: Vec<String> = credential.secret_keys.keys().cloned().collect();
-        secret_keys.sort();
+        // The fields it delivers, whichever form names them.
+        let secret_keys = credential.fields();
         let mut file_keys: Vec<FileKeyInfo> = credential
             .file_keys
             .iter()
@@ -101,7 +101,7 @@ pub async fn list_credentials(
             credential_type: credential.credential_type.name(),
             backend: credential.backend(),
             vault_path: credential.vault_path.clone(),
-            env_vars: credential.env_vars(),
+            env_vars: credential.env_var_names(),
             secret_file: credential.secret_file.clone(),
             secret_keys,
             file_keys,

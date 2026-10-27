@@ -109,16 +109,17 @@ pub fn resolve_api_keys(cfg: &crate::config::AppConfig) -> Result<Vec<ResolvedAp
 
     for id in ids {
         let def = &cfg.api_keys[id];
-        let secret = std::env::var(&def.env).map_err(|_| {
+        let var = def.env_var();
+        let secret = std::env::var(var).map_err(|_| {
             format!(
                 "API key '{}' expects the secret in env var '{}', which is not set",
-                id, def.env
+                id, var
             )
         })?;
         if secret.is_empty() {
             return Err(format!(
                 "API key '{}': env var '{}' is set but empty",
-                id, def.env
+                id, var
             ));
         }
 

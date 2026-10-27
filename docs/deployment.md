@@ -89,7 +89,7 @@ projects:
 ### credentials — all three types, both delivery mechanisms
 
 Credentials never hold secrets; they say **where to read them**. Two
-mechanisms: environment variables (`env_prefix` + `secret_keys`) or files
+mechanisms: environment variables (`env_vars`, each named in full) or files
 (`secret_file` for a JSON of values, `file_keys` for files a script consumes
 by path, like SSH keys).
 
@@ -101,10 +101,9 @@ credentials:
   - name: cred-d42
     description: "Device42 API"
     type: "username_password"
-    env_prefix: "D42"
-    secret_keys:
-      username: "USERNAME"
-      password: "PASSWORD"
+    env_vars:
+      username: "D42_USERNAME"
+      password: "D42_PASSWORD"
 
 # credentials/cred-netbox.yaml — token from env: reads NETBOX_TOKEN > script
 # sees CREDENTIAL_TOKEN
@@ -112,9 +111,8 @@ credentials:
   - name: cred-netbox
     description: "NetBox API token"
     type: "token"
-    env_prefix: "NETBOX"
-    secret_keys:
-      token: "TOKEN"
+    env_vars:
+      token: "NETBOX_TOKEN"
 
 # credentials/cred-fleet-ssh.yaml — ssh_key: the username from env, the
 # private key as a FILE the connector opens by path (file_keys entries are
@@ -123,9 +121,8 @@ credentials:
   - name: cred-fleet-ssh
     description: "Fleet SSH"
     type: "ssh_key"
-    env_prefix: "FLEET_SSH"
-    secret_keys:
-      username: "USERNAME"
+    env_vars:
+      username: "FLEET_SSH_USERNAME"
     file_keys:
       ssh_key: "/run/secrets/fleet-ssh/id_ed25519"
 
@@ -304,14 +301,16 @@ endpoints:
 api_keys:
   - name: key-awx
     description: "AWX"
-    env: "UNIFIED_API_KEY_AWX"
+    env_vars:
+      key: "UNIFIED_API_KEY_AWX"
     role: "admin"
 
 # api_keys/key-forms.yaml
 api_keys:
   - name: key-forms
     description: "AnsibleForms"
-    env: "UNIFIED_API_KEY_FORMS"
+    env_vars:
+      key: "UNIFIED_API_KEY_FORMS"
     # restricted (the default): filtered lists, 403 elsewhere
     sources: ["src-fleet-facts"]
     endpoints: ["ep-awx-full"]
@@ -448,7 +447,7 @@ What changes when the deployment target is a cluster rather than a single host.
   matters for the [config API](config-api.md) and for an [upgrade from
   0.34](#upgrading-from-034)
 - **Secrets:** three ways in. Inject values as env vars matching each
-  credential's `env_prefix`/`secret_keys` (e.g. from a Secret via `envFrom`,
+  credential's `env_vars` (e.g. from a Secret via `envFrom`,
   populated by External Secrets Operator); mount files and reference them via
   `secret_file` / `file_keys`; or resolve natively from HashiCorp Vault — give
   a credential a `vault_path` and configure `secrets.vault:` (token or
@@ -498,7 +497,7 @@ Practical notes:
 ### Secrets: three variants
 
 The app never talks to a secrets backend itself — it only reads env vars
-(matching each credential's `env_prefix`/`secret_keys`) and mounted files
+(named by each credential's `env_vars`) and mounted files
 (`file_keys`, and `UNIFIED_API_KEY` for the API itself). Any of these produces
 the same `Secret` the Deployment references; they differ in where the actual
 values live:
@@ -544,7 +543,7 @@ spec:
 ```
 
 The Deployment consumes it the same way under all three variants: `env` /
-`envFrom` for `UNIFIED_API_KEY` and the `secret_keys` values, plus a volume
+`envFrom` for `UNIFIED_API_KEY` and the variables `env_vars` names, plus a volume
 mounting the SSH private key at the path `file_keys` points to (mode `0400`).
 If you use ESO with ArgoCD auto-sync, add `ignoreDifferences` for the
 `conversionStrategy`/`decodingStrategy`/`metadataPolicy` defaults the operator

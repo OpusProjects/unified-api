@@ -17,6 +17,31 @@ use crate::{AppState, RuntimeConfig};
 // already running. The first set is applied here; the second set is diffed
 // and reported (see RestartOnlySettings), never silently dropped.
 
+// Removes every cache entry whose source is not configured, and says which.
+// A cache entry only ever belongs to a source (views hold none), so an
+// entry without one is left over: from a snapshot written before the
+// source was removed, or from a sync that finished after it was.
+pub fn drop_unconfigured_entries(state: &AppState) -> Vec<String> {
+    let config = state.config();
+    let mut dropped: Vec<String> = state
+        .cache
+        .keys()
+        .into_iter()
+        .filter(|id| !config.sources.contains_key(id))
+        .collect();
+    dropped.sort();
+    for id in &dropped {
+        state.cache.remove(id);
+    }
+    if !dropped.is_empty() {
+        info!(
+            sources = ?dropped,
+            "Cache entries dropped: their sources are no longer configured"
+        );
+    }
+    dropped
+}
+
 // What changed in one section of the configuration, by id.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SectionDelta {
@@ -132,6 +157,12 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
             );
         }
     }
+
+    // A source this configuration no longer has keeps no data: its entry
+    // would otherwise go on being listed, served and snapshotted, and
+    // restored on every boot. (A sync of it still in flight can write it
+    // back; the scheduler prunes again once the old generation has drained.)
+    drop_unconfigured_entries(state);
 
     let mut report = diff(&previous, &next, cfg, state.live_settings());
 

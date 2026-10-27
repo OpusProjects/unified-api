@@ -278,6 +278,9 @@ async fn main() {
     if let Some(persistence) = &cfg.cache.persistence {
         let path = std::path::PathBuf::from(&persistence.path);
         unified_api::adapters::out::cache::persistence::load_or_warn(&*state.cache, &path).await;
+        // A snapshot written before a source was removed still holds its
+        // data; restored as is, it was listed and served on every boot.
+        unified_api::application::config::drop_unconfigured_entries(&state);
         let handle = unified_api::adapters::out::cache::persistence::start_snapshot_task(
             std::sync::Arc::clone(&state.cache),
             std::sync::Arc::clone(&state.snapshot_health),

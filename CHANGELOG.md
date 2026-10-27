@@ -22,6 +22,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A source removed from the configuration keeps no data: its cache entry is dropped at startup (a snapshot written before the removal restored it on every boot, and it went on being listed under `/api/v1/sources` and served), on reload, and again once a sync of it still running at the reload has finished.
 - `host_args` on an ssh connector with an inline `script` is refused, as on any other ssh connector; it was accepted and passed to the script on host syncs. A script source's own `config.ssh_location` reaches its script, where a sync removed it.
 - `--check-config <dir>` checks `<dir>`, as `--migrate-config <dir>` converts it; it ignored the argument and checked `CONFIG_DIR` or `./config`, so a CI step passing a path could be told OK about another directory.
 

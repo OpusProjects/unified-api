@@ -534,6 +534,17 @@ async fn pushing_the_whole_directory_removes_what_it_left_out() {
     write(dir.path(), "projects.yaml", PROJECTS);
     write(dir.path(), "sources.yaml", SOURCES);
     let (app, state) = app_at(dir.path());
+    // Data src-dc4 gathered: a source the push removes keeps none of it.
+    state.cache.set(
+        "src-dc4",
+        unified_api::domain::cache_entry::CacheEntry::new(
+            serde_json::from_value::<unified_api::domain::dataset::Dataset>(
+                serde_json::json!({"hostvars": {"h1": {}}}),
+            )
+            .unwrap(),
+            60,
+        ),
+    );
 
     let bundle = serde_json::json!({
         "prune": true,
@@ -549,6 +560,10 @@ async fn pushing_the_whole_directory_removes_what_it_left_out() {
     assert!(read(dir.path(), "projects.yaml").is_none());
     assert!(state.config().sources.is_empty(), "and it is live");
     assert_eq!(json(&body)["reloaded"]["sources"]["removed"][0], "src-dc4");
+    assert!(
+        state.cache.get("src-dc4").is_none(),
+        "its cache entry went too"
+    );
 }
 
 #[tokio::test]

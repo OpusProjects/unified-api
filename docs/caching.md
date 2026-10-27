@@ -155,7 +155,8 @@ Behavior:
   is green immediately and consumers get the pre-restart data while the first
   syncs run. A missing file just means "start empty"; a corrupt or
   version-mismatched file is logged and ignored — persistence never blocks
-  startup.
+  startup. Entries for sources the configuration no longer has are dropped
+  (logged): a removed source keeps no data, here or after a reload.
 - **Runtime:** every `interval_seconds` the cache is serialized and written
   atomically (temp file + rename), so a crash mid-write leaves the previous
   snapshot intact. A final snapshot is written on graceful shutdown — after

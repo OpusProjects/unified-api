@@ -5,17 +5,24 @@ use unified_api::adapters::out::git::cli::CliGit;
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The directory a command was given: the word after the flag, unless
+    // that is another flag; else CONFIG_DIR, else ./config. One rule for
+    // both commands, so `--check-config <dir>` checks <dir> as surely as
+    // `--migrate-config <dir>` converts it.
+    let dir_after = |flag_at: usize| -> String {
+        args.get(flag_at + 1)
+            .filter(|next| !next.starts_with("--"))
+            .cloned()
+            .or_else(|| std::env::var("CONFIG_DIR").ok())
+            .unwrap_or_else(|| "config".to_string())
+    };
 
     // Convert a 0.34 configuration directory into the 0.35 layout and exit:
     // what startup does on its own, offered as a command for a configuration
     // repository to run once and commit. Same code path, so a repository and
     // a pod upgraded in place end up with the same files.
     if let Some(i) = args.iter().position(|arg| arg == "--migrate-config") {
-        let dir = args
-            .get(i + 1)
-            .cloned()
-            .or_else(|| std::env::var("CONFIG_DIR").ok())
-            .unwrap_or_else(|| "config".to_string());
+        let dir = dir_after(i);
         match unified_api::config::migrate::migrate_in_place(std::path::Path::new(&dir)) {
             Ok(Some(outcome)) => {
                 for line in outcome.plan.summary() {
@@ -49,8 +56,8 @@ async fn main() {
     // and THAT is checked: the directory may be mounted read-only, and the
     // question CI asks is whether this version will start on it — which,
     // since startup migrates, it will exactly when the conversion loads.
-    if args.iter().any(|arg| arg == "--check-config") {
-        let config_dir = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "config".to_string());
+    if let Some(i) = args.iter().position(|arg| arg == "--check-config") {
+        let config_dir = dir_after(i);
         match unified_api::config::migrate::check(std::path::Path::new(&config_dir)) {
             Ok(Some(plan)) => {
                 println!(

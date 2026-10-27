@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `--check-config <dir>` checks `<dir>`, as `--migrate-config <dir>` converts it; it ignored the argument and checked `CONFIG_DIR` or `./config`, so a CI step passing a path could be told OK about another directory.
+
 ## [0.35.0] - 2026-10-26
 
 ### Changed

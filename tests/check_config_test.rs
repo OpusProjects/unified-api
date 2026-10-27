@@ -80,3 +80,35 @@ fn a_broken_cross_reference_fails_like_startup_would() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("prj-missing"), "stderr: {}", stderr);
 }
+
+// A directory named after the flag is the one checked, over CONFIG_DIR: CI
+// that passes a path must never be told OK about another directory.
+#[test]
+fn a_directory_after_the_flag_is_the_one_checked() {
+    let good = tempfile::tempdir().unwrap();
+    std::fs::write(
+        good.path().join("config.yaml"),
+        "server:\n  host: \"127.0.0.1\"\n  port: 9090\n",
+    )
+    .unwrap();
+    let bad = tempfile::tempdir().unwrap();
+    std::fs::write(
+        bad.path().join("config.yaml"),
+        "server:\n  host: \"127.0.0.1\"\n  porT: 9090\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_unified-api"))
+        .arg("--check-config")
+        .arg(bad.path())
+        .env("CONFIG_DIR", good.path())
+        .output()
+        .expect("the binary runs");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&bad.path().display().to_string()) && stderr.contains("porT"),
+        "stderr: {stderr}"
+    );
+}

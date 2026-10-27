@@ -115,6 +115,7 @@ One request, followed from the consumer through the central to the origin and ba
         POST {edge}/api/v1/sources/src-ssh-facts/sync
              ?host=node100&refresh_origin=true&refresh_depth=2
                                  │   X-API-Key: <edge key>
+                                 │   X-Unified-API-Refresh: 1
                                  v
       ┌────────────────────────────────────────────────────────┐
       │   unified-api EDGE             (datacenter B, podman)  │
@@ -147,6 +148,11 @@ global), it would propagate the same way with one hop spent. `refresh_depth`
 (default 3) is what stops a topology accidentally wired into a cycle. Running
 out of hops is not an error — the data is still fetched, just not re-gathered at
 the far end.
+
+`X-Unified-API-Refresh: 1` tells the edge that a read caused the re-gather, so
+its source history records the sync as `refresh` by the central's key rather
+than `manual`. A Sync on the central's federated source also sends
+`refresh_origin` but not the header, and stays `manual` on the edge.
 
 ### Which instance needs which setting
 

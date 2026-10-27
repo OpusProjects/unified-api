@@ -23,8 +23,9 @@ pub struct SyncHealth {
 }
 
 // What started a run: the timer, a person (Sync, Pull, the API), an
-// on-demand refresh of a read, or the process itself (the clones at boot,
-// a project added by a reload).
+// on-demand refresh of a read (here, or on a downstream instance federating
+// the source), or the process itself (a clone of a missing checkout, at boot
+// or on a reload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunTrigger {
     Scheduled,

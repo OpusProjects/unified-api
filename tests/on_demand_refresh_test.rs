@@ -12,6 +12,7 @@ use tower::ServiceExt;
 use unified_api::domain::cache_entry::CacheEntry;
 use unified_api::domain::dataset::Dataset;
 use unified_api::domain::source::{ConnectorType, Source, TtlOverrides};
+use unified_api::domain::sync_health::RunTrigger;
 
 struct Response {
     status: StatusCode,
@@ -367,6 +368,26 @@ async fn a_refresh_that_outlasts_its_budget_serves_the_cached_data() {
     );
     let body: serde_json::Value = serde_json::from_str(&response.body).unwrap();
     assert_eq!(body["hostvars"]["h1.example"]["gathered"], false);
+
+    // The timeout drops the sync before it records anything itself, so the
+    // refresh path writes the row: the attempt must show in the source's
+    // history and health, not vanish.
+    let history = state.sync_health.history("src-count");
+    assert_eq!(history.len(), 1, "history was {:?}", history);
+    let run = &history[0];
+    assert_eq!(run.trigger, RunTrigger::Refresh);
+    assert_eq!(run.scope.as_deref(), Some("host:h1.example"));
+    assert!(
+        run.error
+            .as_deref()
+            .is_some_and(|e| e.contains("did not finish within 1s")),
+        "run was {:?}",
+        run
+    );
+    assert!(run.duration_ms >= 1000, "duration was {}", run.duration_ms);
+    assert_eq!(run.hosts, None);
+    let health = state.sync_health.get("src-count").expect("health recorded");
+    assert_eq!(health.consecutive_failures, 1);
 }
 
 // =========================================================================

@@ -314,12 +314,15 @@ impl From<SyncHealth> for SyncHealthInfo {
 pub struct RunInfo {
     /// When it started, unix seconds
     pub started_at: u64,
+    /// How long it took. A sync's is the gather and the cache write (the
+    /// sync response's `sync_duration_ms`), not the enrichment after it
     pub duration_ms: u64,
     /// "scheduled", "manual" (Sync, Pull, the API), "refresh" (an on-demand
-    /// read) or "startup" (the clones at boot, a project added by a reload)
+    /// read, here or on a downstream instance federating the source) or
+    /// "startup" (a clone of a missing checkout, at boot or on a reload)
     pub trigger: &'static str,
-    /// Who asked, for a manual run: the API key's name or the signed-in user.
-    /// Admin keys only.
+    /// Who asked, for a manual run or a downstream instance's refresh: the
+    /// API key's name or the signed-in user. Admin keys only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
     /// What a sync covered: "full", "host:a,b" or "group:x"

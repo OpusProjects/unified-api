@@ -2719,3 +2719,65 @@ async fn a_sources_detail_carries_its_sync_history() {
     assert_eq!(restricted["history"][0]["trigger"], "manual");
     assert!(restricted["history"][0].get("by").is_none(), "admin only");
 }
+
+// The history's trigger is the caller's to set, not the client's: a request
+// id that says "scheduled" is still a manual sync, refresh_origin alone (a
+// person's Sync button on a federated source) is still manual, and only a
+// peer's refresh — refresh_origin plus the header its remote connector adds
+// — reads `refresh`, by the peer key's name.
+#[tokio::test]
+async fn a_syncs_history_trigger_cannot_be_named_by_the_client() {
+    let keys = vec![ResolvedApiKey {
+        id: "admin".to_string(),
+        name: "key-peer".to_string(),
+        secret: "admin-secret".to_string(),
+        permissions: Permissions::Admin,
+    }];
+    let sources = std::collections::HashMap::from([(
+        "src-alpha".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    )]);
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .api_keys(keys)
+        .build_with_state();
+
+    let sync = |query: &'static str, headers: &'static [(&'static str, &'static str)]| {
+        let app = app.clone();
+        async move {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sources/src-alpha/sync{query}"))
+                .header("x-api-key", "admin-secret");
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let response = app
+                .oneshot(request.body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    };
+
+    sync("", &[("x-request-id", "scheduled")]).await;
+    sync("", &[("x-request-id", "refresh")]).await;
+    sync("?refresh_origin=true", &[]).await;
+    // the header means nothing without the refresh it qualifies
+    sync("", &[("x-unified-api-refresh", "1")]).await;
+    sync("?refresh_origin=true", &[("x-unified-api-refresh", "1")]).await;
+
+    let history = state.sync_health.history("src-alpha");
+    let triggers: Vec<&str> = history.iter().map(|run| run.trigger.name()).collect();
+    assert_eq!(
+        triggers,
+        ["refresh", "manual", "manual", "manual", "manual"],
+        "newest first"
+    );
+    assert!(
+        history
+            .iter()
+            .all(|run| run.by.as_deref() == Some("key-peer")),
+        "{history:?}"
+    );
+}

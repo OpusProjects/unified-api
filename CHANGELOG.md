@@ -8,7 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- A source's and a project's last runs: `history` on `GET /api/v1/sources/{id}` (its syncs) and on each project in `GET /api/v1/projects` (its pulls), newest first, up to 50 each, in memory since the process started. Each says when it started, how long it took, why (`scheduled`, `manual`, `refresh`, `startup`) and, for a manual run, who (the API key's name or the signed-in user, to admin keys only), and how it ended; a sync what it covered and the hosts and groups it brought, a pull the commit it moved the checkout from and to. See `docs/api.md`.
+- A source's and a project's last runs: `history` on `GET /api/v1/sources/{id}` (its syncs) and on each project in `GET /api/v1/projects` (its pulls), newest first, up to 50 each, in memory since the process started. Each says when it started, how long it took, why (`scheduled`, `manual`, `refresh`, `startup`) and, for a manual run, who (the API key's name or the signed-in user, to admin keys only), and how it ended; a sync what it covered and the hosts and groups it brought, a pull the commit it moved the checkout from and to. A downstream unified-api's on-demand refresh of a federated source reads `refresh` on the origin (its remote connector sends `X-Unified-API-Refresh: 1` with the re-gather), and a refresh that outlasted its budget is a row with its error. See `docs/api.md`.
+
+### Fixed
+
+- Two pulls of one project (a Pull landing on a scheduled one, or a reload's clone) no longer run in the same checkout at once: the second waits for the first.
+- An on-demand refresh that outlasted its budget now counts in the source's `sync_health` (`last_error`, `consecutive_failures`) like one that failed; it left no trace before.
 
 ## [0.36.0] - 2026-10-27
 

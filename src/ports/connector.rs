@@ -75,3 +75,12 @@ pub trait ConnectorPort: Send + Sync {
 // The key under which an ssh source's location reaches the ssh adapter in
 // its config; defined with the connector it describes.
 pub use crate::domain::connector::SSH_LOCATION_CONFIG_KEY;
+
+// The reserved config key that marks a refresh_origin sync as caused by an
+// on-demand read, and the request header a remote connector turns it into on
+// its origin's `POST /sync`. Both ends of the federation agree on these, so
+// they live with the connector contract. A person's Sync button on a
+// federated source also sends refresh_origin, which is why the query flag
+// alone cannot tell the origin's history which of the two asked.
+pub const REFRESH_ON_READ_CONFIG_KEY: &str = "refresh_on_read";
+pub const REFRESH_ON_READ_HEADER: &str = "x-unified-api-refresh";

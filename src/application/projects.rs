@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+
+use dashmap::DashMap;
 
 use crate::domain::project::GitProject;
 use crate::domain::sync_health::{RunRecord, RunTrigger, SyncHealthRegistry};
@@ -44,6 +47,16 @@ pub async fn sync_project(
     origin: RunOrigin,
 ) -> Result<(), String> {
     let dir = projects_dir.join(project_id);
+    // One pull of a checkout at a time. A manual Pull can land on top of a
+    // scheduled one (or the clone of a reload), and without this both read
+    // `before` at the same commit, so each recorded the whole move — the
+    // history claimed a change the other pull made. Held across the before
+    // read, the pull and the after read, so each row's commits are its own;
+    // the second pull simply runs after the first, which is also what the
+    // working tree wants (two git processes in one directory fight over
+    // index.lock). Taken before the clock starts: the wait is not the pull.
+    let checkout = checkout_lock(&dir);
+    let _checkout = checkout.lock().await;
     let started_at = crate::domain::unix_now();
     let start = std::time::Instant::now();
     // The commit before and after: what the pull moved the checkout over,
@@ -73,6 +86,23 @@ pub async fn sync_project(
     );
 
     result
+}
+
+// The lock for one checkout directory, created on first use.
+//
+// A process-wide map rather than a field on AppState because the pulls that
+// must serialise do not all have an AppState: the boot clones in main run
+// before it exists. Keyed by the checkout directory — the thing actually
+// shared — so two apps a test builds over different directories never wait
+// on each other. Entries are never removed: one small mutex per project ever
+// configured.
+fn checkout_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+    LOCKS
+        .get_or_init(DashMap::new)
+        .entry(dir.to_path_buf())
+        .or_default()
+        .clone()
 }
 
 async fn run(
@@ -308,6 +338,72 @@ mod tests {
         assert_eq!(run.revision.as_deref(), Some("bbb"));
         assert_eq!(run.error, None);
         assert!(run.started_at > 0);
+    }
+
+    // A slow pull that moves the checkout one commit: c0 → c1 → c2. The
+    // commit changes at the END of the pull, after a pause, so two pulls
+    // that overlapped would both read c0 as their `before`.
+    struct SlowMovingGit {
+        at: Arc<std::sync::Mutex<u32>>,
+    }
+
+    impl GitPort for SlowMovingGit {
+        fn ensure(
+            &self,
+            _dir: &Path,
+            _project: &GitProject,
+            _credentials: &HashMap<String, String>,
+        ) -> GitFuture<'_> {
+            let at = Arc::clone(&self.at);
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                *at.lock().unwrap() += 1;
+                Ok(())
+            })
+        }
+
+        fn revision(&self, _dir: &Path) -> crate::ports::git::RevisionFuture<'_> {
+            let at = format!("c{}", self.at.lock().unwrap());
+            Box::pin(async move { Some(at) })
+        }
+    }
+
+    // Two pulls of one project at once (a manual Pull over a scheduled one):
+    // each row records the move IT made, never the other's.
+    #[tokio::test(start_paused = true)]
+    async fn overlapping_pulls_of_one_project_record_their_own_commits() {
+        let health = SyncHealthRegistry::new();
+        let git = SlowMovingGit {
+            at: Arc::new(std::sync::Mutex::new(0)),
+        };
+        let dir = std::path::PathBuf::from("unused-overlapping");
+        let (secrets, venv, project) = (MockSecrets::new(), StubVenv::default(), project());
+        let pull = |trigger| {
+            sync_project(
+                &git,
+                &secrets,
+                &venv,
+                &health,
+                "prj-overlap",
+                &project,
+                &dir,
+                RunOrigin::of(trigger),
+            )
+        };
+        let (first, second) = tokio::join!(pull(RunTrigger::Scheduled), pull(RunTrigger::Manual));
+        first.expect("the stub succeeds");
+        second.expect("the stub succeeds");
+
+        let history = health.history("prj-overlap");
+        let moves: Vec<(Option<&str>, Option<&str>)> = history
+            .iter()
+            .map(|run| (run.revision_before.as_deref(), run.revision.as_deref()))
+            .collect();
+        assert_eq!(
+            moves,
+            [(Some("c1"), Some("c2")), (Some("c0"), Some("c1"))],
+            "newest first"
+        );
     }
 
     // The unreachable remote used to hang this future forever — and boot, the

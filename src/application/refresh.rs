@@ -10,7 +10,7 @@ use crate::application::sync::{
     DEFAULT_REFRESH_DEPTH, Enrichment, SyncCoordinator, SyncRequest, SyncScope, sync_source,
 };
 use crate::domain::source::{AdvertisedScopeRegistry, Source};
-use crate::domain::sync_health::SyncHealthRegistry;
+use crate::domain::sync_health::{RunRecord, RunTrigger, SyncHealthRegistry};
 use crate::ports::cache::CachePort;
 use crate::ports::connector::ConnectorPort;
 use crate::ports::secrets::SecretsPort;
@@ -247,6 +247,12 @@ pub async fn refresh_hosts(
     // the number even if a reload swaps the budget mid-request.
     let budget = coordinator.budget();
 
+    // Taken before the sync starts, for the history row the timeout arm writes
+    // itself (below): the scope label, the start and the clock it measures.
+    let scope_label = SyncScope::Hosts(still_stale.clone()).label();
+    let started_at = crate::domain::unix_now();
+    let clock = std::time::Instant::now();
+
     // A budget of its own, independent of the source's `timeout_seconds`: that
     // one bounds a scheduled sync, which may reasonably take minutes. A consumer
     // waiting on a page cannot.
@@ -266,7 +272,8 @@ pub async fn refresh_hosts(
         // A static label rather than the request id: the id would have to
         // thread through every refresh caller, and "a consumer read caused
         // this gather" is the fact a script log needs
-        .with_trigger("refresh"),
+        .with_trigger("refresh")
+        .with_run_trigger(RunTrigger::Refresh),
         enrichment,
     );
 
@@ -300,6 +307,28 @@ pub async fn refresh_hosts(
         }
         Err(_elapsed) => {
             let error = format!("refresh did not finish within {}s", budget.as_secs());
+            // The timeout dropped sync_source before it reached its own
+            // record_failure / record_run, so without these the attempt left
+            // no trace in the source's health or history — exactly the run an
+            // operator looking at a slow source most needs to see. Whatever
+            // the gather was doing when dropped (waiting on the per-source
+            // lock, or the connector, which is killed with it) did not land.
+            health.record_failure(source_id, &error);
+            health.record_run(
+                source_id,
+                RunRecord {
+                    started_at,
+                    duration_ms: clock.elapsed().as_millis() as u64,
+                    trigger: RunTrigger::Refresh,
+                    by: None,
+                    scope: Some(scope_label),
+                    error: Some(error.clone()),
+                    hosts: None,
+                    groups: None,
+                    revision_before: None,
+                    revision: None,
+                },
+            );
             warn!(
                 source = %source_id,
                 hosts = ?still_stale,

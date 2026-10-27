@@ -62,13 +62,14 @@ impl Dataset {
     // - groups are top-level keys instead of living under `groups`
     // - a group may be the modern object form ({hosts, children, vars}) or the
     //   legacy shorthand: a plain list of hostnames
-    // - a host named only in a group is a host: `ansible-inventory --list`
-    //   leaves hosts without variables out of `_meta.hostvars`, so each one
-    //   gets an empty entry rather than vanishing
     // - `all` and `ungrouped` are meta-groups Ansible manages implicitly, so
-    //   they are skipped — but their hosts are still hosts, and vars set on
+    //   they are skipped — but a host listed in them is still a host, kept
+    //   with no variables (nothing else would remember it), and vars set on
     //   them are reported as a warning, since the Dataset has nowhere to put
     //   them (their children never are: every group is a child of `all`)
+    // - a host named only in an ordinary group is left to the full sync
+    //   (`add_group_members`): what a scoped sync answers about hosts it was
+    //   not asked for is not a claim that they have no variables
     //
     // Malformed input is an ERROR, never a silent skip: a group that doesn't
     // parse, or carries a key Ansible does not read there (`host` for
@@ -84,9 +85,19 @@ impl Dataset {
         // script could print before 0.36. Read as Ansible it is groups named
         // hostvars and groups and no host variables — a sync that "works"
         // and serves junk — so it is refused, saying what to print.
-        if !obj.contains_key("_meta")
-            && (obj.contains_key("hostvars") || obj.contains_key("groups"))
-        {
+        // A map of objects keyed by host or group names, not a group (which
+        // has hosts, children or vars): a group called `groups` still reads.
+        let old_shape = |key: &str| {
+            obj.get(key)
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|m| {
+                    m.values().all(serde_json::Value::is_object)
+                        && !m
+                            .keys()
+                            .any(|k| matches!(k.as_str(), "hosts" | "children" | "vars"))
+                })
+        };
+        if !obj.contains_key("_meta") && (old_shape("hostvars") || old_shape("groups")) {
             return Err(
                 "this is the {\"hostvars\", \"groups\"} format, which 0.36 no longer \
                  reads: print Ansible inventory JSON, with host variables under \
@@ -115,15 +126,16 @@ impl Dataset {
         };
 
         let mut groups: HashMap<String, Group> = HashMap::new();
-        let mut members: Vec<String> = Vec::new();
 
         for (name, group_value) in obj {
             if name == "_meta" {
                 continue;
             }
-            let group = parse_group(name, group_value)?;
-            members.extend(group.hosts.iter().cloned());
+            let group = parse_group(name, group_value, &mut warnings)?;
             if is_meta_group(name) {
+                for host in &group.hosts {
+                    hostvars.entry(host.clone()).or_default();
+                }
                 // These exist implicitly in every Ansible inventory; keeping
                 // them would duplicate membership.
                 if group.vars.as_ref().is_some_and(|v| !v.is_empty()) {
@@ -137,10 +149,6 @@ impl Dataset {
             groups.insert(name.clone(), group);
         }
 
-        for host in members {
-            hostvars.entry(host).or_default();
-        }
-
         Ok((
             Dataset {
                 hostvars,
@@ -152,9 +160,30 @@ impl Dataset {
     }
 }
 
+impl Dataset {
+    // A host named in a group but absent from `hostvars` is a host with no
+    // variables: `ansible-inventory --list` prints a host without variables
+    // only in its groups. Applied to what a FULL sync writes, the whole
+    // inventory, where the connector's silence about a host's variables
+    // means it has none.
+    pub fn add_group_members(&mut self) {
+        for group in self.groups.values() {
+            for host in &group.hosts {
+                if !self.hostvars.contains_key(host) {
+                    self.hostvars.insert(host.clone(), HostVars::new());
+                }
+            }
+        }
+    }
+}
+
 // One top-level group of Ansible inventory JSON: the object form, with only
 // the keys Ansible reads there, or the legacy list of hostnames.
-fn parse_group(name: &str, value: &serde_json::Value) -> Result<Group, String> {
+fn parse_group(
+    name: &str,
+    value: &serde_json::Value,
+    warnings: &mut Vec<String>,
+) -> Result<Group, String> {
     match value {
         // Legacy shorthand: "web": ["host1", "host2"]
         serde_json::Value::Array(items) => {
@@ -176,15 +205,29 @@ fn parse_group(name: &str, value: &serde_json::Value) -> Result<Group, String> {
             })
         }
         serde_json::Value::Object(keys) => {
-            // Group is lenient on purpose (it also reads cache snapshots and
-            // other instances' datasets), so a script's typo is caught here.
-            if let Some(unknown) = keys
-                .keys()
-                .find(|k| !matches!(k.as_str(), "hosts" | "children" | "vars"))
-            {
+            // Ansible ignores keys it does not read beside hosts, children
+            // and vars (a "description"), so they are dropped with a warning.
+            // A group with none of the three is a typo (`host` for `hosts`)
+            // that would otherwise become an empty group: refused.
+            let known = |k: &str| matches!(k, "hosts" | "children" | "vars");
+            if !keys.is_empty() && !keys.keys().any(|k| known(k)) {
+                let found: Vec<&str> = keys.keys().map(String::as_str).collect();
                 return Err(format!(
-                    "group '{}' has a key '{}' — a group takes hosts, children and vars",
-                    name, unknown
+                    "group '{}' has none of hosts, children or vars (it has {})",
+                    name,
+                    found.join(", ")
+                ));
+            }
+            let extra: Vec<&str> = keys
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !known(k))
+                .collect();
+            if !extra.is_empty() {
+                warnings.push(format!(
+                    "group '{}': {} ignored — a group takes hosts, children and vars",
+                    name,
+                    extra.join(", ")
                 ));
             }
             serde_json::from_value(value.clone())
@@ -291,8 +334,9 @@ mod tests {
     }
 
     // `ansible-inventory --list` leaves a host with no variables out of
-    // `_meta.hostvars`: it is named only in its groups, `ungrouped` and
-    // `all` included, and it is a host all the same.
+    // `_meta.hostvars`: it is named only in its groups. One listed in `all`
+    // or `ungrouped` is kept by the conversion, since those groups go; one
+    // in an ordinary group becomes a host when a full sync writes it.
     #[test]
     fn a_host_named_only_in_a_group_is_a_host() {
         let raw = serde_json::json!({
@@ -301,30 +345,57 @@ mod tests {
             "all": {"hosts": ["c"]},
             "ungrouped": {"hosts": ["d"]}
         });
-        let (dataset, _) = Dataset::from_ansible_inventory(raw).unwrap();
-        let mut hosts: Vec<_> = dataset.hostvars.keys().cloned().collect();
-        hosts.sort();
-        assert_eq!(hosts, ["a", "b", "c", "d"]);
+        let (mut dataset, _) = Dataset::from_ansible_inventory(raw).unwrap();
+        let hosts = |d: &Dataset| {
+            let mut h: Vec<_> = d.hostvars.keys().cloned().collect();
+            h.sort();
+            h
+        };
+        assert_eq!(hosts(&dataset), ["a", "c", "d"]);
+        dataset.add_group_members();
+        assert_eq!(hosts(&dataset), ["a", "b", "c", "d"]);
         assert_eq!(dataset.hostvars["a"]["x"], 1, "variables are kept");
         assert!(dataset.hostvars["b"].is_empty());
     }
 
     #[test]
+    fn a_group_called_groups_is_still_a_group() {
+        let raw = serde_json::json!({"groups": {"hosts": ["h1"]}});
+        let (dataset, _) = Dataset::from_ansible_inventory(raw).unwrap();
+        assert_eq!(dataset.groups["groups"].hosts, ["h1"]);
+    }
+
+    #[test]
     fn meta_without_hostvars_means_no_variables() {
-        let raw = serde_json::json!({"_meta": {}, "web": ["h1"]});
+        let raw = serde_json::json!({"_meta": {}, "ungrouped": ["h1"]});
         let (dataset, warnings) = Dataset::from_ansible_inventory(raw).unwrap();
         assert!(dataset.hostvars["h1"].is_empty());
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     #[test]
-    fn a_key_a_group_does_not_take_is_an_error() {
+    fn a_group_with_none_of_its_keys_is_an_error() {
         let raw = serde_json::json!({
             "_meta": {"hostvars": {}},
             "web": {"host": ["h1"]}
         });
         let err = Dataset::from_ansible_inventory(raw).unwrap_err();
-        assert!(err.contains("group 'web' has a key 'host'"), "{err}");
+        assert!(err.contains("group 'web' has none of hosts"), "{err}");
+    }
+
+    // Ansible ignores a key it does not read beside the ones it does.
+    #[test]
+    fn an_extra_key_beside_hosts_is_ignored_with_a_warning() {
+        let raw = serde_json::json!({
+            "_meta": {"hostvars": {}},
+            "web": {"hosts": ["h1"], "description": "web servers"}
+        });
+        let (dataset, warnings) = Dataset::from_ansible_inventory(raw).unwrap();
+        assert_eq!(dataset.groups["web"].hosts, ["h1"]);
+        assert!(
+            warnings.iter().any(|w| w.contains("description")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -335,7 +406,7 @@ mod tests {
 
         let (dataset, warnings) = Dataset::from_ansible_inventory(raw).unwrap();
         assert_eq!(dataset.groups.len(), 1);
-        assert!(dataset.hostvars["web01.example.com"].is_empty());
+        assert!(dataset.hostvars.is_empty(), "left to the full sync");
         assert!(warnings.iter().any(|w| w.contains("_meta")));
     }
 

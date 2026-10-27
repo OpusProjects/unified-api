@@ -232,6 +232,12 @@ impl Connector {
                  and can be left out)"
             )),
         }
+        // Before any early return: an inline script is ssh too.
+        if self.kind == ConnectorKind::Ssh && !self.host_args.is_empty() {
+            errors.push(format!(
+                "Connector '{id}' sets host_args but is not a script connector"
+            ));
+        }
         if let Some(script) = &self.script {
             if self.kind != ConnectorKind::Ssh {
                 errors.push(format!(
@@ -337,11 +343,6 @@ impl Connector {
                          location: instance) with its path"
                     )),
                 }
-                if !self.host_args.is_empty() {
-                    errors.push(format!(
-                        "Connector '{id}' sets host_args but is not a script connector"
-                    ));
-                }
             }
         }
         errors
@@ -377,6 +378,11 @@ mod tests {
         let c = connector("name: s\ntype: ssh\npath: gather_facts\nhost_args: [\"{target}\"]\n");
         let errors = c.errors("s").join("\n");
         assert!(errors.contains("host_args"), "{errors}");
+        let c = connector("name: s\ntype: ssh\nscript: uname\nhost_args: [\"{target}\"]\n");
+        assert!(
+            c.errors("s").join("\n").contains("host_args"),
+            "inline is ssh too"
+        );
         let c = connector("name: s\ntype: ssh\nscript: uname\noutput_format: ansible\n");
         assert!(
             c.errors("s")

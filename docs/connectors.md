@@ -321,12 +321,16 @@ It is converted to the [Dataset](#the-dataset-shape):
   (`{hosts, children, vars}`) and the legacy list form (`"web": ["h1", "h2"]`)
   are accepted.
 - A host named in a group but not in `_meta.hostvars` is a host with no
-  variables, as `ansible-inventory --list` prints it: it is kept, not dropped.
+  variables, as `ansible-inventory --list` prints it, on a full sync. A host or
+  group sync leaves such a host as the cache has it: an answer about hosts it
+  was not asked for is not a claim that they have no variables.
 - The implicit meta-groups `all` and `ungrouped` are skipped, but their hosts
   are kept; `vars` on them have no Dataset equivalent, and a warning says so.
+- A key a group does not take beside `hosts`, `children` or `vars` (a
+  `description`) is ignored with a warning, as Ansible ignores it.
 - Malformed input is an **error that fails the sync**, naming the offending
-  group — never a silent skip. That includes a key a group does not take
-  (`"host": [...]` for `"hosts"`).
+  group — never a silent skip. That includes a group with none of `hosts`,
+  `children` or `vars` (`"host": [...]` for `"hosts"`).
 - The `{"hostvars", "groups"}` shape a script could print before 0.36 fails the
   sync saying what to print. Read as Ansible it would be two groups called
   `hostvars` and `groups` and no host variables: a sync that "works" and serves

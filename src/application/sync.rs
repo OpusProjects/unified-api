@@ -8,7 +8,7 @@ use crate::application::enrich::run_enrichers_for_target;
 use crate::domain::cache_entry::{CacheEntry, RetainedHost};
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::enricher::Enricher;
-use crate::domain::source::{AdvertisedScopeRegistry, Source};
+use crate::domain::source::{AdvertisedScopeRegistry, ConnectorType, Source};
 use crate::domain::sync_health::SyncHealthRegistry;
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
@@ -461,15 +461,18 @@ async fn run_sync(
     let args = args_for_scope(source, &scope);
     // Where an ssh connector's path is, for the adapter (its contract, like
     // hosts_spec above); absent for one with an inline script. Always set or
-    // removed here, so nothing in the source's own config can stand in for
-    // it (source validation refuses the key too).
-    let location_key = crate::ports::connector::SSH_LOCATION_CONFIG_KEY;
-    match source.ssh_location {
-        Some(location) => {
-            config.insert(location_key.to_string(), location.name().to_string());
-        }
-        None => {
-            config.remove(location_key);
+    // removed for an ssh source, so nothing in its own config can stand in
+    // for it (source validation refuses the key there too). Any other
+    // source's config is its own and reaches its script as written.
+    if source.connector_type == ConnectorType::Ssh {
+        let location_key = crate::ports::connector::SSH_LOCATION_CONFIG_KEY;
+        match source.ssh_location {
+            Some(location) => {
+                config.insert(location_key.to_string(), location.name().to_string());
+            }
+            None => {
+                config.remove(location_key);
+            }
         }
     }
 
@@ -513,7 +516,10 @@ async fn run_sync(
     let duration_ms = start.elapsed().as_millis();
 
     match result {
-        Ok(output) => {
+        Ok(mut output) => {
+            if matches!(scope, SyncScope::Full) {
+                output.dataset.add_group_members();
+            }
             let total_hosts = output.dataset.hostvars.len();
             let total_groups = output.dataset.groups.len();
 
@@ -1383,6 +1389,69 @@ mod concurrency_tests {
             "name: test\nproject_id: test\nscript_path: x\nschedule: null\nttl_seconds: 3600\nsync_mode: replace\n",
         )
         .expect("source fixture")
+    }
+
+    // Answers every call with the same Ansible inventory: `a` with its
+    // variables, `b` named only in group `web`.
+    struct GroupOnlyConnector;
+
+    impl ConnectorPort for GroupOnlyConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            Box::pin(async {
+                let (dataset, _) = Dataset::from_ansible_inventory(serde_json::json!({
+                    "_meta": {"hostvars": {"a": {"x": 1}}},
+                    "web": {"hosts": ["a", "b"]}
+                }))
+                .expect("valid inventory");
+                Ok(dataset.into())
+            })
+        }
+    }
+
+    async fn sync_group_only(cache: &MemoryCache, scope: SyncScope) -> SyncOutcome {
+        sync_source(
+            cache,
+            &GroupOnlyConnector,
+            &MockSecrets::new(),
+            &SyncHealthRegistry::new(),
+            &AdvertisedScopeRegistry::new(),
+            &SyncCoordinator::new(),
+            "src",
+            &source(),
+            scope,
+            None,
+        )
+        .await
+    }
+
+    // A full sync is the whole inventory: `b`, named only in its group, is a
+    // host with no variables. A group sync answering the same says nothing
+    // about b's variables, so the ones the cache holds stay.
+    #[tokio::test]
+    async fn a_host_only_in_a_group_is_a_host_on_a_full_sync_only() {
+        let cache = MemoryCache::new();
+        let full = sync_group_only(&cache, SyncScope::Full).await;
+        assert_eq!(full.total_hosts, 2);
+        assert!(cache.get("src").unwrap().dataset.hostvars["b"].is_empty());
+
+        cache.update("src", &mut |entry| {
+            let vars: HostVars = [("y".to_string(), serde_json::json!(2))].into();
+            entry.update_host("b".to_string(), vars);
+        });
+        sync_group_only(&cache, SyncScope::Group("web".to_string())).await;
+        let entry = cache.get("src").unwrap();
+        assert_eq!(entry.dataset.hostvars["b"]["y"], 2, "b's variables survive");
+
+        // A cold host sync for `a` writes nothing about `b`.
+        let cold = MemoryCache::new();
+        sync_group_only(&cold, SyncScope::Hosts(vec!["a".to_string()])).await;
+        assert!(!cold.get("src").unwrap().dataset.hostvars.contains_key("b"));
     }
 
     // A slow full sync must not overwrite a scoped gather that started later and

@@ -290,6 +290,10 @@ pub async fn sync_source(
     // enrichment below is part of the same causal chain, so its scripts see
     // the same trigger the connector did.
     let trigger = request.trigger.clone();
+    let operation = match request.scope {
+        SyncScope::Full => "full",
+        SyncScope::Hosts(_) | SyncScope::Group(_) => "partial",
+    };
     let outcome = run_sync(
         cache, connector, secrets, scopes, source_id, source, request,
     )
@@ -349,6 +353,12 @@ pub async fn sync_source(
         "source" => source_id.to_string(),
     )
     .record(outcome.duration_ms as f64 / 1000.0);
+    // Only a script connector calls an external system's API: a static
+    // inventory is a file, ssh logs in to hosts, and remote asks another
+    // instance of this service.
+    if source.connector_type == crate::domain::source::ConnectorType::Script {
+        count_source_request(source_id, operation, outcome.success());
+    }
 
     // Bumped only under the lock and only for the plain full case, so a
     // waiter comparing before/after cannot be satisfied by a scoped slice or
@@ -770,6 +780,24 @@ fn apply_to_cache(
             }
         },
     }
+}
+
+// Every call this instance makes to an external system's API: a script
+// connector's sync of the whole source or of part of it (a refresh, a host,
+// a group), and an enricher run (application::enrich). One per run, whatever
+// the script asks of its API in that run. Separate from
+// unified_api_sync_total, which also counts syncs answered without a call
+// (coalesced), the built-in and ssh connectors, and leaves enrichers out:
+// this one is the traffic this instance sends to the systems it inventories,
+// what the Overview's outgoing chart reads.
+pub fn count_source_request(source_id: &str, operation: &'static str, ok: bool) {
+    metrics::counter!(
+        "unified_api_source_requests_total",
+        "source" => source_id.to_string(),
+        "operation" => operation,
+        "outcome" => if ok { "success" } else { "error" },
+    )
+    .increment(1);
 }
 
 #[cfg(test)]

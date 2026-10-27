@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Metric `unified_api_source_requests_total{source,operation,outcome}`: every call this instance makes to an external system's API, one per run of a script connector (a full sync, or a partial one: a refresh, a host, a group) or an enricher, leaving out coalesced syncs, `ssh`, `static_inventory` and `remote` (another unified-api); what the Overview's outgoing requests chart reads.
+
 ### Fixed
 
 - `--check-config <dir>` checks `<dir>`, as `--migrate-config <dir>` converts it; it ignored the argument and checked `CONFIG_DIR` or `./config`, so a CI step passing a path could be told OK about another directory.

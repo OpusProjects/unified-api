@@ -215,7 +215,8 @@ sources:
     sync_interval_seconds: 300
     ttl_seconds: 600
 
-# sources/src-netbox.yaml — with per-group TTL overrides
+# sources/src-netbox.yaml — groups/production.yaml gives its production
+# group a 15-minute TTL (see configuration.md, "Hosts and groups")
 sources:
   - name: src-netbox
     description: "NetBox"
@@ -223,9 +224,6 @@ sources:
     credentials: ["cred-netbox"]
     sync_interval_seconds: 600
     ttl_seconds: 3600
-    ttl_overrides:
-      groups:
-        production: 900
     config:                                # free-form, script-specific
       api_url: "https://netbox.example.com"
 

@@ -9,9 +9,4 @@ sources:
     credentials: ["cred-section9-api"]
     # schedule: "0 */1 * * *"    # cron (UTC) instead of the interval — pick one
     sync_interval_seconds: 60
-    ttl_seconds: 3600
-    ttl_overrides:
-      groups:
-        production: 900
-      hosts:
-        motoko.section9.net: 300
+    ttl_seconds: 3600                # a host or group can differ: hosts/, groups/

@@ -6,6 +6,7 @@ pub mod dataset;
 pub mod endpoint;
 pub mod enricher;
 pub mod group_trim;
+pub mod host;
 pub mod host_filter;
 pub mod ldap;
 pub mod project;

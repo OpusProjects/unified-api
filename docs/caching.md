@@ -38,8 +38,8 @@ got wrong in ways that were invisible:
   reports not fresh, because there is no full gather for `ttl_seconds` to be
   measured against. The next full sync clears that state, in either sync mode.
 
-The **effective TTL** for a host is resolved in order: a `ttl_overrides.hosts` entry
-for that hostname → a `ttl_overrides.groups` entry for a group containing it → the
+The **effective TTL** for a host is resolved in order: a [host item](configuration.md#hosts-and-groups)
+naming the source → a group item naming it, for a group containing the host → the
 source's `ttl_seconds`.
 
 Staleness is *reported*, not enforced: `GET /sources` and `/status` expose

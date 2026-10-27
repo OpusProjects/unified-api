@@ -1,0 +1,9 @@
+---
+# What a source does differently for every host in one of its groups,
+# including hosts that join the group later. `name` is the group as the
+# source's dataset spells it.
+groups:
+  - name: production
+    sources:
+      src-section9:
+        ttl_seconds: 900               # production refreshes every 15 min

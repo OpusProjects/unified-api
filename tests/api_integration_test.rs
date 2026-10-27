@@ -628,6 +628,35 @@ async fn metrics_exposes_sync_counters() {
     );
 }
 
+// The list says which sources are federated, to every caller: what a Sync
+// must ask the instance it copies to gather again.
+#[tokio::test]
+async fn the_list_says_which_sources_are_federated() {
+    let mut remote = script_source("src-on-the-edge");
+    remote.connector_type = unified_api::domain::source::ConnectorType::Remote;
+    let sources = std::collections::HashMap::from([
+        (
+            "src-local".to_string(),
+            script_source("tests/adapters/out/connectors/inventory.py"),
+        ),
+        ("src-copy".to_string(), remote),
+    ]);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+    let (status, body) = get(app, "/api/v1/sources").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let federated = |id: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["source_id"] == id)
+            .unwrap()["federated"]
+            .clone()
+    };
+    assert_eq!(federated("src-copy"), true);
+    assert_eq!(federated("src-local"), false);
+}
+
 // A sync that fails before its script runs (a credential that cannot be
 // resolved) asks the system nothing: no outgoing request is counted.
 #[tokio::test]

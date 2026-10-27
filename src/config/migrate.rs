@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use super::{REQUIRED_CONFIG_FILE, config_files, is_safe_id, load_config_detailed};
+use super::{REQUIRED_CONFIG_FILE, config_files, is_safe_id};
 
 // The 0.34 files and the section each becomes.
 pub const LEGACY_FILES: [(&str, &str); 7] = [
@@ -928,7 +928,9 @@ fn validate_in(dir: &Path, plan: &MigrationPlan, scratch: &Path) -> Result<(), S
         return Err(format!("{REQUIRED_CONFIG_FILE} is missing"));
     }
     write_tree(scratch, &files)?;
-    load_config_detailed(scratch)
+    // As startup will load it: a 0.35-form ssh connector already among the
+    // item files is converted in memory there, so it must not refuse here.
+    super::load_config_upgrading(scratch)
         .map(|_| ())
         .map_err(|e| format!("the converted configuration does not load: {e}"))
 }

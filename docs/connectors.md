@@ -385,10 +385,14 @@ absolute path on this instance's disk) — `path` is a script file on this
 instance: in `project`'s checkout (read at every sync, so a push is live at the
 next one), or absolute. It is sent over the ssh connection, and the host's
 `/bin/sh` (whatever the account's login shell) writes it to a private
-temporary file, runs that file with the interpreter its `#!` line names and
-that line's flags (`env` and its options skipped) — or, with no `#!` line, the
-account's login shell, as an ssh command line is run — and removes it when the
-run ends, also when the timeout cuts the session. It runs as a file would:
+temporary file in `$TMPDIR` or `/tmp` (with `mktemp`, or without it on hosts
+that have none), checks that all of it arrived — a session cut while sending
+never runs part of a script — runs that file with the interpreter its `#!`
+line names and that line's flags (`env` and its options skipped) — or, with no
+`#!` line, the account's login shell, as an ssh command line is run — and
+removes it when the run ends. A run the timeout cuts while the script hangs
+gets no signal from sshd and may leave its file and process behind; the next
+run removes such files once they are a day old. It runs as a file would:
 `script_args` after it as `$1`, `$2`… (never taken for the interpreter's own
 options), `$0`, `$BASH_SOURCE` and `__file__` naming it, and its standard input
 empty, so nothing in it waits on the connection. Hosts that mount `/tmp`
@@ -693,7 +697,9 @@ curl -s localhost:8182/api/v1/connectors/d42 -H "X-API-Key: $ADMIN_KEY"
   "connector_type": "script",
   "built_in": false,
   "project_id": "prj-inventory",
+  "location": null,
   "path": "dynamic/d42/inventory.py",
+  "script": null,
   "script_args": ["--list"],
   "host_args": [],
   "output_format": "ansible",

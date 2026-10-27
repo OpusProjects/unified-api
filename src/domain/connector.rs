@@ -62,9 +62,9 @@ pub struct Connector {
     pub script: Option<String>,
 
     // CLI arguments, e.g. ["--list"] for an Ansible dynamic inventory script.
-    // ssh: passed to the script streamed from here, to every executable a
-    // host path matches (files that are read ignore them), and appended to
-    // an inline command.
+    // ssh: the streamed script's arguments ($1, $2…, a file's or an inline
+    // script's alike), or every executable a host path matches (files that
+    // are read ignore them).
     #[serde(default)]
     pub script_args: Vec<String>,
 

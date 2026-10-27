@@ -502,6 +502,8 @@ pub fn info(state: &Arc<AppState>, id: &str, view: &View) -> CachedSourceInfo {
         url: format!("/api/v1/sources/{id}"),
         kind: "view",
         cached,
+        // A view gathers nothing; its members say what they are.
+        federated: false,
         is_fresh: cached && snap.is_fresh(),
         age_seconds: cached.then(|| snap.age_seconds()),
         total_hosts: cached.then(|| snap.hosts().len()),
@@ -536,6 +538,7 @@ pub fn detail(
         name: view.name.clone(),
         kind: "view",
         cached,
+        federated: false,
         is_fresh: cached && snap.is_fresh(),
         age_seconds: cached.then(|| snap.age_seconds()),
         ttl_seconds: snap.ttl_seconds(),

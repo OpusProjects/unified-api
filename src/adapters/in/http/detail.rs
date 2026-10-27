@@ -33,6 +33,9 @@ pub struct SourceDetail {
     pub kind: &'static str,
     /// Whether there is data behind this id right now
     pub cached: bool,
+    /// Whether its data is copied from another unified-api (the remote
+    /// connector), for every caller: see the same field on the list
+    pub federated: bool,
     pub is_fresh: bool,
     /// Null when nothing is cached — never zero, which would read as "synced
     /// just now"
@@ -153,6 +156,7 @@ pub async fn get_source(
         name: source.name.clone(),
         kind: "source",
         cached: entry.is_some(),
+        federated: source.connector_type == crate::domain::source::ConnectorType::Remote,
         is_fresh: entry.as_ref().is_some_and(|e| e.is_fresh()),
         age_seconds: entry.as_ref().map(|e| e.age_seconds()),
         ttl_seconds: source.ttl_seconds,

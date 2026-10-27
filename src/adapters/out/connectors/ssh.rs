@@ -596,9 +596,20 @@ fn stream_command(script: &[u8], args: &[String]) -> Result<String, String> {
         }
         None => r#""${SHELL:-/bin/sh}""#.to_string(),
     };
+    // Step by step, on the host:
+    // - files an earlier run left (the timeout cut its session while the
+    //   script hung: sshd sends no signal then, so its trap never ran) are
+    //   removed once a day old; POSIX find only, no -maxdepth, for AIX;
+    // - a private file: mktemp, or where there is none (base AIX) one named
+    //   after this shell, created only if absent (noclobber), mode 600;
+    // - the script, then its size checked against what was sent: a session
+    //   cut mid-send ends `cat` as cleanly as the end of the script does,
+    //   and a part of a script is never run;
+    // - run, standard input empty; the file removed on exit.
+    let size = script.len();
     Ok(under_sh(
         &format!(
-            r#"t=$(mktemp "${{TMPDIR:-/tmp}}/unified-api.XXXXXX") || exit 1; trap "rm -f -- \"$t\"" EXIT; trap "exit 129" HUP; trap "exit 130" INT; trap "exit 143" TERM; cat >"$t" || exit 1; {run} "$t" "$@" </dev/null"#
+            r#"d="${{TMPDIR:-/tmp}}"; find "$d/." ! -name . -prune -name "unified-api.*" -user "$(id -u)" -mtime +0 -exec rm -f {{}} + 2>/dev/null; t=$(mktemp "$d/unified-api.XXXXXX" 2>/dev/null) || {{ t="$d/unified-api.$$"; (set -C; umask 077; : >"$t") || exit 1; }}; trap "rm -f -- \"$t\"" EXIT; trap "exit 129" HUP; trap "exit 130" INT; trap "exit 143" TERM; cat >"$t" || exit 1; [ "$(wc -c <"$t" | tr -d " ")" = {size} ] || {{ echo "unified-api: the script arrived incomplete" >&2; exit 75; }}; {run} "$t" "$@" </dev/null"#
         ),
         args,
     ))
@@ -1182,6 +1193,91 @@ mod tests {
         assert_eq!(run("#!/usr/bin/perl\nprint \"@ARGV\\n\";\n"), "--x it's\n");
         // Nothing is left behind.
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    fn run_remote_with(
+        command: &str,
+        stdin: &[u8],
+        tmp: &std::path::Path,
+        path: Option<&std::path::Path>,
+    ) -> (i32, String) {
+        use std::io::Write;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg(command)
+            .env("TMPDIR", tmp)
+            .env("SHELL", "/bin/sh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        if let Some(path) = path {
+            cmd.env("PATH", path);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
+        let output = child.wait_with_output().unwrap();
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
+    }
+
+    #[test]
+    fn a_script_cut_short_on_the_way_is_never_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = b"echo first\necho second\n";
+        let command = stream_command(script, &[]).unwrap();
+        // The session ends after half of it: nothing of it runs.
+        let (code, out) = run_remote_with(&command, &script[..10], tmp.path(), None);
+        assert_eq!(code, 75);
+        assert_eq!(out, "");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_host_without_mktemp_still_runs_the_script() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A PATH with what the command needs, but no mktemp.
+        let bin = tempfile::tempdir().unwrap();
+        for tool in ["cat", "wc", "tr", "find", "id", "rm", "sh"] {
+            let found = ["/usr/bin", "/bin"]
+                .iter()
+                .map(|d| std::path::Path::new(d).join(tool))
+                .find(|p| p.exists())
+                .unwrap();
+            std::os::unix::fs::symlink(found, bin.path().join(tool)).unwrap();
+        }
+        let script = b"echo ran\n";
+        let command = stream_command(script, &[]).unwrap();
+        let (code, out) = run_remote_with(&command, script, tmp.path(), Some(bin.path()));
+        assert_eq!((code, out.as_str()), (0, "ran\n"));
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_day_old_leftover_is_removed_and_a_fresh_one_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = tmp.path().join("unified-api.stale1");
+        let fresh = tmp.path().join("unified-api.running");
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&fresh, "x").unwrap();
+        let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(two_days)
+            .unwrap();
+        let script = b"echo ok\n";
+        let (code, _) = run_remote_with(
+            &stream_command(script, &[]).unwrap(),
+            script,
+            tmp.path(),
+            None,
+        );
+        assert_eq!(code, 0);
+        assert!(!old.exists(), "a day-old leftover goes");
+        assert!(fresh.exists(), "a run still going keeps its file");
     }
 
     #[test]

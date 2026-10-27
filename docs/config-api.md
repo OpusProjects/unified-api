@@ -173,7 +173,11 @@ curl -sS -X POST "$BASE/api/v1/config/validate" \
 
 Every problem at once, the same list `--check-config` prints — because it is
 the same code, run against a staged copy of the directory the push would
-produce.
+produce. One difference: startup and `--check-config` convert what a previous
+version wrote (0.35 ssh connectors) in memory, and say so; a push is refused
+until it is written in this version's shape, so the repository moves. Push a
+connector and the sources it changes together (one file, or `PUT
+/api/v1/config`): each alone is half a conversion and does not validate.
 
 A whole-directory push is one request body, so it lives under
 `server.max_body_bytes` (default 2 MiB) like every other route; a directory

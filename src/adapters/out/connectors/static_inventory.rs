@@ -3,10 +3,8 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use tracing::{debug, warn};
-
-use crate::domain::source::OutputFormat;
 use crate::domain::static_inventory::{StaticInventoryInput, parse};
+use tracing::{debug, warn};
 
 // name → the files that define it, in merge order: (label for errors, contents)
 type VarsFiles = HashMap<String, Vec<(String, String)>>;
@@ -38,9 +36,8 @@ impl ConnectorPort for StaticInventoryConnector {
     fn execute(
         &self,
         script_path: &str,
-        // No process, no stdout: args and output_format don't apply here
+        // No process, no stdout: args don't apply here
         _args: &[String],
-        _output_format: OutputFormat,
         _config: &HashMap<String, String>,
         _credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {

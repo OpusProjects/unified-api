@@ -94,11 +94,15 @@ pub async fn run_enricher(
         "source" => enricher.target_id.clone(),
     )
     .record(outcome.duration_ms as f64 / 1000.0);
-    crate::application::sync::count_source_request(
-        &enricher.target_id,
-        "enrich",
-        outcome.success(),
-    );
+    // A declarative enricher merges from another source's cache: it calls
+    // nothing, so it is no outgoing request.
+    if !enricher.is_declarative() {
+        crate::application::sync::count_source_request(
+            &enricher.target_id,
+            "enrich",
+            outcome.success(),
+        );
+    }
 
     Some(outcome)
 }

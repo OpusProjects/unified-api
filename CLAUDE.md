@@ -331,7 +331,7 @@ already-released CHANGELOG section, and cutting a version is precisely that
 edit — renaming `## [Unreleased]` to `## [x.y.z]`. The prefix is how the check
 knows to stand aside.
 
-Four edits, all required:
+Five edits, all required:
 
 1. `Cargo.toml` — `version = "x.y.z"` (source of truth; the OpenAPI spec
    version comes from `CARGO_PKG_VERSION`)
@@ -340,6 +340,8 @@ Four edits, all required:
    leave a fresh empty `## [Unreleased]` above it
 4. `CHANGELOG.md` link refs at the bottom — repoint `[Unreleased]` at
    `vx.y.z...HEAD` and add `[x.y.z]: …/compare/v<previous>...vx.y.z`
+5. `config/projects/prj-connectors-infra.yaml` — `branch: "vx.y.z"`, so the
+   bundled sample scripts are the ones that release's binary reads
 
 ### 3. Check before pushing
 

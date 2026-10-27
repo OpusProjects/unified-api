@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use unified_api::adapters::out::connectors::process::ProcessConnector;
-use unified_api::domain::source::OutputFormat;
 use unified_api::ports::connector::ConnectorPort;
 
 // Helper: builds a config with the desired scenario
@@ -26,7 +25,6 @@ async fn execute_default_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config_with_scenario("default"),
             &empty_credentials(),
         )
@@ -64,7 +62,6 @@ async fn execute_empty_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config_with_scenario("empty"),
             &empty_credentials(),
         )
@@ -88,7 +85,6 @@ async fn execute_large_inventory() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config_with_scenario("large"),
             &empty_credentials(),
         )
@@ -117,7 +113,6 @@ async fn execute_error_scenario() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config_with_scenario("error"),
             &empty_credentials(),
         )
@@ -142,7 +137,6 @@ async fn execute_nonexistent_script() {
         .execute(
             "tests/adapters/out/connectors/this_does_not_exist.py",
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -170,7 +164,6 @@ async fn credentials_are_passed_as_env_vars() {
         .execute(
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config_with_scenario("default"),
             &credentials,
         )
@@ -256,7 +249,6 @@ async fn execute_without_required_args_fails() {
         .execute(
             "tests/adapters/out/connectors/args_list.py",
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -275,7 +267,6 @@ async fn execute_passes_script_args_verbatim() {
         .execute(
             "tests/adapters/out/connectors/args_list.py",
             &args,
-            OutputFormat::Native,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -288,7 +279,7 @@ async fn execute_passes_script_args_verbatim() {
 }
 
 // =========================================================================
-// Test: output_format ansible — standard dynamic inventory JSON conversion
+// Test: Ansible dynamic inventory JSON conversion
 // =========================================================================
 
 #[tokio::test]
@@ -299,7 +290,6 @@ async fn ansible_format_output_is_converted_to_dataset() {
         .execute(
             "tests/adapters/out/connectors/ansible_inventory_source.py",
             &["--list".to_string()],
-            OutputFormat::Ansible,
             &HashMap::new(),
             &empty_credentials(),
         )
@@ -324,29 +314,32 @@ async fn ansible_format_output_is_converted_to_dataset() {
     assert!(!dataset.groups.contains_key("ungrouped"));
 }
 
-// The bug this feature fixes: ansible JSON parsed as native format "succeeds"
-// with an empty dataset because both Dataset fields default. The connector now
-// logs a WARN suggesting output_format: ansible — the data outcome stays the
-// same (this test documents it).
+// The {"hostvars", "groups"} shape a script could print before 0.36. Read as
+// Ansible it would "succeed" as two groups and no host variables, so it is
+// refused instead, saying what to print.
 #[tokio::test]
-async fn ansible_output_parsed_as_native_yields_empty_dataset() {
-    let connector = ProcessConnector::new();
+async fn the_old_hostvars_groups_shape_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
 
-    let result = connector
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("old.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho '{\"hostvars\": {\"h1.example\": {}}, \"groups\": {}}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let err = ProcessConnector::new()
         .execute(
-            "tests/adapters/out/connectors/ansible_inventory_source.py",
-            &["--list".to_string()],
-            OutputFormat::Native,
+            &script.to_string_lossy(),
+            &[],
             &HashMap::new(),
             &empty_credentials(),
         )
-        .await;
-
-    let dataset = result
-        .expect("parse succeeds — that is precisely the trap")
-        .dataset;
-    assert!(dataset.hostvars.is_empty());
-    assert!(dataset.groups.is_empty());
+        .await
+        .expect_err("the old shape must not sync");
+    assert!(err.message.contains("_meta.hostvars"), "{}", err.message);
 }
 
 // =========================================================================
@@ -360,7 +353,6 @@ async fn execute_script_with_unparseable_output() {
         .execute(
             "tests/adapters/out/connectors/bad_json.py",
             &[],
-            OutputFormat::Native,
             &empty_credentials(),
             &empty_credentials(),
         )
@@ -392,7 +384,7 @@ async fn a_venv_on_the_config_wins_the_interpreter_lookup() {
     let fake_python = bin.join("python3");
     std::fs::write(
         &fake_python,
-        "#!/bin/sh\necho '{\"hostvars\": {\"ran-in-venv.example\": {}}, \"groups\": {}}'\n",
+        "#!/bin/sh\necho '{\"_meta\": {\"hostvars\": {\"ran-in-venv.example\": {}}}}'\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -410,7 +402,6 @@ async fn a_venv_on_the_config_wins_the_interpreter_lookup() {
             // inventory, with it the marker
             "tests/adapters/out/connectors/inventory.py",
             &[],
-            OutputFormat::Native,
             &config,
             &empty_credentials(),
         )

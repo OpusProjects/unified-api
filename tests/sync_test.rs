@@ -55,10 +55,10 @@ fn test_source(scenario: &str) -> Source {
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
+        ssh_location: None,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,
@@ -777,10 +777,10 @@ async fn sync_infra_source() {
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
-            output_format: Default::default(),
             hosts_from_source: None,
             connector: "script-test".to_string(),
             connector_type: ConnectorType::Script,
+            ssh_location: None,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
             schedule: None,
@@ -878,10 +878,10 @@ async fn endpoint_combines_sources() {
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
-            output_format: Default::default(),
             hosts_from_source: None,
             connector: "script-test".to_string(),
             connector_type: ConnectorType::Script,
+            ssh_location: None,
             sync_mode: SyncMode::Replace,
             credential_ids: vec![],
             schedule: None,
@@ -1529,7 +1529,6 @@ mod hosts_from_source {
     use unified_api::adapters::out::secrets::mock::MockSecrets;
     use unified_api::application::sync::{SyncCoordinator, SyncScope, sync_source};
     use unified_api::domain::dataset::Dataset;
-    use unified_api::domain::source::OutputFormat;
     use unified_api::domain::sync_health::SyncHealthRegistry;
     use unified_api::ports::cache::CachePort;
     use unified_api::ports::connector::{ConnectorPort, ConnectorResult};
@@ -1545,7 +1544,6 @@ mod hosts_from_source {
             &self,
             _script_path: &str,
             _args: &[String],
-            _output_format: OutputFormat,
             config: &HashMap<String, String>,
             _credentials: &HashMap<String, String>,
         ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
@@ -1896,10 +1894,10 @@ fn granular_source(host_args: Vec<String>, host_sync_updates_group_vars: bool) -
         script_args: vec!["--list".to_string()],
         host_args,
         host_sync_updates_group_vars,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
+        ssh_location: None,
         sync_mode: SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,

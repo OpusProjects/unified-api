@@ -265,6 +265,11 @@ pub struct CachedSourceInfo {
     /// is configured but has never completed a sync — the case `sync_health`
     /// exists to explain.
     pub cached: bool,
+    /// Whether its data is copied from another unified-api (the remote
+    /// connector): what a Sync must ask that instance to gather again
+    /// (`refresh_origin`). Shown to every caller: the federation map already
+    /// names each remote source's origin.
+    pub federated: bool,
     pub is_fresh: bool,
     /// Null when nothing is cached. Not zero: a zero here reads as "synced
     /// just now, and empty", which is the opposite of what it would mean.
@@ -346,6 +351,9 @@ pub async fn list_cached_sources(
             CachedSourceInfo {
                 kind: "source",
                 cached: entry.is_some(),
+                federated: config.sources.get(&id).is_some_and(|s| {
+                    s.connector_type == crate::domain::source::ConnectorType::Remote
+                }),
                 is_fresh: entry.as_ref().is_some_and(|e| e.is_fresh()),
                 age_seconds: entry.as_ref().map(|e| e.age_seconds()),
                 total_hosts: entry.as_ref().map(|e| e.dataset.hostvars.len()),

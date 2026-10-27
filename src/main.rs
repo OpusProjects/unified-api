@@ -73,8 +73,13 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        match unified_api::config::load_config(&config_dir) {
-            Ok(cfg) => {
+        // As startup loads it: what an older version wrote and this one
+        // converts is reported, and still counts as OK, since it starts.
+        match unified_api::config::load_config_upgrading(std::path::Path::new(&config_dir)) {
+            Ok((cfg, upgraded)) => {
+                for line in &upgraded {
+                    println!("startup converts: {line}");
+                }
                 println!(
                     "configuration OK ({}): {} sources, {} connectors, {} views, \
                      {} credentials, {} enrichers, {} endpoints, {} projects",
@@ -161,8 +166,15 @@ async fn main() {
         }
     };
 
-    let cfg = match unified_api::config::load_config(&config_dir) {
-        Ok(cfg) => cfg,
+    // Upgrading: what an older version wrote is converted in memory, and
+    // said, so this version starts on the files as they are.
+    let cfg = match unified_api::config::load_config_upgrading(std::path::Path::new(&config_dir)) {
+        Ok((cfg, upgraded)) => {
+            for line in upgraded {
+                warn!("{line}");
+            }
+            cfg
+        }
         Err(e) => {
             error!("Failed to load configuration: {}", e);
             std::process::exit(1);
@@ -266,6 +278,9 @@ async fn main() {
     if let Some(persistence) = &cfg.cache.persistence {
         let path = std::path::PathBuf::from(&persistence.path);
         unified_api::adapters::out::cache::persistence::load_or_warn(&*state.cache, &path).await;
+        // A snapshot written before a source was removed still holds its
+        // data; restored as is, it was listed and served on every boot.
+        unified_api::application::config::drop_unconfigured_entries(&state);
         let handle = unified_api::adapters::out::cache::persistence::start_snapshot_task(
             std::sync::Arc::clone(&state.cache),
             std::sync::Arc::clone(&state.snapshot_health),

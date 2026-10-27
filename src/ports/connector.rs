@@ -1,5 +1,4 @@
 use crate::domain::dataset::Dataset;
-use crate::domain::source::OutputFormat;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -68,11 +67,11 @@ pub trait ConnectorPort: Send + Sync {
         // CLI arguments for the script — many inventory scripts follow the
         // Ansible dynamic inventory convention and require e.g. `--list`
         args: &[String],
-        // How to interpret the script's stdout (native Dataset vs Ansible
-        // inventory JSON). The SSH connector builds its Dataset itself and
-        // ignores this.
-        output_format: OutputFormat,
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>>;
 }
+
+// The key under which an ssh source's location reaches the ssh adapter in
+// its config; defined with the connector it describes.
+pub use crate::domain::connector::SSH_LOCATION_CONFIG_KEY;

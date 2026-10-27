@@ -1,10 +1,13 @@
 ---
-# SSH: the native connector, nothing installed on the hosts. `path` is what
-# runs remotely — a label such as "gather_facts" for the built-in gather
-# modes, or the command itself for `gather_mode: script`. No project: nothing
-# runs from a checkout.
+# SSH: the native connector, nothing installed on the hosts. `location: host`
+# means `path` is on each host: every file it matches is run if executable,
+# read if not, and becomes a fact named after it (Ansible's local facts).
+# The other choices: a script file here (`project` + `path`, or
+# `location: instance`) or one written in the item (`script:`), streamed to
+# each host and run there.
 connectors:
   - name: ssh-facts
     description: "SSH fact gathering"
     type: "ssh"
-    path: "gather_facts"
+    location: "host"
+    path: "/etc/ansible/facts.d/*.fact"

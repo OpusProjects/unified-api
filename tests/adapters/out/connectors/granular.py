@@ -2,7 +2,7 @@
 """
 Sample connector that can gather ONE host without gathering the inventory.
 
-Two modes, both printing the native Dataset shape:
+Two modes, both printing Ansible inventory JSON:
 
   --list                   the whole inventory (motoko and batou, both in
                            "legacy")
@@ -18,6 +18,22 @@ Each host carries `called_with` so a test can prove which mode ran.
 
 import json
 import sys
+
+
+# What a connector prints: Ansible dynamic inventory JSON, with host variables
+# under _meta.hostvars and each group a top-level key. The inventory is built
+# in the {"hostvars", "groups"} shape, which is easier to filter, and
+# converted on the way out.
+def to_ansible(inventory):
+    return {"_meta": {"hostvars": inventory.get("hostvars", {})}, **inventory.get("groups", {})}
+
+
+def dump_inventory(inventory, out, **kwargs):
+    json.dump(to_ansible(inventory), out, **kwargs)
+
+
+def inventory_json(inventory, **kwargs):
+    return json.dumps(to_ansible(inventory), **kwargs)
 
 INVENTORY = {
     "hostvars": {
@@ -56,7 +72,7 @@ if "--only-host" in args:
 
     modern = dict(MODERN)
     modern["hosts"] = known
-    print(json.dumps({"hostvars": hostvars, "groups": {"modern": modern}}))
+    print(inventory_json({"hostvars": hostvars, "groups": {"modern": modern}}))
     sys.exit(0)
 
 hostvars = {}
@@ -64,4 +80,4 @@ for host, vars in INVENTORY["hostvars"].items():
     hostvars[host] = dict(vars)
     hostvars[host]["called_with"] = called_with
 
-print(json.dumps({"hostvars": hostvars, "groups": INVENTORY["groups"]}))
+print(inventory_json({"hostvars": hostvars, "groups": INVENTORY["groups"]}))

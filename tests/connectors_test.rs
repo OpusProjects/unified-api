@@ -125,7 +125,7 @@ async fn the_list_names_what_each_connector_runs_and_who_uses_it() {
     assert_eq!(sample["project_id"], "prj-inv");
     assert!(sample["path"].as_str().unwrap().ends_with("inventory.py"));
     assert_eq!(sample["script_args"], serde_json::json!(["--list"]));
-    assert_eq!(sample["output_format"], "native");
+    assert!(sample.get("output_format").is_none(), "removed in 0.36");
     assert_eq!(sample["timeout_seconds"], 120);
     let users: Vec<(&str, u64)> = sample["used_by"]
         .as_array()

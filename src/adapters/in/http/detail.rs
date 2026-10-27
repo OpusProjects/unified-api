@@ -33,6 +33,9 @@ pub struct SourceDetail {
     pub kind: &'static str,
     /// Whether there is data behind this id right now
     pub cached: bool,
+    /// Whether its data is copied from another unified-api (the remote
+    /// connector), for every caller: see the same field on the list
+    pub federated: bool,
     pub is_fresh: bool,
     /// Null when nothing is cached — never zero, which would read as "synced
     /// just now"
@@ -73,10 +76,19 @@ pub struct Gathering {
     pub connector: String,
     pub connector_type: ConnectorType,
     /// The project whose checkout holds the script (from the connector) or
-    /// the inventory (a static_inventory source's own). Null for remote and
-    /// ssh sources, which run nothing from a checkout
+    /// the inventory (a static_inventory source's own). Null for remote
+    /// sources, and for ssh sources whose path is on the hosts or whose
+    /// script is inline
     pub project_id: Option<String>,
+    /// The file the connector runs or reads. Empty for an ssh connector
+    /// whose script is inline (its text is on the admin-only connectors API,
+    /// not here: this page is open to restricted keys)
     pub script_path: String,
+    /// ssh only: where `script_path` is, "host" or "instance"; null for an
+    /// inline script and for every other connector
+    pub location: Option<String>,
+    /// ssh only: the connector runs a script written in its own item
+    pub inline_script: bool,
     pub sync_mode: SyncMode,
     pub timeout_seconds: u64,
     /// Seconds between periodic syncs; null when only a cron schedule or
@@ -133,6 +145,10 @@ pub async fn get_source(
     // configured, it has a schedule, and `sync_health` is where the reason it
     // has no data is written down.
     let entry = state.cache.get(&id);
+    // An ssh connector that names no location runs its own inline script,
+    // handed over as script_path.
+    let inline = source.connector_type == crate::domain::source::ConnectorType::Ssh
+        && source.ssh_location.is_none();
 
     Ok(Json(SourceDetail {
         url: format!("/api/v1/sources/{id}"),
@@ -140,6 +156,7 @@ pub async fn get_source(
         name: source.name.clone(),
         kind: "source",
         cached: entry.is_some(),
+        federated: source.connector_type == crate::domain::source::ConnectorType::Remote,
         is_fresh: entry.as_ref().is_some_and(|e| e.is_fresh()),
         age_seconds: entry.as_ref().map(|e| e.age_seconds()),
         ttl_seconds: source.ttl_seconds,
@@ -151,7 +168,13 @@ pub async fn get_source(
             connector: source.connector.clone(),
             connector_type: source.connector_type.clone(),
             project_id: source.project_id.clone(),
-            script_path: source.script_path.clone(),
+            script_path: if inline {
+                String::new()
+            } else {
+                source.script_path.clone()
+            },
+            location: source.ssh_location.map(|l| l.name().to_string()),
+            inline_script: inline,
             sync_mode: source.sync_mode.clone(),
             timeout_seconds: source.timeout_seconds,
             sync_interval_seconds: source.sync_interval_seconds,

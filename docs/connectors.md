@@ -19,7 +19,9 @@ three contracts, and the connector item that says how a source reaches its syste
 
 ## The Dataset shape
 
-All three script types deal in the same JSON document:
+Enrichers and outputs deal in this JSON document, and it is what the API serves
+for a source. A connector script prints [Ansible inventory
+JSON](#the-output-ansible-inventory-json) instead, which is converted to it:
 
 ```json
 {
@@ -45,11 +47,11 @@ only meaningful in enricher output.
 ## Connectors and sources
 
 A **connector** says HOW to talk to a kind of system: which script, from which
-project, with which arguments, and how to read what it prints. A **source** says
+project, with which arguments. A **source** says
 WHICH instance of that system — its credentials, its `config`, its schedule and
 TTLs — and names its connector. Ten Device42 tenants are ten sources and one
-connector; before connectors existed, the script path, its arguments and its
-output format were copied into each of the ten, and drifted apart one edit at a
+connector; before connectors existed, the script path and its arguments were
+copied into each of the ten, and drifted apart one edit at a
 time.
 
 ```yaml
@@ -61,7 +63,6 @@ connectors:
     project: "prj-inventory"            # the checkout `path` resolves in
     path: "dynamic/d42/inventory.py"
     script_args: ["--list"]
-    output_format: "ansible"
     # timeout_seconds: 300              # default; a source may override it
 
 # sources/src-d42-acme.yaml
@@ -79,11 +80,12 @@ sources:
 | Connector field | Meaning |
 |---|---|
 | `type` | `script` (default) or `ssh` |
-| `project` | The project whose checkout holds the script. Required for a script connector whose `path` is relative; refused on ssh, whose `path` runs on the remote host |
-| `path` | script: the file to run, inside the project checkout (or absolute). ssh: the remote command for `gather_mode: script`, or a label such as `gather_facts` for the built-in gather modes |
-| `script_args` | CLI arguments, verbatim. On ssh, appended to the remote command in `script` gather mode |
+| `project` | The project whose checkout holds the script. Required for a script connector whose `path` is relative; on ssh, the project of a script streamed to each host, refused with `location: host` |
+| `location` | ssh only: where `path` is — `host` (on each host) or `instance` (here; the default with a `project`). See [SSH connectors](#ssh-connectors-type-ssh) |
+| `path` | A file, always. script: the one to run, inside the project checkout (or absolute). ssh: a script here, or a file or pattern of files on each host |
+| `script` | ssh only, instead of `path`: the script itself, written in the item |
+| `script_args` | CLI arguments, verbatim and quoted. On ssh, passed to the streamed script, or to every executable a host path matches |
 | `host_args` | Script only: CLI arguments for a host-scoped sync, replacing `script_args` (see below) |
-| `output_format` | Script only: `native` (default) or `ansible` (see below) |
 | `timeout_seconds` | Bound on one sync (default 300). A source may set its own to override it — the tenant ten times bigger than the others |
 
 Anything that describes the script or the protocol is the connector's; anything
@@ -92,9 +94,13 @@ as `sync_mode` and `host_sync_updates_group_vars` — stays on the source. The
 full split is in [configuration](configuration.md#source-or-connector).
 
 Settings that look active and are not are refused at startup rather than
-ignored: `project`, `host_args` or `output_format` on an ssh connector, a
-relative script `path` without a `project`, and `project` / `path` on any source
-that is not `static_inventory`.
+ignored: `host_args` on an ssh connector, `project` with
+`location: host`, `location` or `script` on a script connector, `path` and
+`script` together, a relative script `path`
+without a `project`, and `project` / `path` on any source that is not
+`static_inventory`. `output_format: ansible`, which 0.35 configurations carry,
+is still read and changes nothing (it is the only format); `native` is refused
+by name.
 
 Two connectors are **built in** and need no item, because there is nothing about
 their HOW to configure — the protocol is fixed, and the WHERE is per source:
@@ -113,7 +119,8 @@ inventory.
 
 ## Script connectors (`type: script`)
 
-The connector script is executed on every sync and must print a Dataset to stdout.
+The connector script is executed on every sync and prints Ansible inventory JSON
+to stdout, as any Ansible dynamic inventory script does.
 
 **Input (command line):** the connector's `script_args` list is passed verbatim as
 CLI arguments (no shell involved, so no quoting concerns). This is how scripts
@@ -126,7 +133,6 @@ connectors:
     project: "prj-inventory"
     path: "d42_inventory.py"
     script_args: ["--list"]
-    output_format: "ansible"   # see below — such scripts emit Ansible JSON
 ```
 
 Without `script_args` the script is invoked bare, exactly as before.
@@ -145,8 +151,8 @@ CA-bundle variables), nothing from the service's own environment reaches the
 script — in particular not the API-key secrets or other sources' credentials.
 Anything else a script needs must travel in its `config` map or a credential.
 
-**Output:** the full Dataset JSON on stdout. Exit non-zero to fail the sync; stderr
-is captured into the error message.
+**Output:** [Ansible inventory JSON](#the-output-ansible-inventory-json) on stdout.
+Exit non-zero to fail the sync; stderr is captured into the error message.
 
 **Time limit:** the script must finish within the source's `timeout_seconds`, or
 the connector's when the source sets none (default 300). A slower run is aborted and the sync fails with
@@ -166,7 +172,7 @@ config = json.loads(os.environ.get("SOURCE_CONFIG", "{}"))
 token = os.environ.get("CREDENTIAL_TOKEN")
 
 inventory = fetch_from_backend(token, scope=config.get("scope"), target=config.get("target"))
-print(json.dumps({"hostvars": inventory.hosts, "groups": inventory.groups}))
+print(json.dumps({"_meta": {"hostvars": inventory.hosts}, **inventory.groups}))
 ```
 
 Supporting `scope`/`target` is optional but recommended: it lets consumers refresh a
@@ -192,11 +198,11 @@ connectors:
 value `config.target` carries, since `?host=` accepts a list. The substitution
 happens inside each argument, so `["--host={target}"]` works too.
 
-**No CLI convention is imposed.** `host_args: ["--host", "{target}"]` reproduces
-Ansible's contract exactly; a script that can do more states its own flag, as
-above. What the script must always return is the normal Dataset (or Ansible)
-shape with the requested hosts in it — not Ansible's bare `--host` dictionary,
-which carries no groups and is not a shape this service reads.
+**No CLI convention is imposed**, and Ansible's own `--host <hostname>` is not
+one to copy: it prints one host's bare variables, `{"ansible_host": ...}`, with
+no `_meta` and no groups, which reads as groups named after the variables and
+fails the sync. A script states its own flag, as above, and answers it with
+Ansible inventory JSON holding the requested hosts.
 
 Omitting `host_args` keeps the old behaviour: the script is called exactly as a
 full sync would call it and the requested hosts are picked out of whatever comes
@@ -247,10 +253,10 @@ if args.host_with_groups:
     wanted = args.host_with_groups.split(",")
     hosts = d42.hosts(names=wanted)                # one API call, not the fleet
     print(json.dumps({
-        "hostvars": {h.name: h.vars for h in hosts},
+        "_meta": {"hostvars": {h.name: h.vars for h in hosts}},
         # Where these hosts belong. Naming a group joins it; a group NOT named
-        # is one the host has left. Returning {} says nothing about groups.
-        "groups": {
+        # is one the host has left. Naming none says nothing about groups.
+        **{
             g.name: {"hosts": [h.name for h in hosts if g in h.groups],
                      "vars": g.vars}
             for g in {g for h in hosts for g in h.groups}
@@ -259,7 +265,7 @@ if args.host_with_groups:
     sys.exit(0)
 
 inventory = d42.everything()
-print(json.dumps({"hostvars": inventory.hostvars, "groups": inventory.groups}))
+print(json.dumps({"_meta": {"hostvars": inventory.hostvars}, **inventory.groups}))
 ```
 
 ```yaml
@@ -285,73 +291,172 @@ of a host's many addresses actually answers), that work belongs in an
 [enricher](enrichers.md) on its own schedule rather than in either mode of this
 script.
 
-### Ansible inventory scripts (`output_format: ansible`)
+### The output: Ansible inventory JSON
 
-Scripts written for Ansible print a different JSON shape than the Dataset:
-hostvars under `_meta.hostvars` and groups as top-level keys. With
-`output_format: "ansible"` on the connector, that output is converted to a
-Dataset on the fly — any existing dynamic inventory script works unmodified
-(pair it with `script_args: ["--list"]`):
+A connector prints what `inventory.py --list` prints for Ansible: host
+variables under `_meta.hostvars`, and each group as a top-level key. Any
+existing dynamic inventory script works unmodified (pair it with
+`script_args: ["--list"]`):
 
-```yaml
-connectors:
-  - name: d42
-    project: "prj-inventory"
-    path: "d42_inventory.py"
-    script_args: ["--list"]
-    output_format: "ansible"
+```json
+{
+  "_meta": {
+    "hostvars": {
+      "motoko.section9.net": { "ansible_host": "10.9.1.1", "os": "OracleLinux" }
+    }
+  },
+  "section9": {
+    "hosts": ["motoko.section9.net"],
+    "vars": { "ntp_server": "ntp.section9.net" }
+  }
+}
 ```
 
-Conversion rules:
+It is converted to the [Dataset](#the-dataset-shape):
 
 - `_meta.hostvars` → `hostvars`. A missing `_meta` is accepted with a warning
-  (hosts will have no variables).
+  (hosts will have no variables); `_meta` without `hostvars` means the same,
+  without the warning, as Ansible reads it.
 - Every other top-level key becomes a group. Both the object form
   (`{hosts, children, vars}`) and the legacy list form (`"web": ["h1", "h2"]`)
   are accepted.
-- The implicit meta-groups `all` and `ungrouped` are skipped; if they carried
-  `vars` or `children`, a warning says so (that information has no Dataset
-  equivalent).
+- A host named in a group but not in `_meta.hostvars` is a host with no
+  variables, as `ansible-inventory --list` prints it, on a full sync. A host or
+  group sync leaves such a host as the cache has it: an answer about hosts it
+  was not asked for is not a claim that they have no variables.
+- The implicit meta-groups `all` and `ungrouped` are skipped, but their hosts
+  are kept; `vars` on them have no Dataset equivalent, and a warning says so.
+- A key a group does not take beside `hosts`, `children` or `vars` (a
+  `description`) is ignored with a warning, as Ansible ignores it.
 - Malformed input is an **error that fails the sync**, naming the offending
-  group — never a silent skip.
-
-**Misconfiguration safety net:** if a connector left on the default
-`output_format: native` parses to 0 hosts and 0 groups but the output contains
-`_meta`, the sync logs a WARN suggesting `output_format: "ansible"`. (Both
-Dataset fields are optional in JSON, so Ansible output "parses fine" as an
-empty inventory — that silent zero is the failure mode this flag exists for.)
+  group — never a silent skip. That includes a group with none of `hosts`,
+  `children` or `vars` (`"host": [...]` for `"hosts"`).
+- The `{"hostvars", "groups"}` shape a script could print before 0.36 fails the
+  sync saying what to print. Read as Ansible it would be two groups called
+  `hostvars` and `groups` and no host variables: a sync that "works" and serves
+  nothing useful.
 
 ---
 
 ## SSH connectors (`type: ssh`)
 
-The native SSH connector needs no script on the API host — it connects to the fleet
-in parallel and builds the Dataset from what it finds. The connector item holds
-only what runs remotely; which hosts, as whom, and how is the source's:
+The native SSH connector connects to the fleet in parallel and builds the
+Dataset from what each host answers. The connector says what runs: a `path`
+(a file, and `location` says where it is) or a `script` written in the item,
+the way a CI step is either a file or inline. Which hosts, as whom and how is
+the source's.
 
 ```yaml
-# connectors/ssh-facts.yaml
+# connectors/ssh.yaml
 connectors:
+  # On each host: every file the path matches, run if executable, read if
+  # not, each one a fact named after its file (Ansible's local facts).
   - name: ssh-facts
-    description: "SSH fact gathering"
-    type: "ssh"
-    path: "gather_facts"        # a label in facts mode; the remote command in script mode
+    type: ssh
+    location: host
+    path: /etc/ansible/facts.d/*.fact
+
+  # Here: a script in a project, streamed to each host and run there.
+  - name: ssh-osinfo
+    type: ssh
+    project: prj-toolbox                # location: instance is the default
+    path: linux/osinfo.sh
+
+  # Inline: the script itself, streamed the same way.
+  - name: ssh-uptime
+    type: ssh
+    script: |
+      printf '{"uptime_s": %s}\n' "$(cut -d. -f1 /proc/uptime)"
 
 # sources/src-ssh-dc1.yaml
 sources:
   - name: src-ssh-dc1
-    connector: "ssh-facts"
+    connector: ssh-facts
     credentials: ["cred-ssh-infra"]
     sync_interval_seconds: 300
     ttl_seconds: 600
     config:
       hosts: "host1.example.com,host2.example.com"
-      gather_mode: "facts"
 ```
 
-`path` is never resolved in a checkout — nothing runs locally — which is why an
-ssh connector refuses `project`, and refuses `host_args` and `output_format` too:
-it builds its own command per host and its own dataset.
+**`location: host`** — `path` is absolute on the hosts: one file, or a pattern
+(`*`, `?`, `[…]`) the host's shell expands. Every file it matches is run if it
+is executable (with `script_args`, quoted) and read otherwise, the way Ansible
+reads local facts, and becomes one fact named after its file without the
+extension: `/etc/ansible/facts.d/rack.fact` becomes `rack`. A file that prints
+or holds JSON is that JSON; INI becomes an object per section with lowercased
+keys, as Ansible's reader gives; anything else becomes the string
+`error loading fact - please check content`, so one bad file never costs the
+host its other facts. The path may hold only letters, digits and `/ . _ - + @ : ,`
+besides the pattern characters: it reaches the host's shell unquoted, so that
+the pattern expands.
+
+**`location: instance`** (the default when `project` is set; write it for an
+absolute path on this instance's disk) — `path` is a script file on this
+instance: in `project`'s checkout (read at every sync, so a push is live at the
+next one), or absolute. It is sent over the ssh connection, and the host's
+`/bin/sh` (whatever the account's login shell) writes it to a private
+temporary file in `$TMPDIR` or `/tmp` (with `mktemp`, or without it on hosts
+that have none), checks that all of it arrived — a session cut while sending
+never runs part of a script — runs that file with the interpreter its `#!`
+line names and that line's flags (`env` and its options skipped) — or, with no
+`#!` line, the account's login shell, as an ssh command line is run — and
+removes it when the run ends. A run the timeout cuts while the script hangs
+gets no signal from sshd and may leave its file and process behind; the next
+run removes such files once they are a day old. It runs as a file would:
+`script_args` after it as `$1`, `$2`… (never taken for the interpreter's own
+options), `$0`, `$BASH_SOURCE` and `__file__` naming it, and its standard input
+empty, so nothing in it waits on the connection. Hosts that mount `/tmp`
+noexec run it too: the interpreter reads the file, nothing executes it. What
+it prints is the host's variables, one JSON object.
+
+**`script`** — the script written in the item instead of a file: streamed and
+run exactly as a file from here is (its `#!` line, `script_args`, a temporary
+file removed after the run). It takes no `project` or `location`, and an ssh connector
+has `path` or `script`, never both. A command with arguments is a script of one
+line: `script: /usr/local/bin/disk-report --json`.
+
+**From 0.35** — 0.35 wrote the command (or a label such as `gather_facts`) in
+`path`, and each source's `config.gather_mode` said what it meant. 0.36 reads
+that form only at startup: an ssh connector with neither `location`, `project`
+nor `script` is converted in memory, with its sources, and each conversion is
+logged (and printed by `--check-config`, which still exits 0). Facts become
+`location: host` with `path: <fact_path>/*.fact` (a `$HOME` or relative
+`fact_path` as `~/`, which a host path may start with); a command becomes
+`script:`, its `script_args` appended to the line raw, as 0.35 appended them,
+and with no `#!` line it runs in the account's login shell, as in 0.35; `gather_mode` and
+`fact_path` go from the sources. The files are not touched, so the image can
+roll back, and the config API refuses the old form, naming what to write: move
+the files when convenient.
+
+```yaml
+# 0.35: a label as the path, the mode on every source
+- name: ssh-gather-facts
+  type: ssh
+  path: gather_facts            # sources: gather_mode: facts, fact_path: /etc/ansible/facts.d
+# 0.36
+- name: ssh-gather-facts
+  type: ssh
+  location: host
+  path: /etc/ansible/facts.d/*.fact     # 0.35 read *.json there too
+```
+
+```yaml
+# 0.35: the script in path, gather_mode: script on the source
+- name: ssh-script
+  type: ssh
+  path: |-
+    . /etc/os-release
+    ...
+# 0.36: the same lines as script (or in a file, with path)
+- name: ssh-script
+  type: ssh
+  script: |-
+    . /etc/os-release
+    ...
+```
+
+Then remove `gather_mode` and `fact_path` from the sources' `config`.
 
 **Source `config` keys:**
 
@@ -361,8 +466,6 @@ it builds its own command per host and its own dataset.
 | `port` | `22` | SSH port |
 | `concurrency` | `50` | Max parallel connections (tokio semaphore) |
 | `ssh_connect_timeout_seconds` | `30` | Per-host connection/exec timeout |
-| `gather_mode` | `facts` | `facts` reads Ansible local facts; `script` runs the connector's `path` remotely |
-| `fact_path` | `/etc/ansible/facts.d` | Where facts live (facts mode) |
 | `ssh_legacy_algorithms` | `false` | `"true"` additionally offers SHA-1 KEX/MACs (appended last, modern servers still pick modern ones) for OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` |
 | `ssh_known_hosts` | — | Path to an OpenSSH `known_hosts` file. When set, every server key is checked against it **before authentication**: an unknown or mismatched host is refused (it lands in `unreachable`, so its last known data is kept), and the refusal logs both fingerprints. A server presenting an OpenSSH host *certificate* is refused too — verification is defined over plain host keys. Unset = any server key is accepted, and every sync warns about it |
 
@@ -384,10 +487,6 @@ without negotiation, the same key "mysteriously" works with the OpenSSH
 client but not through the API. ed25519/ecdsa keys are unaffected (no hash
 to negotiate).
 
-In `script` mode, the connector's `script_args` are appended to the remote command
-(`path arg1 arg2 ...`); in `facts` mode they are ignored (the remote command is
-fixed).
-
 ### Dynamic host lists (`hosts_from_source`)
 
 Instead of a static `config.hosts`, an SSH source can take its hosts from
@@ -407,8 +506,6 @@ sources:
         groups: ["linux", "proxmox_vms"]
         hosts: ["extra01.example.com"]
       connect_via: "ansible_host_then_hostname"
-    config:
-      gather_mode: "facts"
 ```
 
 Semantics:
@@ -482,7 +579,7 @@ A built-in connector, so the source names the file itself: `project` + `path`, t
 same pair a script connector uses for its script. Both are required. The path
 resolves inside the checkout, so the project's periodic pull (or the on-demand
 `POST /api/v1/projects/{id}/sync`) is what brings in new data — the next source
-sync reads the updated files. Arguments, output formats, credentials and
+sync reads the updated files. Arguments, credentials and
 `SOURCE_CONFIG` don't apply to this connector.
 
 **What lands where:**
@@ -611,10 +708,11 @@ curl -s localhost:8182/api/v1/connectors/d42 -H "X-API-Key: $ADMIN_KEY"
   "connector_type": "script",
   "built_in": false,
   "project_id": "prj-inventory",
+  "location": null,
   "path": "dynamic/d42/inventory.py",
+  "script": null,
   "script_args": ["--list"],
   "host_args": [],
-  "output_format": "ansible",
   "timeout_seconds": 300,
   "used_by": [
     {"source_id": "src-d42-a", "name": "Device42 tenant A", "timeout_seconds": 300, "failing": false, "synced": true},
@@ -626,11 +724,11 @@ curl -s localhost:8182/api/v1/connectors/d42 -H "X-API-Key: $ADMIN_KEY"
 
 The list holds the connector items first, then the two built-ins
 (`built_in: true`, `connector_type` `remote` / `static_inventory`, null
-`project_id`, `path`, `output_format` and `timeout_seconds`), so every source's
+`project_id`, `path` and `timeout_seconds`), so every source's
 `connector:` resolves to a row. `used_by[].timeout_seconds` is the bound that
 source actually syncs under — its override, or the connector's — and `health`
 counts its sources' sync health at a glance: one broken script shows up as a
-connector whose sources all fail at once. `output_format` is null for ssh.
+connector whose sources all fail at once.
 `GET /api/v1/sources/{id}` names the connector under `gathering.connector`.
 
 ---

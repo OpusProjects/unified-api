@@ -114,10 +114,10 @@ fn script_source(script_path: &str) -> unified_api::domain::source::Source {
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: unified_api::domain::source::ConnectorType::Script,
+        ssh_location: None,
         sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
         credential_ids: vec![],
         schedule: None,
@@ -360,10 +360,10 @@ async fn readyz_returns_503_before_sync() {
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
-            output_format: Default::default(),
             hosts_from_source: None,
             connector: "script-test".to_string(),
             connector_type: unified_api::domain::source::ConnectorType::Script,
+            ssh_location: None,
             sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
             credential_ids: vec![],
             schedule: None,
@@ -400,10 +400,10 @@ async fn readyz_require_all_sources_waits_for_every_source() {
                 script_args: vec![],
                 host_args: vec![],
                 host_sync_updates_group_vars: false,
-                output_format: Default::default(),
                 hosts_from_source: None,
                 connector: "script-test".to_string(),
                 connector_type: unified_api::domain::source::ConnectorType::Script,
+                ssh_location: None,
                 sync_mode: unified_api::domain::sync_mode::SyncMode::Replace,
                 credential_ids: vec![],
                 schedule: None,
@@ -622,6 +622,63 @@ async fn metrics_exposes_sync_counters() {
         ),
         "missing outgoing request in: {}",
         body
+    );
+}
+
+// The list says which sources are federated, to every caller: what a Sync
+// must ask the instance it copies to gather again.
+#[tokio::test]
+async fn the_list_says_which_sources_are_federated() {
+    let mut remote = script_source("src-on-the-edge");
+    remote.connector_type = unified_api::domain::source::ConnectorType::Remote;
+    let sources = std::collections::HashMap::from([
+        (
+            "src-local".to_string(),
+            script_source("tests/adapters/out/connectors/inventory.py"),
+        ),
+        ("src-copy".to_string(), remote),
+    ]);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+    let (status, body) = get(app, "/api/v1/sources").await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let federated = |id: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["source_id"] == id)
+            .unwrap()["federated"]
+            .clone()
+    };
+    assert_eq!(federated("src-copy"), true);
+    assert_eq!(federated("src-local"), false);
+}
+
+// A sync that fails before its script runs (a credential that cannot be
+// resolved) asks the system nothing: no outgoing request is counted.
+#[tokio::test]
+async fn a_sync_that_never_ran_its_script_counts_no_outgoing_request() {
+    let mut source = script_source("tests/adapters/out/connectors/inventory.py");
+    source.credential_ids = vec!["cred-not-there".into()];
+    let sources = std::collections::HashMap::from([("src-nocred".to_string(), source)]);
+    let app = unified_api::AppBuilder::new().sources(sources).build();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-nocred/sync")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (_, body) = get(app, "/metrics").await;
+    assert!(
+        body.contains(r#"unified_api_sync_total{source="src-nocred",result="error"}"#),
+        "{body}"
+    );
+    assert!(
+        !body.contains(r#"unified_api_source_requests_total{source="src-nocred""#),
+        "{body}"
     );
 }
 
@@ -1633,7 +1690,7 @@ async fn a_script_appearing_in_a_checkout_after_boot_is_used_by_the_next_sync() 
     let script = projects_dir.path().join("prj-test/fetch.py");
     std::fs::write(
         &script,
-        "#!/usr/bin/env python3\nprint('{\"hostvars\": {\"checkout.example\": {}}, \"groups\": {}}')\n",
+        "#!/usr/bin/env python3\nprint('{\"_meta\": {\"hostvars\": {\"checkout.example\": {}}}}')\n",
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();

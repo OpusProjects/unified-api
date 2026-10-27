@@ -1161,8 +1161,26 @@ pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Er
 }
 
 // The same load, keeping the errors as a list. `load_config` is the thin
-// wrapper over it that main and the tests already use.
+// wrapper over it that the tests use. Strict: what the config API stages and
+// a reload reads must already be in this version's shape.
 pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
+    load(dir, None)
+}
+
+// The load startup does (and --check-config, which answers "would this
+// start"): what a previous version wrote and this one can still read is
+// converted in memory, never on disk, and each conversion is described in
+// `upgraded` so it can be logged. The files stay as they were — rolling the
+// image back finds them untouched — and the config API keeps refusing the
+// old shape, so a configuration repository is still told to move.
+pub fn load_config_upgrading(dir: &Path) -> Result<(AppConfig, Vec<String>), ConfigErrors> {
+    let mut upgraded = Vec::new();
+    let config = load(dir, Some(&mut upgraded))?;
+    upgraded.sort();
+    Ok((config, upgraded))
+}
+
+fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, ConfigErrors> {
     // config.yaml is mandatory — without server config we cannot start
     let server_file: ServerFile = load_yaml_file(&dir.join(REQUIRED_CONFIG_FILE))
         .map_err(|e| ConfigErrors::single(format!("{REQUIRED_CONFIG_FILE}: {e}")))?;
@@ -1198,8 +1216,12 @@ pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
     );
     let credentials = take("credential", cr, &mut errors);
     let projects = take("project", pr, &mut errors);
-    let connectors: HashMap<String, Connector> = take("connector", co, &mut errors);
-    let source_defs: HashMap<String, SourceDef> = take("source", so, &mut errors);
+    let mut connectors: HashMap<String, Connector> = take("connector", co, &mut errors);
+    let mut source_defs: HashMap<String, SourceDef> = take("source", so, &mut errors);
+    if let Some(upgraded) = upgrade {
+        upgrade_0_35_ssh(&mut connectors, &mut source_defs, upgraded, &mut errors);
+        upgrade_0_35_output_format(&mut connectors, upgraded);
+    }
     let views = take("view", vi, &mut errors);
     let enrichers = take("enricher", en, &mut errors);
     let endpoints = take("endpoint", ep, &mut errors);
@@ -1251,6 +1273,138 @@ pub fn load_config_detailed(dir: &Path) -> Result<AppConfig, ConfigErrors> {
         Ok(config)
     } else {
         Err(ConfigErrors::new(errors))
+    }
+}
+
+// 0.35's ssh connectors, in 0.36's shape. 0.35 wrote a command, or a label
+// such as gather_facts, in `path`, and each source said what it meant in
+// config.gather_mode (facts, the default, or script) and config.fact_path.
+// A connector with neither location, project nor script can only be that
+// form (0.35 had none of them), so it is converted here, with its sources:
+// - facts: location: host, path: <fact_path>/*.fact (0.35 also read *.json);
+//   a $HOME or relative fact_path, which 0.35's unquoted command accepted, as ~/
+// - script: script: the command, with its arguments appended raw, as 0.35
+//   appended them to the command line (the shell splits them, as it did)
+// and gather_mode / fact_path go from those sources. Sources that disagree
+// on what the connector means cannot be converted into one: refused,
+// naming them.
+fn upgrade_0_35_ssh(
+    connectors: &mut HashMap<String, Connector>,
+    sources: &mut HashMap<String, SourceDef>,
+    upgraded: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    const DEFAULT_FACT_PATH: &str = "/etc/ansible/facts.d";
+    for (id, connector) in connectors.iter_mut() {
+        if connector.kind != crate::domain::connector::ConnectorKind::Ssh
+            || connector.location.is_some()
+            || connector.project.is_some()
+            || connector.script.is_some()
+        {
+            continue;
+        }
+        let mut users: Vec<String> = sources
+            .iter()
+            .filter(|(_, def)| def.connector == *id)
+            .map(|(source, _)| source.clone())
+            .collect();
+        users.sort();
+        // What each source meant, as 0.35 read it.
+        let meaning = |source: &String| -> (String, String) {
+            let config = &sources[source].config;
+            let mode = config
+                .get("gather_mode")
+                .cloned()
+                .unwrap_or_else(|| "facts".to_string());
+            let fact_path = config
+                .get("fact_path")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_FACT_PATH.to_string());
+            if mode == "facts" {
+                (mode, fact_path)
+            } else {
+                (mode, String::new())
+            }
+        };
+        let mut meanings: Vec<(String, String)> = users.iter().map(meaning).collect();
+        meanings.sort();
+        meanings.dedup();
+        let (mode, fact_path) = match meanings.as_slice() {
+            [] => ("facts".to_string(), DEFAULT_FACT_PATH.to_string()),
+            [one] => one.clone(),
+            _ => {
+                errors.push(format!(
+                    "Connector '{id}' is in the 0.35 form and its sources ({}) use it in \
+                     different gather_mode / fact_path: give each meaning its own connector \
+                     in 0.36's shape",
+                    users
+                        .iter()
+                        .map(|u| u.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                continue;
+            }
+        };
+        if mode == "facts" {
+            let pattern = format!(
+                "{}/*.fact",
+                crate::domain::connector::host_path_from_0_35(&fact_path)
+            );
+            upgraded.push(format!(
+                "Connector '{id}' is in the 0.35 form: read as location: host, path: \
+                 {pattern} (0.35 also read *.json there); write it so, and remove \
+                 gather_mode / fact_path from its sources"
+            ));
+            connector.location = Some(crate::domain::connector::Location::Host);
+            connector.path = pattern;
+            connector.script_args.clear();
+        } else {
+            let script = crate::domain::connector::command_from_0_35(
+                &connector.path,
+                &connector.script_args,
+            );
+            upgraded.push(format!(
+                "Connector '{id}' is in the 0.35 form: read as script: with its command{}; \
+                 write it so, and remove gather_mode from its sources",
+                if connector.script_args.is_empty() {
+                    ""
+                } else {
+                    " and its arguments"
+                }
+            ));
+            connector.script = Some(script);
+            connector.path.clear();
+            connector.script_args.clear();
+        }
+        for user in &users {
+            if let Some(def) = sources.get_mut(user) {
+                def.config.remove("gather_mode");
+                def.config.remove("fact_path");
+            }
+        }
+    }
+}
+
+// 0.35's `output_format: native`, the format 0.36 no longer reads. Its
+// script prints a shape no change to the file can fix, but it should not
+// stop the instance either: the key goes, the note says so, and that
+// connector's syncs fail naming what to print until the script changes.
+// (`output_format: ansible` is still read as it is: see Connector.)
+fn upgrade_0_35_output_format(
+    connectors: &mut HashMap<String, Connector>,
+    upgraded: &mut Vec<String>,
+) {
+    for (id, connector) in connectors.iter_mut() {
+        if connector.output_format.as_deref() == Some("native") {
+            connector.output_format = None;
+            upgraded.push(format!(
+                "Connector '{id}' sets output_format: native, which 0.36 no longer reads: \
+                 its syncs fail until its script prints Ansible inventory JSON (host \
+                 variables under _meta.hostvars, each group a top-level key); then set \
+                 output_format: ansible or remove the key"
+            ));
+        }
     }
 }
 
@@ -2127,7 +2281,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             format!(
-                "sources:\n  - name: src-fleet\n    description: \"Fleet\"\n    connector: c-src-fleet\n    ttl_seconds: 60\n    config:\n      hosts: \"a.example\"\n      ssh_known_hosts: \"{}\"\nconnectors:\n  - name: c-src-fleet\n    type: ssh\n    path: \"unused\"\n",
+                "sources:\n  - name: src-fleet\n    description: \"Fleet\"\n    connector: c-src-fleet\n    ttl_seconds: 60\n    config:\n      hosts: \"a.example\"\n      ssh_known_hosts: \"{}\"\nconnectors:\n  - name: c-src-fleet\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 kh_path.display()
             ),
         )
@@ -2317,7 +2471,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "sources:\n",
                 "  - name: src-script\n    connector: inv\n    ttl_seconds: 60\n",
                 "    hosts_from_source:\n      source: \"src-ssh\"\n",
@@ -2353,7 +2507,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "    host_args: [\"--host\", \"{target}\"]\n",
                 "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
                 "    config:\n      hosts: \"a.example.com\"\n",
@@ -2388,7 +2542,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
                 "    hosts_from_source:\n      source: \"src-ghost\"\n",
             ),
@@ -2768,5 +2922,101 @@ mod tests {
         assert!(result.is_err());
         let err = result.err().expect("expected validation error").to_string();
         assert!(err.contains("cred-missing"));
+    }
+
+    #[test]
+    fn startup_reads_a_0_35_ssh_command_as_a_script_with_its_arguments() {
+        let dir = dir_with(&[
+            (
+                "connectors/c.yaml",
+                "connectors:\n  - name: report\n    type: ssh\n    path: /usr/local/bin/report\n    script_args: [\"--json\", \"it's\"]\n",
+            ),
+            (
+                "sources/s.yaml",
+                "sources:\n  - name: src-r\n    connector: report\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n      gather_mode: script\n",
+            ),
+        ]);
+        // The config API's load: refused, saying what to write.
+        let strict = match load_config_detailed(dir.path()) {
+            Ok(_) => panic!("the old form must be refused here"),
+            Err(e) => e.to_string(),
+        };
+        assert!(strict.contains("0.35 form"), "{strict}");
+
+        // Startup's: converted in memory, the arguments in the command line
+        // as 0.35 appended them, the source's gather_mode gone.
+        let (cfg, upgraded) = load_config_upgrading(dir.path()).unwrap();
+        let c = &cfg.connectors["report"];
+        assert_eq!(
+            c.script.as_deref(),
+            Some("/usr/local/bin/report --json it's")
+        );
+        assert!(c.path.is_empty() && c.script_args.is_empty());
+        assert!(!cfg.sources["src-r"].config.contains_key("gather_mode"));
+        assert_eq!(upgraded.len(), 1);
+    }
+
+    #[test]
+    fn output_format_ansible_loads_and_native_only_starts() {
+        let dir = dir_with(&[(
+            "connectors/c.yaml",
+            "connectors:\n  - name: inv\n    path: /opt/inv.py\n    output_format: ansible\n  - name: old\n    path: /opt/old.py\n    output_format: native\n",
+        )]);
+        // The config API's load: ansible is what every script prints and is
+        // read as it is; native is refused by name.
+        let strict = match load_config_detailed(dir.path()) {
+            Ok(_) => panic!("native must be refused here"),
+            Err(e) => e.to_string(),
+        };
+        assert!(!strict.contains("'inv'"), "{strict}");
+        assert!(
+            strict.contains("'old' sets output_format: native"),
+            "{strict}"
+        );
+
+        // Startup's: both start; the native one is told its syncs fail
+        // until its script changes, and ansible is not mentioned.
+        let (cfg, upgraded) = load_config_upgrading(dir.path()).unwrap();
+        assert_eq!(cfg.connectors["old"].output_format, None);
+        assert_eq!(upgraded.len(), 1, "{upgraded:?}");
+        assert!(upgraded[0].contains("'old'") && upgraded[0].contains("its syncs fail"));
+    }
+
+    #[test]
+    fn sources_that_disagree_on_a_0_35_connector_are_refused_by_name() {
+        let dir = dir_with(&[
+            (
+                "connectors/c.yaml",
+                "connectors:\n  - name: both\n    type: ssh\n    path: gather_facts\n",
+            ),
+            (
+                "sources/s.yaml",
+                "sources:\n  - name: src-a\n    connector: both\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n  - name: src-b\n    connector: both\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n      gather_mode: script\n",
+            ),
+        ]);
+        let err = match load_config_upgrading(dir.path()) {
+            Ok(_) => panic!("sources that disagree cannot be converted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("src-a, src-b"), "{err}");
+    }
+
+    #[test]
+    fn a_source_cannot_set_the_ssh_location_key_itself() {
+        let dir = dir_with(&[
+            (
+                "connectors/c.yaml",
+                "connectors:\n  - name: inline\n    type: ssh\n    script: uname -r\n",
+            ),
+            (
+                "sources/s.yaml",
+                "sources:\n  - name: src-i\n    connector: inline\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n      ssh_location: host\n",
+            ),
+        ]);
+        let err = match load_config_detailed(dir.path()) {
+            Ok(_) => panic!("the key belongs to unified-api"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("config.ssh_location"), "{err}");
     }
 }

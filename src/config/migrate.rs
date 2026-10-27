@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use super::{REQUIRED_CONFIG_FILE, config_files, is_safe_id, load_config_detailed};
+use super::{REQUIRED_CONFIG_FILE, config_files, is_safe_id};
 
 // The 0.34 files and the section each becomes.
 pub const LEGACY_FILES: [(&str, &str); 7] = [
@@ -99,10 +99,11 @@ const ORDER: [(&str, &[&str]); 8] = [
         &[
             "type",
             "project",
+            "location",
             "path",
+            "script",
             "script_args",
             "host_args",
-            "output_format",
             "timeout_seconds",
         ],
     ),
@@ -405,10 +406,17 @@ type Items = BTreeMap<String, Map<String, Value>>;
 struct ConnectorKey {
     kind: String,
     project: Option<String>,
+    // ssh: `host` for the facts a source gathered (script_path is then the
+    // pattern of facts files); None otherwise.
+    location: Option<String>,
+    // ssh: script_path is the script itself, written as `script:`.
+    inline: bool,
     script_path: String,
     script_args: Vec<String>,
     host_args: Vec<String>,
-    output_format: Option<String>,
+    // What the connector is named after: the 0.34 script_path, which for
+    // ssh was the label (gather_facts) or the command.
+    hint: String,
 }
 
 fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items, Items), String> {
@@ -485,19 +493,64 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                          runs nothing from a checkout"
                     ));
                 }
+                // 0.36 reads one output, Ansible inventory JSON; 0.34's
+                // default was the other one. The script is not ours to
+                // change, so the note says what its syncs will need.
+                if !ssh && output_format.as_deref() != Some("ansible") {
+                    plan.notes.push(format!(
+                        "source '{id}': its script prints the {{\"hostvars\", \"groups\"}} \
+                         format, which 0.36 no longer reads — its syncs fail until it prints \
+                         Ansible inventory JSON (host variables under _meta.hostvars, each \
+                         group a top-level key)"
+                    ));
+                }
+                let hint = script_path.clone();
+                // What an ssh source's gather_mode meant moves to its
+                // connector: facts become files on the host, a script
+                // becomes the connector's own `script`.
+                let (location, inline, script_path, script_args) = if ssh {
+                    let mut config = body.get_mut("config").and_then(Value::as_object_mut);
+                    let mut take = |key: &str| {
+                        config
+                            .as_deref_mut()
+                            .and_then(|c| c.remove(key))
+                            .and_then(|v| as_text(&v))
+                    };
+                    let mode = take("gather_mode").unwrap_or_else(|| "facts".to_string());
+                    let fact_path =
+                        take("fact_path").unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
+                    if mode == "facts" {
+                        let dir = crate::domain::connector::host_path_from_0_35(&fact_path);
+                        plan.notes.push(format!(
+                            "source '{id}': its facts are read from {dir}/*.fact — 0.35 also \
+                             read *.json there"
+                        ));
+                        (
+                            Some("host".to_string()),
+                            false,
+                            format!("{dir}/*.fact"),
+                            Vec::new(),
+                        )
+                    } else {
+                        // 0.35 appended the arguments to the command raw;
+                        // a script's own arguments are $1, $2 instead, so
+                        // they go into its line as they were.
+                        let script =
+                            crate::domain::connector::command_from_0_35(&script_path, &script_args);
+                        (None, true, script, Vec::new())
+                    }
+                } else {
+                    (None, false, script_path, script_args)
+                };
                 let key = ConnectorKey {
                     kind: kind.clone(),
                     project: if ssh { None } else { project },
+                    location,
+                    inline,
                     script_path,
                     script_args,
                     host_args: if ssh { Vec::new() } else { host_args },
-                    // native is the default: writing it out would make two
-                    // sources that only differ in spelling it look different
-                    output_format: if ssh {
-                        None
-                    } else {
-                        output_format.filter(|f| f != "native")
-                    },
+                    hint,
                 };
                 let timeout = body
                     .get("timeout_seconds")
@@ -535,17 +588,19 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
         if let Some(project) = &key.project {
             body.insert("project".to_string(), Value::String(project.clone()));
         }
+        if let Some(location) = &key.location {
+            body.insert("location".to_string(), Value::String(location.clone()));
+        }
         // `path`, as on every item where `project` + `path` name a file in a
-        // checkout; a source's 0.34 `script_path` is that file.
-        body.insert("path".to_string(), Value::String(key.script_path.clone()));
+        // checkout; a source's 0.34 `script_path` is that file. An ssh
+        // script is the connector's own `script`.
+        let field = if key.inline { "script" } else { "path" };
+        body.insert(field.to_string(), Value::String(key.script_path.clone()));
         if !key.script_args.is_empty() {
             body.insert("script_args".to_string(), strings(&key.script_args));
         }
         if !key.host_args.is_empty() {
             body.insert("host_args".to_string(), strings(&key.host_args));
-        }
-        if let Some(format) = &key.output_format {
-            body.insert("output_format".to_string(), Value::String(format.clone()));
         }
         if timeout != default_timeout {
             body.insert("timeout_seconds".to_string(), Value::from(timeout));
@@ -623,7 +678,7 @@ fn strings(items: &[String]) -> Value {
 // "d42"); `ssh-<command>` for an ssh connector with a one-word path,
 // `ssh-script` for one that carries a whole remote script.
 fn connector_base_name(key: &ConnectorKey) -> String {
-    let path = key.script_path.trim();
+    let path = key.hint.trim();
     if key.kind == "ssh" {
         return if is_safe_id(path) && !path.contains('.') {
             format!("ssh-{}", path.replace('_', "-"))
@@ -872,7 +927,9 @@ fn validate_in(dir: &Path, plan: &MigrationPlan, scratch: &Path) -> Result<(), S
         return Err(format!("{REQUIRED_CONFIG_FILE} is missing"));
     }
     write_tree(scratch, &files)?;
-    load_config_detailed(scratch)
+    // As startup will load it: a 0.35-form ssh connector already among the
+    // item files is converted in memory there, so it must not refuse here.
+    super::load_config_upgrading(scratch)
         .map(|_| ())
         .map_err(|e| format!("the converted configuration does not load: {e}"))
 }
@@ -1163,7 +1220,7 @@ mod tests {
             plan.files["connectors/d42.yaml"],
             "---\nconnectors:\n  - name: d42\n    type: \"script\"\n    project: \"prj-inv\"\n    \
              path: \"d42/inventory.py\"\n    script_args: [\"--list\"]\n    \
-             output_format: \"ansible\"\n    timeout_seconds: 600\n"
+             timeout_seconds: 600\n"
         );
         assert_eq!(
             plan.files["sources/src-a.yaml"],
@@ -1204,25 +1261,77 @@ mod tests {
     }
 
     #[test]
+    fn a_command_keeps_its_arguments_in_its_script_line() {
+        let dir = dir_with(&[(
+            "sources.yaml",
+            concat!(
+                "src-r:\n  name: \"Report\"\n  connector_type: ssh\n",
+                "  script_path: /usr/local/bin/report\n  script_args: [\"--json\"]\n",
+                "  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n    gather_mode: script\n",
+            ),
+        )]);
+        let plan = plan(dir.path()).unwrap().expect("legacy");
+        let file = plan
+            .files
+            .iter()
+            .find(|(name, _)| name.starts_with("connectors/"))
+            .map(|(_, body)| body.clone())
+            .unwrap();
+        let value = crate::domain::yaml::to_json(&file).unwrap();
+        assert_eq!(
+            value["connectors"][0]["script"],
+            "/usr/local/bin/report --json"
+        );
+        assert!(value["connectors"][0].get("script_args").is_none());
+    }
+
+    #[test]
+    fn gathered_facts_become_files_on_the_host() {
+        let dir = dir_with(&[(
+            "sources.yaml",
+            concat!(
+                "src-facts:\n  name: \"Facts\"\n  connector_type: ssh\n",
+                "  script_path: gather_facts\n  ttl_seconds: 60\n  config:\n",
+                "    hosts: \"a.example\"\n    gather_mode: facts\n",
+                "    fact_path: /opt/facts/\n",
+            ),
+        )]);
+        let plan = plan(dir.path()).unwrap().expect("legacy");
+        // Named as before, after the 0.34 label.
+        let value =
+            crate::domain::yaml::to_json(&plan.files["connectors/ssh-gather-facts.yaml"]).unwrap();
+        let connector = &value["connectors"][0];
+        assert_eq!(connector["location"], "host");
+        assert_eq!(connector["path"], "/opt/facts/*.fact");
+        // The source keeps its hosts and loses what its connector says now.
+        let source = crate::domain::yaml::to_json(&plan.files["sources/src-facts.yaml"]).unwrap();
+        let config = &source["sources"][0]["config"];
+        assert_eq!(config["hosts"], "a.example");
+        assert!(config.get("gather_mode").is_none() && config.get("fact_path").is_none());
+        assert!(plan.notes.iter().any(|n| n.contains("*.json")));
+    }
+
+    #[test]
     fn a_remote_script_survives_as_a_literal_block() {
         let dir = dir_with(&[(
             "sources.yaml",
             concat!(
                 "src-os:\n  name: \"OS\"\n  connector_type: ssh\n  project_id: prj-x\n",
                 "  script_path: |-\n    a=1\n    printf '%s' \"$a\" | tr -d '\"\\\\'\n",
-                "  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n",
+                "  ttl_seconds: 60\n  config:\n    hosts: \"a.example\"\n    gather_mode: script\n",
             ),
         )]);
         let plan = plan(dir.path()).unwrap().expect("legacy");
         let file = &plan.files["connectors/ssh-script.yaml"];
+        // The connector's own script now, no longer a command in path.
         assert!(
-            file.contains("    path: |-\n      a=1\n      printf '%s' \"$a\" | tr -d '\"\\\\'\n"),
+            file.contains("    script: |-\n      a=1\n      printf '%s' \"$a\" | tr -d '\"\\\\'\n"),
             "{file}"
         );
         // ...and reads back as the same text.
         let value = crate::domain::yaml::to_json(file).unwrap();
         assert_eq!(
-            value["connectors"][0]["path"],
+            value["connectors"][0]["script"],
             "a=1\nprintf '%s' \"$a\" | tr -d '\"\\\\'"
         );
         assert!(
@@ -1481,10 +1590,12 @@ mod tests {
         let key = |kind: &str, path: &str| ConnectorKey {
             kind: kind.into(),
             project: None,
+            location: None,
+            inline: false,
             script_path: path.into(),
             script_args: vec![],
             host_args: vec![],
-            output_format: None,
+            hint: path.into(),
         };
         assert_eq!(
             connector_base_name(&key("script", "dynamic/d42/inventory.py")),

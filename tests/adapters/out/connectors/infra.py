@@ -9,6 +9,22 @@ import json
 import os
 import sys
 
+
+# What a connector prints: Ansible dynamic inventory JSON, with host variables
+# under _meta.hostvars and each group a top-level key. The inventory is built
+# in the {"hostvars", "groups"} shape, which is easier to filter, and
+# converted on the way out.
+def to_ansible(inventory):
+    return {"_meta": {"hostvars": inventory.get("hostvars", {})}, **inventory.get("groups", {})}
+
+
+def dump_inventory(inventory, out, **kwargs):
+    json.dump(to_ansible(inventory), out, **kwargs)
+
+
+def inventory_json(inventory, **kwargs):
+    return json.dumps(to_ansible(inventory), **kwargs)
+
 config = json.loads(os.environ.get("SOURCE_CONFIG", "{}"))
 scenario = config.get("scenario", "default")
 
@@ -242,7 +258,7 @@ GROUPS = {
 }
 
 if scenario == "empty":
-    json.dump({"hostvars": {}, "groups": {}}, sys.stdout)
+    dump_inventory({"hostvars": {}, "groups": {}}, sys.stdout)
     sys.exit(0)
 
 if scenario == "error":
@@ -257,7 +273,7 @@ if scope == "host":
     wanted = [h.strip() for h in target.split(",") if h.strip()]
     known = [h for h in wanted if h in HOSTS]
     if known:
-        json.dump({
+        dump_inventory({
             "hostvars": {h: HOSTS[h] for h in known},
             "groups": {}
         }, sys.stdout)
@@ -267,7 +283,7 @@ if scope == "host":
 elif scope == "group":
     if target in GROUPS:
         group_hosts = GROUPS[target].get("hosts", [])
-        json.dump({
+        dump_inventory({
             "hostvars": {h: HOSTS[h] for h in group_hosts if h in HOSTS},
             "groups": {target: GROUPS[target]}
         }, sys.stdout)
@@ -275,7 +291,7 @@ elif scope == "group":
         print(f"Group '{target}' not found", file=sys.stderr)
         sys.exit(1)
 else:
-    json.dump({
+    dump_inventory({
         "hostvars": HOSTS,
         "groups": GROUPS
     }, sys.stdout)

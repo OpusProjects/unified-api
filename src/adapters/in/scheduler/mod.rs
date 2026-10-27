@@ -404,7 +404,18 @@ pub fn start_supervisor(
                 _ = reload.changed() => {
                     let _ = stop.send(true);
                     draining.retain(|handle| !handle.is_finished());
-                    draining.extend(handles);
+                    // Once the outgoing generation has finished its in-flight
+                    // syncs, nothing of it can write any more: a source this
+                    // reload removed, whose sync was still running, may have
+                    // written its entry back, and it goes now. Shutdown awaits
+                    // this like any other draining task.
+                    let pruner = Arc::clone(&state);
+                    draining.push(tokio::spawn(async move {
+                        for handle in handles {
+                            let _ = handle.await;
+                        }
+                        crate::application::config::drop_unconfigured_entries(&pruner);
+                    }));
                 }
             }
         }

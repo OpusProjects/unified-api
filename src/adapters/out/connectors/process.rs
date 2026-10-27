@@ -6,7 +6,6 @@ use tracing::{debug, warn};
 use crate::adapters::out::process_env;
 
 use crate::domain::dataset::Dataset;
-use crate::domain::source::OutputFormat;
 use crate::ports::connector::{ConnectorError, ConnectorPort, ConnectorResult};
 
 pub struct ProcessConnector;
@@ -31,7 +30,6 @@ impl ConnectorPort for ProcessConnector {
         &self,
         script_path: &str,
         args: &[String],
-        output_format: OutputFormat,
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
@@ -105,70 +103,41 @@ impl ConnectorPort for ProcessConnector {
                 });
             }
 
-            // We parse stdout as JSON → Dataset, according to the declared format
+            // stdout is Ansible dynamic inventory JSON, converted to a Dataset
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let dataset = parse_dataset(&stdout, output_format, &script_path, stderr)?;
+            let dataset = parse_dataset(&stdout, &script_path, stderr)?;
 
             Ok(dataset.into())
         }) // closes async move
     } // closes fn execute
 } // closes impl ConnectorPort
 
+// A script prints what `inventory.py --list` prints — the format every
+// Ansible inventory author already knows — and it is converted here.
 fn parse_dataset(
     stdout: &str,
-    output_format: OutputFormat,
     script_path: &str,
     stderr: String,
 ) -> Result<Dataset, ConnectorError> {
-    match output_format {
-        OutputFormat::Native => {
-            let dataset: Dataset = serde_json::from_str(stdout).map_err(|e| ConnectorError {
-                message: format!("Failed to parse script output as inventory JSON: {}", e),
-                stderr: stderr.clone(),
-                exit_code: Some(0),
-            })?;
+    let value: serde_json::Value = serde_json::from_str(stdout).map_err(|e| ConnectorError {
+        message: format!("Failed to parse script output as JSON: {}", e),
+        stderr: stderr.clone(),
+        exit_code: Some(0),
+    })?;
 
-            // Safety net for a misconfigured source: Ansible inventory JSON
-            // parses "successfully" as an empty native Dataset (both fields
-            // default), which used to look like a mysterious 0-host sync.
-            if dataset.hostvars.is_empty()
-                && dataset.groups.is_empty()
-                && serde_json::from_str::<serde_json::Value>(stdout)
-                    .map(|v| Dataset::looks_like_ansible_inventory(&v))
-                    .unwrap_or(false)
-            {
-                warn!(
-                    script = %script_path,
-                    "output parsed as 0 hosts / 0 groups but contains _meta — \
-                     this looks like Ansible inventory JSON; set output_format: \"ansible\" on the source"
-                );
-            }
+    let (dataset, warnings) =
+        Dataset::from_ansible_inventory(value).map_err(|e| ConnectorError {
+            message: format!("Failed to convert Ansible inventory output: {}", e),
+            stderr,
+            exit_code: Some(0),
+        })?;
 
-            Ok(dataset)
-        }
-        OutputFormat::Ansible => {
-            let value: serde_json::Value =
-                serde_json::from_str(stdout).map_err(|e| ConnectorError {
-                    message: format!("Failed to parse script output as JSON: {}", e),
-                    stderr: stderr.clone(),
-                    exit_code: Some(0),
-                })?;
-
-            let (dataset, warnings) =
-                Dataset::from_ansible_inventory(value).map_err(|e| ConnectorError {
-                    message: format!("Failed to convert Ansible inventory output: {}", e),
-                    stderr,
-                    exit_code: Some(0),
-                })?;
-
-            // The domain reports what it dropped/assumed; the adapter logs it
-            for warning in warnings {
-                warn!(script = %script_path, "{}", warning);
-            }
-
-            Ok(dataset)
-        }
+    // The domain reports what it dropped/assumed; the adapter logs it
+    for warning in warnings {
+        warn!(script = %script_path, "{}", warning);
     }
+
+    Ok(dataset)
 }
 
 #[cfg(test)]
@@ -192,7 +161,6 @@ mod tests {
             .execute(
                 "tests/adapters/out/connectors/env_probe.py",
                 &[],
-                OutputFormat::Native,
                 &HashMap::new(),
                 &credentials,
             )

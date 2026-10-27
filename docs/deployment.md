@@ -174,10 +174,9 @@ connectors:
     project: "prj-connectors"
     path: "d42/d42_inventory.py"          # resolved inside the checkout
     script_args: ["--list"]
-    output_format: "ansible"
 
-# connectors/netbox.yaml — a native-format script (reads SOURCE_CONFIG,
-# prints {"hostvars": ..., "groups": ...})
+# connectors/netbox.yaml — a script that reads SOURCE_CONFIG and prints
+# Ansible inventory JSON, as every script connector does
 connectors:
   - name: netbox
     description: "NetBox"
@@ -190,15 +189,17 @@ connectors:
   - name: ssh-facts
     description: "Fleet facts over SSH"
     type: "ssh"
-    path: "gather_facts"                  # label in facts mode
+    location: "host"
+    path: "/etc/ansible/facts.d/*.fact"   # each file a fact named after it
 
-# connectors/ssh-disk-report.yaml — the same SSH connector in script mode:
-# run a remote command per host and store its JSON output as that host's vars
+# connectors/ssh-disk-report.yaml — a script kept in a project, streamed to
+# each host and run there; what it prints is that host's vars
 connectors:
   - name: ssh-disk-report
     description: "Disk report over SSH"
     type: "ssh"
-    path: "/usr/local/bin/disk-report"    # the remote command
+    project: "prj-inventory"
+    path: "ssh/disk-report.sh"
     script_args: ["--json"]
 ```
 
@@ -245,8 +246,6 @@ sources:
     config:
       concurrency: "50"
       ssh_connect_timeout_seconds: "30"
-      gather_mode: "facts"
-      fact_path: "/etc/ansible/facts.d"
 
 # sources/src-fleet-disks.yaml — a STATIC host list
 sources:
@@ -257,7 +256,6 @@ sources:
     ttl_seconds: 3600                      # no interval: manual sync only
     config:
       hosts: "web01.example.com,web02.example.com"
-      gather_mode: "script"
 
 # sources/src-inventory.yaml — static Ansible YAML inventory parsed natively
 # from a git checkout (inventory.yaml + group_vars/ + host_vars/) — no
@@ -412,8 +410,8 @@ curl -s $BASE/metrics | grep unified_api_sync_total      # public, no key
 ```
 
 A failing credential fails the sync with a clear error (never a silent
-skip); a script that prints Ansible JSON while the source says `native`
-logs a WARN telling you to set `output_format: "ansible"`.
+skip); a script that prints the `{"hostvars", "groups"}` shape older versions
+read fails the sync, saying to print Ansible inventory JSON instead.
 
 > Deploying across several datacenters? The topology — one instance per DC,
 > one central federating them — is [its own page](federation.md).

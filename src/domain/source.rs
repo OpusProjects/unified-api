@@ -23,31 +23,6 @@ pub enum ConnectorType {
     Remote,
 }
 
-// What the connector script prints on stdout.
-// `Copy` because it's a tiny enum passed around by value everywhere.
-#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputFormat {
-    // The Dataset shape: {"hostvars": {...}, "groups": {...}}
-    #[default]
-    Native,
-    // Standard Ansible dynamic inventory JSON: hostvars under _meta.hostvars,
-    // groups as top-level keys. Converted to a Dataset on the fly, so existing
-    // inventory scripts (--list) work unmodified. See Dataset::from_ansible_inventory.
-    Ansible,
-}
-
-impl OutputFormat {
-    // As written after `output_format:` in a connector, for anything that
-    // shows the configuration back (the connectors listing).
-    pub fn name(self) -> &'static str {
-        match self {
-            OutputFormat::Native => "native",
-            OutputFormat::Ansible => "ansible",
-        }
-    }
-}
-
 // A source as it RUNS: the per-instance settings from its item file, with
 // its connector's settings resolved into it at load (see SourceDef::resolve).
 //
@@ -77,19 +52,26 @@ pub struct Source {
     #[serde(default)]
     pub connector_type: ConnectorType,
 
+    // ssh only: where script_path is (domain::connector::Location). None for
+    // an ssh connector that writes its script inline (script_path is then
+    // that script), and for every other connector.
+    #[serde(default)]
+    pub ssh_location: Option<crate::domain::connector::Location>,
+
     // The checkout a relative script_path (or static inventory path) resolves
-    // in. None for remote and ssh, which run nothing from a checkout.
+    // in. None for remote, and for ssh unless its script is in a project.
     #[serde(default)]
     pub project_id: Option<String>,
 
-    // What the connector adapter is handed: the script for script, the
-    // remote command for ssh (both from the connector's `path`), the inventory file for static_inventory and the
+    // What the connector adapter is handed: the script file for script; for
+    // ssh the connector's path (a script here, or files on the hosts) or its
+    // inline script itself; the inventory file for static_inventory; and the
     // source id ON THE REMOTE instance for remote.
     pub script_path: String,
 
     // CLI arguments passed to the script, e.g. ["--list"] for scripts that
-    // implement the Ansible dynamic inventory interface. For SSH sources in
-    // `script` gather mode they are appended to the remote command.
+    // implement the Ansible dynamic inventory interface. For ssh: the
+    // streamed script's arguments, or every executable a host path matches.
     #[serde(default)]
     pub script_args: Vec<String>,
 
@@ -109,10 +91,6 @@ pub struct Source {
     // its groups, which `--host` has no room for) states its own flag.
     #[serde(default)]
     pub host_args: Vec<String>,
-
-    // Format of the script's stdout (script connector only)
-    #[serde(default)]
-    pub output_format: OutputFormat,
 
     // Maximum seconds a sync may run before it is aborted — protects the
     // scheduler and API from a hung connector script. The source's own
@@ -273,7 +251,7 @@ impl SourceDef {
         let default_timeout = crate::domain::default_timeout_seconds();
 
         // (connector_type, project, script_path, script_args, host_args,
-        // output_format, connector timeout)
+        // connector timeout)
         let resolved = match self.connector.as_str() {
             connector::REMOTE => {
                 for key in ["url", "source"] {
@@ -293,7 +271,6 @@ impl SourceDef {
                     remote_id,
                     Vec::new(),
                     Vec::new(),
-                    OutputFormat::Native,
                     default_timeout,
                 ))
             }
@@ -320,7 +297,6 @@ impl SourceDef {
                     path,
                     Vec::new(),
                     Vec::new(),
-                    OutputFormat::Native,
                     default_timeout,
                 ))
             }
@@ -340,15 +316,41 @@ impl SourceDef {
                     Some((
                         kind,
                         c.project.clone(),
-                        c.path.clone(),
+                        // What the adapter is handed: a file, or the
+                        // script written in the item.
+                        c.script.clone().unwrap_or_else(|| c.path.clone()),
                         c.script_args.clone(),
                         c.host_args.clone(),
-                        c.output_format.unwrap_or_default(),
                         c.timeout_seconds,
                     ))
                 }
             },
         };
+
+        let ssh = connectors
+            .get(&self.connector)
+            .filter(|c| c.kind == ConnectorKind::Ssh);
+        let ssh_location = ssh.and_then(|c| c.ssh_location());
+        // What runs is the connector's now; 0.35 asked each source. Refused
+        // rather than ignored, so a source still saying it is looked at.
+        if ssh.is_some() {
+            if self.config.contains_key(connector::SSH_LOCATION_CONFIG_KEY) {
+                errors.push(format!(
+                    "Source '{id}' sets config.{}, a key unified-api sets itself for its \
+                     ssh connector — remove it: the connector's location decides",
+                    connector::SSH_LOCATION_CONFIG_KEY
+                ));
+            }
+            for key in ["gather_mode", "fact_path"] {
+                if self.config.contains_key(key) {
+                    errors.push(format!(
+                        "Source '{id}' sets config.{key}, which is no longer read — its \
+                         connector '{}' decides what runs (its path, or its script): remove it",
+                        self.connector
+                    ));
+                }
+            }
+        }
 
         let Some((
             connector_type,
@@ -356,7 +358,6 @@ impl SourceDef {
             script_path,
             script_args,
             host_args,
-            output_format,
             connector_timeout,
         )) = resolved
         else {
@@ -370,11 +371,11 @@ impl SourceDef {
             name: self.name.clone(),
             connector: self.connector.clone(),
             connector_type,
+            ssh_location,
             project_id,
             script_path,
             script_args,
             host_args,
-            output_format,
             timeout_seconds: self.timeout_seconds.unwrap_or(connector_timeout),
             host_sync_updates_group_vars: self.host_sync_updates_group_vars,
             sync_mode: self.sync_mode.clone(),
@@ -722,7 +723,7 @@ mod tests {
             ("facts", "name: facts\ntype: ssh\npath: gather_facts\n"),
             (
                 "inv",
-                "name: inv\nproject: prj\npath: inv.py\nscript_args: [\"--list\"]\noutput_format: ansible\ntimeout_seconds: 120\n",
+                "name: inv\nproject: prj\npath: inv.py\nscript_args: [\"--list\"]\ntimeout_seconds: 120\n",
             ),
         ]
         .into_iter()
@@ -747,7 +748,6 @@ mod tests {
         assert_eq!(s.project_id.as_deref(), Some("prj"));
         assert_eq!(s.script_path, "inv.py");
         assert_eq!(s.script_args, vec!["--list"]);
-        assert_eq!(s.output_format, OutputFormat::Ansible);
         assert_eq!(s.timeout_seconds, 120, "the connector's timeout");
         assert_eq!(s.credential_ids, vec!["cred-a"]);
         assert_eq!(s.config["tenant"], "a");

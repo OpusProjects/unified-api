@@ -16,8 +16,9 @@ use std::path::Path;
 // - otherwise the configured path stays (it may be baked into the image or
 //   mounted) and execution proceeds exactly as before projects existed
 //
-// Callers skip SSH sources — their script_path is a REMOTE command, not a file
-// on this machine.
+// Callers skip ssh sources unless their script is on this instance
+// (location: instance): a path on the hosts, or an inline script, is no file
+// here.
 pub fn resolve_script_path(
     projects_dir: &Path,
     owner_id: &str,

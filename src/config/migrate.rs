@@ -511,26 +511,23 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                     let fact_path =
                         take("fact_path").unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
                     if mode == "facts" {
+                        let dir = crate::domain::connector::host_path_from_0_35(&fact_path);
                         plan.notes.push(format!(
-                            "source '{id}': its facts are read from {}/*.fact — 0.35 also \
-                             read *.json there",
-                            fact_path.trim_end_matches('/')
+                            "source '{id}': its facts are read from {dir}/*.fact — 0.35 also \
+                             read *.json there"
                         ));
                         (
                             Some("host".to_string()),
                             false,
-                            format!("{}/*.fact", fact_path.trim_end_matches('/')),
+                            format!("{dir}/*.fact"),
                             Vec::new(),
                         )
                     } else {
-                        // 0.35 appended the arguments to the command; a
-                        // script's own arguments are $1, $2 instead, so they
-                        // go into its line, quoted.
-                        let mut script = script_path;
-                        for arg in &script_args {
-                            script.push(' ');
-                            script.push_str(&crate::domain::connector::shell_quote(arg));
-                        }
+                        // 0.35 appended the arguments to the command raw;
+                        // a script's own arguments are $1, $2 instead, so
+                        // they go into its line as they were.
+                        let script =
+                            crate::domain::connector::command_from_0_35(&script_path, &script_args);
                         (None, true, script, Vec::new())
                     }
                 } else {
@@ -1282,7 +1279,7 @@ mod tests {
         let value = crate::domain::yaml::to_json(&file).unwrap();
         assert_eq!(
             value["connectors"][0]["script"],
-            "/usr/local/bin/report '--json'"
+            "/usr/local/bin/report --json"
         );
         assert!(value["connectors"][0].get("script_args").is_none());
     }

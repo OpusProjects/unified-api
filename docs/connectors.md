@@ -383,20 +383,21 @@ the pattern expands.
 **`location: instance`** (the default when `project` is set; write it for an
 absolute path on this instance's disk) — `path` is a script file on this
 instance: in `project`'s checkout (read at every sync, so a push is live at the
-next one), or absolute. It is sent over the ssh connection; the host's shell
-reads it whole, then runs it with the interpreter its `#!` line names and that
-line's flags (`sh` without one; `env` and its options are skipped), with
-`script_args` as its arguments and its own standard input empty — so a `cat`
-or `read` in the script cannot swallow the rest of it. A shell, `python`,
-`perl`, `ruby` or `node` can run a script this way; anything else is refused
-naming it. Nothing is written on the host: no file in `/tmp` to clean up, and
-hosts that mount `/tmp` noexec run it like any other. A script is at most
-100 KiB (it reaches the host's shell as one argument). What it prints is the
-host's variables, one JSON object.
+next one), or absolute. It is sent over the ssh connection, and the host's
+`/bin/sh` (whatever the account's login shell) writes it to a private
+temporary file, runs that file with the interpreter its `#!` line names and
+that line's flags (`env` and its options skipped) — or, with no `#!` line, the
+account's login shell, as an ssh command line is run — and removes it when the
+run ends, also when the timeout cuts the session. It runs as a file would:
+`script_args` after it as `$1`, `$2`… (never taken for the interpreter's own
+options), `$0`, `$BASH_SOURCE` and `__file__` naming it, and its standard input
+empty, so nothing in it waits on the connection. Hosts that mount `/tmp`
+noexec run it too: the interpreter reads the file, nothing executes it. What
+it prints is the host's variables, one JSON object.
 
 **`script`** — the script written in the item instead of a file: streamed and
-run exactly as a file from here is (its `#!` line, `script_args`, nothing
-written on the host). It takes no `project` or `location`, and an ssh connector
+run exactly as a file from here is (its `#!` line, `script_args`, a temporary
+file removed after the run). It takes no `project` or `location`, and an ssh connector
 has `path` or `script`, never both. A command with arguments is a script of one
 line: `script: /usr/local/bin/disk-report --json`.
 
@@ -405,8 +406,10 @@ line: `script: /usr/local/bin/disk-report --json`.
 that form only at startup: an ssh connector with neither `location`, `project`
 nor `script` is converted in memory, with its sources, and each conversion is
 logged (and printed by `--check-config`, which still exits 0). Facts become
-`location: host` with `path: <fact_path>/*.fact`; a command becomes `script:`,
-its `script_args` quoted into the line as 0.35 appended them; `gather_mode` and
+`location: host` with `path: <fact_path>/*.fact` (a `$HOME` or relative
+`fact_path` as `~/`, which a host path may start with); a command becomes
+`script:`, its `script_args` appended to the line raw, as 0.35 appended them,
+and with no `#!` line it runs in the account's login shell, as in 0.35; `gather_mode` and
 `fact_path` go from the sources. The files are not touched, so the image can
 roll back, and the config API refuses the old form, naming what to write: move
 the files when convenient.

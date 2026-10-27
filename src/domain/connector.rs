@@ -122,9 +122,35 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-// The longest script streamed to a host: it reaches the remote shell as one
-// argument (sh -c "$script"), and Linux caps a single argument at 128 KiB.
-pub const MAX_SCRIPT_BYTES: usize = 100 * 1024;
+// A 0.35 fact_path as a path on the hosts: 0.35 wrote it into the remote
+// command unquoted, so $HOME and a path relative to the home directory (where
+// an ssh command starts) worked; ~/ says both here.
+pub fn host_path_from_0_35(fact_path: &str) -> String {
+    let path = fact_path.trim().trim_end_matches('/');
+    if let Some(rest) = path
+        .strip_prefix("$HOME/")
+        .or(path.strip_prefix("${HOME}/"))
+    {
+        format!("~/{rest}")
+    } else if path == "$HOME" || path == "${HOME}" || path == "~" || path.is_empty() {
+        "~".to_string()
+    } else if path.starts_with('/') || path.starts_with("~/") {
+        path.to_string()
+    } else {
+        format!("~/{path}")
+    }
+}
+
+// 0.35 appended a command's arguments to it raw (`path arg1 arg2`), so the
+// shell split and expanded them; kept that way, they mean what they meant.
+pub fn command_from_0_35(command: &str, args: &[String]) -> String {
+    let mut line = command.to_string();
+    for arg in args {
+        line.push(' ');
+        line.push_str(arg);
+    }
+    line
+}
 
 // What a shell pattern is made of: a script here is one file, so a path
 // with one of these belongs on the hosts.
@@ -136,8 +162,11 @@ fn is_pattern(path: &str) -> bool {
 // pattern still expands there: nothing that shell would read as anything but
 // a path or a pattern.
 fn is_plain_remote_path(path: &str) -> bool {
-    path.starts_with('/')
-        && path.chars().all(|c| {
+    // Absolute, or under the account's home (~/), which the remote shell
+    // expands as it expands the pattern.
+    let rest = path.strip_prefix("~/").unwrap_or(path);
+    (path.starts_with('/') || path.starts_with("~/"))
+        && rest.chars().all(|c| {
             c.is_ascii_alphanumeric()
                 || matches!(
                     c,
@@ -205,13 +234,6 @@ impl Connector {
             }
             if script.trim().is_empty() {
                 errors.push(format!("Connector '{id}' has an empty script"));
-            }
-            if script.len() > MAX_SCRIPT_BYTES {
-                errors.push(format!(
-                    "Connector '{id}' has a script of {} bytes, more than {MAX_SCRIPT_BYTES} \
-                     — put a script that size in a file on the hosts (location: host)",
-                    script.len()
-                ));
             }
             return errors;
         }
@@ -373,6 +395,24 @@ mod tests {
     }
 
     #[test]
+    fn a_0_35_fact_path_is_kept_where_it_pointed() {
+        assert_eq!(
+            host_path_from_0_35("/etc/ansible/facts.d/"),
+            "/etc/ansible/facts.d"
+        );
+        assert_eq!(host_path_from_0_35("$HOME/facts.d"), "~/facts.d");
+        assert_eq!(host_path_from_0_35("facts.d"), "~/facts.d");
+        assert_eq!(host_path_from_0_35("~/facts.d"), "~/facts.d");
+        // And it is a path the hosts may have.
+        let c = connector("name: f\ntype: ssh\nlocation: host\npath: \"~/facts.d/*.fact\"\n");
+        assert!(c.errors("f").is_empty(), "{:?}", c.errors("f"));
+        assert_eq!(
+            command_from_0_35("report", &["--a b".into(), "2>/dev/null".into()]),
+            "report --a b 2>/dev/null"
+        );
+    }
+
+    #[test]
     fn a_path_on_the_hosts_is_absolute_and_plain() {
         for (path, why) in [
             ("etc/facts.d/*.fact", "relative"),
@@ -427,11 +467,6 @@ mod tests {
                 .join("")
                 .contains("a path (a file) or a script")
         );
-        let long = connector(&format!(
-            "name: s\ntype: ssh\nscript: \"{}\"\n",
-            "x".repeat(MAX_SCRIPT_BYTES + 1)
-        ));
-        assert!(long.errors("s").join("").contains("more than"));
         let command =
             connector("name: s\ntype: ssh\nlocation: instance\npath: \"/opt/report --json\"\n");
         assert!(command.errors("s").join("").contains("spaces or lines"));

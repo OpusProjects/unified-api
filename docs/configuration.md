@@ -827,7 +827,7 @@ sources:
 ```
 
 A source in `gather_mode: script` gets a connector whose `script` is its
-`script_path`, byte for byte.
+`script_path` with its `script_args` appended, as 0.35 ran them.
 
 A remote source (the remote source id moves into `config`):
 

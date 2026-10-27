@@ -78,24 +78,25 @@ pub struct Source {
     pub connector_type: ConnectorType,
 
     // ssh only: where script_path is (domain::connector::Location). None for
-    // the inline form, where script_path is the command and the source's
-    // `gather_mode` decides, and for every other connector.
+    // an ssh connector that writes its script inline (script_path is then
+    // that script), and for every other connector.
     #[serde(default)]
     pub ssh_location: Option<crate::domain::connector::Location>,
 
     // The checkout a relative script_path (or static inventory path) resolves
-    // in. None for remote and ssh, which run nothing from a checkout.
+    // in. None for remote, and for ssh unless its script is in a project.
     #[serde(default)]
     pub project_id: Option<String>,
 
-    // What the connector adapter is handed: the script for script, the
-    // remote command for ssh (both from the connector's `path`), the inventory file for static_inventory and the
+    // What the connector adapter is handed: the script file for script; for
+    // ssh the connector's path (a script here, or files on the hosts) or its
+    // inline script itself; the inventory file for static_inventory; and the
     // source id ON THE REMOTE instance for remote.
     pub script_path: String,
 
     // CLI arguments passed to the script, e.g. ["--list"] for scripts that
-    // implement the Ansible dynamic inventory interface. For SSH sources in
-    // `script` gather mode they are appended to the remote command.
+    // implement the Ansible dynamic inventory interface. For ssh: the
+    // streamed script's arguments, or every executable a host path matches.
     #[serde(default)]
     pub script_args: Vec<String>,
 

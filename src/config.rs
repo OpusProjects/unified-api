@@ -1280,9 +1280,10 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
 // config.gather_mode (facts, the default, or script) and config.fact_path.
 // A connector with neither location, project nor script can only be that
 // form (0.35 had none of them), so it is converted here, with its sources:
-// - facts: location: host, path: <fact_path>/*.fact (0.35 also read *.json)
-// - script: script: the command, with its arguments quoted into it, as 0.35
-//   appended them to the command line
+// - facts: location: host, path: <fact_path>/*.fact (0.35 also read *.json);
+//   a $HOME or relative fact_path, which 0.35's unquoted command accepted, as ~/
+// - script: script: the command, with its arguments appended raw, as 0.35
+//   appended them to the command line (the shell splits them, as it did)
 // and gather_mode / fact_path go from those sources. Sources that disagree
 // on what the connector means cannot be converted into one: refused,
 // naming them.
@@ -1345,7 +1346,10 @@ fn upgrade_0_35_ssh(
             }
         };
         if mode == "facts" {
-            let pattern = format!("{}/*.fact", fact_path.trim_end_matches('/'));
+            let pattern = format!(
+                "{}/*.fact",
+                crate::domain::connector::host_path_from_0_35(&fact_path)
+            );
             upgraded.push(format!(
                 "Connector '{id}' is in the 0.35 form: read as location: host, path: \
                  {pattern} (0.35 also read *.json there); write it so, and remove \
@@ -1355,11 +1359,10 @@ fn upgrade_0_35_ssh(
             connector.path = pattern;
             connector.script_args.clear();
         } else {
-            let mut script = connector.path.clone();
-            for arg in &connector.script_args {
-                script.push(' ');
-                script.push_str(&crate::domain::connector::shell_quote(arg));
-            }
+            let script = crate::domain::connector::command_from_0_35(
+                &connector.path,
+                &connector.script_args,
+            );
             upgraded.push(format!(
                 "Connector '{id}' is in the 0.35 form: read as script: with its command{}; \
                  write it so, and remove gather_mode from its sources",
@@ -2923,7 +2926,7 @@ mod tests {
         let c = &cfg.connectors["report"];
         assert_eq!(
             c.script.as_deref(),
-            Some(r"/usr/local/bin/report '--json' 'it'\''s'")
+            Some("/usr/local/bin/report --json it's")
         );
         assert!(c.path.is_empty() && c.script_args.is_empty());
         assert!(!cfg.sources["src-r"].config.contains_key("gather_mode"));

@@ -111,7 +111,7 @@ impl server::Handler for TestServer {
             return self.answer(channel, b"{\"probe\": true}".to_vec(), session);
         }
         self.command = String::from_utf8_lossy(command).into_owned();
-        if self.command.starts_with("for f in ") {
+        if self.command.contains("for f in ") {
             let facts =
                 "\u{1e}owner\n{\"team\": \"platform\"}\n\n\u{1e}rack\n[location]\nRow = 4\n\n";
             return self.answer(channel, facts.as_bytes().to_vec(), session);
@@ -380,12 +380,15 @@ async fn a_script_here_is_streamed_to_the_interpreter_it_names() {
     let output = gather_at(Some("instance"), script, &["--short".into(), "it's".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
-    // Read whole first, then run by the interpreter from #!, the arguments
-    // quoted, its own standard input empty.
-    assert_eq!(
-        host["command"],
-        r#"s=$(cat) && exec /bin/sh -c "$s" /bin/sh '--short' 'it'\''s' </dev/null"#
+    // Under /bin/sh whatever the login shell, written to a temporary file
+    // and run by the interpreter from #! with the arguments, quoted, after it.
+    let command = host["command"].as_str().unwrap();
+    assert!(command.starts_with("exec /bin/sh -c '"), "{command}");
+    assert!(
+        command.contains(r#"/bin/sh "$t" "$@" </dev/null"#),
+        "{command}"
     );
+    assert!(command.ends_with(r"sh '--short' 'it'\''s'"), "{command}");
     // The file itself, byte for byte, over the connection: nothing written
     // on the host.
     assert_eq!(host["script"], std::fs::read_to_string(script).unwrap());
@@ -436,10 +439,9 @@ async fn an_inline_script_is_streamed_like_a_file() {
     let output = gather_at(None, script, &["--all".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
-    // No #!: sh.
-    assert_eq!(
-        host["command"],
-        r#"s=$(cat) && exec sh -c "$s" sh '--all' </dev/null"#
-    );
+    // No #!: the account's login shell, as an ssh command line.
+    let command = host["command"].as_str().unwrap();
+    assert!(command.contains(r#""${SHELL:-/bin/sh}" "$t""#), "{command}");
+    assert!(command.ends_with("sh '--all'"), "{command}");
     assert_eq!(host["script"], script);
 }

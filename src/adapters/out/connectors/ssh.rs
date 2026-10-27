@@ -547,16 +547,22 @@ async fn plan(
 // so the remote shell expands it; Connector::errors allowed only characters
 // that shell reads as a path or a pattern.
 fn facts_command(pattern: &str, args: &[String]) -> String {
-    let run = with_args(r#""$f""#, args);
-    format!(
-        r#"for f in {pattern}; do [ -f "$f" ] || continue; n=${{f##*/}}; m=${{n%.*}}; [ -n "$m" ] && n=$m; printf '\036%s\n' "$n"; if [ -x "$f" ]; then {run} 2>/dev/null; else cat "$f"; fi; echo; done"#
+    under_sh(
+        &format!(
+            r#"for f in {pattern}; do [ -f "$f" ] || continue; n=${{f##*/}}; m=${{n%.*}}; [ -n "$m" ] && n=$m; printf "\036%s\n" "$n"; if [ -x "$f" ]; then "$f" "$@" </dev/null 2>/dev/null; else cat "$f"; fi; echo; done"#
+        ),
+        args,
     )
 }
 
-// A program and its arguments as one remote command line, each argument
-// quoted: an argument is a value, never shell syntax.
-fn with_args(program: &str, args: &[String]) -> String {
-    let mut line = program.to_string();
+// A remote command that /bin/sh runs whatever the account's login shell is
+// (csh and fish cannot read sh syntax): `inner` in single quotes, with `args`
+// quoted after it as $1, $2… The words written into `inner` (a host path, an
+// interpreter from a #! line) are checked to be plain, so it never holds a
+// single quote.
+fn under_sh(inner: &str, args: &[String]) -> String {
+    debug_assert!(!inner.contains('\''), "{inner}");
+    let mut line = format!("exec /bin/sh -c '{inner}' sh");
     for arg in args {
         line.push(' ');
         line.push_str(&shell_quote(arg));
@@ -566,68 +572,47 @@ fn with_args(program: &str, args: &[String]) -> String {
 
 use crate::domain::connector::shell_quote;
 
-// The remote command that runs a script sent on standard input. The remote
-// shell reads ALL of it first (s=$(cat)) and only then runs it, with -c,
-// its standard input empty (</dev/null):
-// - a command in the script that reads its standard input (cat, read, ssh,
-//   sudo -S) cannot swallow the lines after it, as `sh -s` let it, which
-//   cut the script short and still exited 0;
-// - nothing is printed before the script has arrived whole, so the output
-//   never fills the channel while the script is still being sent.
-// The interpreter is the one its #! line names, with that line's flags (env
-// and its own options skipped); sh when it names none. A script reaches the
-// host as one argument, which Linux caps at 128 KiB: hence MAX_SCRIPT_BYTES.
+// The remote command that runs a script sent on standard input as a FILE,
+// as it would run from a checkout: the host's /bin/sh writes what arrives to
+// a private temporary file, runs it with the interpreter its #! line names
+// (with that line's flags; env and its own options skipped) or, without one,
+// the account's login shell, as an ssh command line is run, and removes it
+// when the run ends — also when the session is cut by the timeout (HUP).
+// A file, not `sh -c "$script"`: $0, $BASH_SOURCE, __file__ and node's
+// arguments are what the script expects, an argument starting with "-" is
+// never taken for the interpreter's own option, and a `#!/bin/sh -` line
+// works. The script runs with its standard input empty, so nothing in it
+// waits on the connection; and nothing is printed before the whole script
+// has arrived, so the output cannot fill the channel while it is sent.
 fn stream_command(script: &[u8], args: &[String]) -> Result<String, String> {
-    use crate::domain::connector::MAX_SCRIPT_BYTES;
-    if script.len() > MAX_SCRIPT_BYTES {
-        return Err(format!(
-            "{} bytes, more than {MAX_SCRIPT_BYTES}: put a script that size in a file on the \
-             hosts (location: host)",
-            script.len()
-        ));
-    }
-    let (program, flags) = interpreter(script)?;
-    let name = program.rsplit('/').next().unwrap_or(&program);
-    // How each kind of interpreter takes a program text and its arguments.
-    let (run, argv0) = if ["sh", "bash", "dash", "ash", "ksh", "mksh", "zsh"].contains(&name) {
-        ("-c", true)
-    } else if name.starts_with("python") {
-        ("-c", false)
-    } else if name.starts_with("perl") || name.starts_with("ruby") || name.starts_with("node") {
-        ("-e", false)
-    } else {
-        return Err(format!(
-            "its #! line names {program}, which cannot run a script sent to it: name a shell, \
-             python, perl, ruby or node, or put the script on the hosts (location: host)"
-        ));
+    let run = match interpreter(script)? {
+        Some((program, flags)) => {
+            let mut run = program;
+            for flag in flags {
+                run.push(' ');
+                run.push_str(&flag);
+            }
+            run
+        }
+        None => r#""${SHELL:-/bin/sh}""#.to_string(),
     };
-    let mut line = format!("s=$(cat) && exec {program}");
-    for flag in &flags {
-        line.push(' ');
-        line.push_str(flag);
-    }
-    line.push_str(&format!(" {run} \"$s\""));
-    if argv0 {
-        // What the script sees as $0.
-        line.push_str(&format!(" {program}"));
-    }
-    for arg in args {
-        line.push(' ');
-        line.push_str(&shell_quote(arg));
-    }
-    line.push_str(" </dev/null");
-    Ok(line)
+    Ok(under_sh(
+        &format!(
+            r#"t=$(mktemp "${{TMPDIR:-/tmp}}/unified-api.XXXXXX") || exit 1; trap "rm -f -- \"$t\"" EXIT; trap "exit 129" HUP; trap "exit 130" INT; trap "exit 143" TERM; cat >"$t" || exit 1; {run} "$t" "$@" </dev/null"#
+        ),
+        args,
+    ))
 }
 
 // The interpreter a script's #! line names, and the flags it gives it:
 // `#!/bin/bash -e` is ("/bin/bash", ["-e"]); `#!/usr/bin/env -S python3 -u`
-// is ("python3", ["-u"]). No #! line: sh. Every word must be a plain name
-// or flag: it is written into the remote command line.
-fn interpreter(script: &[u8]) -> Result<(String, Vec<String>), String> {
+// is ("python3", ["-u"]). None without a #! line. Every word must be a plain
+// name or flag: it is written into the remote command line.
+fn interpreter(script: &[u8]) -> Result<Option<(String, Vec<String>)>, String> {
     let first = script.split(|b| *b == b'\n').next().unwrap_or_default();
     let first = String::from_utf8_lossy(first);
     let Some(rest) = first.strip_prefix("#!") else {
-        return Ok(("sh".to_string(), Vec::new()));
+        return Ok(None);
     };
     let mut words: Vec<&str> = rest.split_whitespace().collect();
     if words.first().is_some_and(|w| w.ends_with("/env")) {
@@ -641,10 +626,10 @@ fn interpreter(script: &[u8]) -> Result<(String, Vec<String>), String> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | '='))
     };
     match words.split_first() {
-        Some((program, flags)) if plain(program) && flags.iter().all(|f| plain(f)) => Ok((
+        Some((program, flags)) if plain(program) && flags.iter().all(|f| plain(f)) => Ok(Some((
             program.to_string(),
             flags.iter().map(|f| f.to_string()).collect(),
-        )),
+        ))),
         _ => Err(format!(
             "its #! line '{}' names no plain program",
             first.trim()
@@ -1153,67 +1138,102 @@ mod tests {
         assert_eq!(vars.len(), 3);
     }
 
-    #[test]
-    fn the_facts_command_lets_the_remote_shell_expand_the_pattern() {
-        let command = facts_command("/etc/ansible/facts.d/*.fact", &[]);
-        assert!(command.contains(r#"then "$f" 2>/dev/null"#), "{command}");
-        // Arguments reach every executable, quoted.
-        let with = facts_command("/opt/bin/inventory", &["--format".into(), "json".into()]);
-        assert!(
-            with.contains(r#"then "$f" '--format' 'json' 2>/dev/null"#),
-            "{with}"
-        );
-        assert!(
-            command.starts_with("for f in /etc/ansible/facts.d/*.fact; do"),
-            "{command}"
-        );
-        assert!(command.contains(r"printf '\036%s\n'"), "{command}");
+    // Runs a remote command as an ssh server would, here: through /bin/sh
+    // (standing in for the login shell), with `stdin` on its standard input
+    // and temporary files under `tmp`.
+    fn run_remote(command: &str, stdin: &[u8], tmp: &std::path::Path) -> String {
+        use std::io::Write;
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .env("TMPDIR", tmp)
+            .env("SHELL", "/bin/sh")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin).unwrap();
+        let output = child.wait_with_output().unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     #[test]
-    fn a_streamed_script_runs_in_the_interpreter_it_names() {
-        let run = |script: &[u8]| stream_command(script, &["--x".into()]);
+    fn a_streamed_script_runs_as_a_file_and_leaves_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let args = ["--x".to_string(), "it's".to_string()];
+        let run = |script: &str| {
+            run_remote(
+                &stream_command(script.as_bytes(), &args).unwrap(),
+                script.as_bytes(),
+                tmp.path(),
+            )
+        };
+        // A command reading standard input cannot swallow what follows it;
+        // arguments arrive whole, starting with "-" or holding a quote.
         assert_eq!(
-            run(b"echo hi\n").unwrap(),
-            r#"s=$(cat) && exec sh -c "$s" sh '--x' </dev/null"#
+            run("echo start\ncat\nread x\necho \"after $1 $2\"\n"),
+            "start\nafter --x it's\n"
         );
-        // The #! line's flags are kept.
-        assert_eq!(
-            run(b"#!/bin/bash -e\necho hi\n").unwrap(),
-            r#"s=$(cat) && exec /bin/bash -e -c "$s" /bin/bash '--x' </dev/null"#
-        );
-        // env and its own options are skipped.
-        assert_eq!(
-            run(b"#!/usr/bin/env -S python3 -u\nprint(1)\n").unwrap(),
-            r#"s=$(cat) && exec python3 -u -c "$s" '--x' </dev/null"#
-        );
-        assert_eq!(
-            run(b"#!/usr/bin/perl -w\nprint 1\n").unwrap(),
-            r#"s=$(cat) && exec /usr/bin/perl -w -e "$s" '--x' </dev/null"#
-        );
-        // What cannot take a script this way, or is not a plain name: said.
+        // As a file: $0 names it, and a `#!/bin/sh -` line works.
         assert!(
-            run(b"#!/usr/bin/awk -f\n{}\n")
-                .unwrap_err()
-                .contains("cannot run")
+            run("#!/bin/sh -\ncase $0 in */unified-api.*) echo file;; esac\n").contains("file")
         );
+        // perl takes its arguments as arguments, never as its own switches.
+        assert_eq!(run("#!/usr/bin/perl\nprint \"@ARGV\\n\";\n"), "--x it's\n");
+        // Nothing is left behind.
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn the_interpreter_comes_from_the_hash_bang_line() {
+        let cmd = |script: &[u8]| stream_command(script, &[]).unwrap();
+        // No #! line: the account's login shell, as an ssh command line.
+        assert!(cmd(b"echo hi\n").contains(r#""${SHELL:-/bin/sh}" "$t""#));
+        // Flags kept; env and its own options skipped.
+        assert!(cmd(b"#!/bin/bash -e\n").contains(r#"/bin/bash -e "$t""#));
+        assert!(cmd(b"#!/usr/bin/env -S python3 -u\n").contains(r#"python3 -u "$t""#));
+        // Whatever the login shell, /bin/sh runs it.
+        assert!(cmd(b"echo hi\n").starts_with("exec /bin/sh -c '"));
+        // Not a plain program name: refused.
         assert!(
-            run(b"#!/bin/sh; rm -rf /\n")
+            stream_command(b"#!/bin/sh; rm -rf /\n", &[])
                 .unwrap_err()
                 .contains("no plain program")
         );
-        assert!(
-            run(&vec![b'x'; crate::domain::connector::MAX_SCRIPT_BYTES + 1])
-                .unwrap_err()
-                .contains("more than")
-        );
     }
 
     #[test]
-    fn arguments_are_quoted_values() {
-        assert_eq!(
-            with_args("sh -s --", &["--list".into(), "it's".into()]),
-            r"sh -s -- '--list' 'it'\''s'"
+    fn the_facts_command_reads_every_matching_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("owner.fact"), "{\"team\": \"a\"}\n").unwrap();
+        std::fs::write(dir.path().join(".local.fact"), "{\"x\": 1}\n").unwrap();
+        std::fs::write(dir.path().join("README"), "not a fact\n").unwrap();
+        // An executable fact gets the arguments, and an empty standard input.
+        let exe = dir.path().join("args.fact");
+        std::fs::write(
+            &exe,
+            "#!/bin/sh\ncat\nprintf '{\"args\": \"%s\"}\\n' \"$*\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let pattern = format!("{}/*.fact", dir.path().display());
+        let output = run_remote(
+            &facts_command(&pattern, &["--json".into()]),
+            b"",
+            tmp.path(),
         );
+        let facts = parse_facts_output(&output);
+        assert_eq!(facts["owner"], serde_json::json!({"team": "a"}));
+        assert_eq!(facts["args"], serde_json::json!({"args": "--json"}));
+        assert!(!facts.contains_key("README"));
+        // A pattern skips dotfiles, as Ansible's glob does; named outright,
+        // one whose name is only an extension keeps its name.
+        assert!(!facts.contains_key(".local"));
+        let local = format!("{}/.local.fact", dir.path().display());
+        let named = parse_facts_output(&run_remote(&facts_command(&local, &[]), b"", tmp.path()));
+        assert_eq!(named[".local"], serde_json::json!({"x": 1}));
     }
 }

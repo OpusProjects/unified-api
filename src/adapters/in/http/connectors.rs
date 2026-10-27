@@ -34,11 +34,15 @@ pub struct ConnectorInfo {
     pub project_id: Option<String>,
     /// ssh only: where `path` is. "host": on each host, a file or a
     /// pattern of files, each run if executable or read if not, as facts;
-    /// "instance": a script here, streamed to each host. Null for the inline form, where `path` is the command itself,
-    /// and for every other connector
+    /// "instance": a script here, streamed to each host. Null for a
+    /// connector that writes its `script` inline, and for every other kind
     pub location: Option<String>,
-    /// Null for the built-ins
+    /// The file it runs or reads. Null for the built-ins and for a
+    /// connector with an inline `script`
     pub path: Option<String>,
+    /// ssh only: the script written in the item, streamed to each host and
+    /// run there; null when it names a `path`
+    pub script: Option<String>,
     pub script_args: Vec<String>,
     pub host_args: Vec<String>,
     /// "native" or "ansible" for a script connector; null otherwise
@@ -122,7 +126,8 @@ fn info(
             built_in: false,
             project_id: c.project.clone(),
             location: c.ssh_location().map(|l| l.name().to_string()),
-            path: Some(c.path.clone()),
+            path: (!c.path.is_empty()).then(|| c.path.clone()),
+            script: c.script.clone(),
             script_args: c.script_args.clone(),
             host_args: c.host_args.clone(),
             output_format: match c.kind {
@@ -146,6 +151,7 @@ fn info(
             project_id: None,
             location: None,
             path: None,
+            script: None,
             script_args: Vec::new(),
             host_args: Vec::new(),
             output_format: None,

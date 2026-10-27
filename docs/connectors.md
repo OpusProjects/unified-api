@@ -80,8 +80,9 @@ sources:
 |---|---|
 | `type` | `script` (default) or `ssh` |
 | `project` | The project whose checkout holds the script. Required for a script connector whose `path` is relative; on ssh, the project of a script streamed to each host, refused with `location: host` |
-| `location` | ssh only: where `path` is — `host` (on each host) or `instance` (here, the default with `project`). See [SSH connectors](#ssh-connectors-type-ssh) |
-| `path` | script: the file to run, inside the project checkout (or absolute). ssh: a script here, or a file or pattern of files on each host |
+| `location` | ssh only: where `path` is — `host` (on each host) or `instance` (here, the default). See [SSH connectors](#ssh-connectors-type-ssh) |
+| `path` | A file, always. script: the one to run, inside the project checkout (or absolute). ssh: a script here, or a file or pattern of files on each host |
+| `script` | ssh only, instead of `path`: the script itself, written in the item |
 | `script_args` | CLI arguments, verbatim and quoted. On ssh, passed to the streamed script, or to every executable a host path matches |
 | `host_args` | Script only: CLI arguments for a host-scoped sync, replacing `script_args` (see below) |
 | `output_format` | Script only: `native` (default) or `ansible` (see below) |
@@ -94,7 +95,8 @@ full split is in [configuration](configuration.md#source-or-connector).
 
 Settings that look active and are not are refused at startup rather than
 ignored: `host_args` or `output_format` on an ssh connector, `project` with
-`location: host`, `location` on a script connector, a relative script `path`
+`location: host`, `location` or `script` on a script connector, `path` and
+`script` together, a relative script `path`
 without a `project`, and `project` / `path` on any source that is not
 `static_inventory`.
 
@@ -328,9 +330,10 @@ empty inventory — that silent zero is the failure mode this flag exists for.)
 ## SSH connectors (`type: ssh`)
 
 The native SSH connector connects to the fleet in parallel and builds the
-Dataset from what each host answers. The connector says what runs and where
-it is; which hosts, as whom and how is the source's. `location` says where
-`path` is:
+Dataset from what each host answers. The connector says what runs: a `path`
+(a file, and `location` says where it is) or a `script` written in the item,
+the way a CI step is either a file or inline. Which hosts, as whom and how is
+the source's.
 
 ```yaml
 # connectors/ssh.yaml
@@ -345,8 +348,14 @@ connectors:
   # Here: a script in a project, streamed to each host and run there.
   - name: ssh-osinfo
     type: ssh
-    project: prj-unified-connectors     # location: instance is the default
-    path: ssh/osinfo.sh
+    project: prj-toolbox                # location: instance is the default
+    path: linux/osinfo.sh
+
+  # Inline: the script itself, streamed the same way.
+  - name: ssh-uptime
+    type: ssh
+    script: |
+      printf '{"uptime_s": %s}\n' "$(cut -d. -f1 /proc/uptime)"
 
 # sources/src-ssh-dc1.yaml
 sources:
@@ -381,38 +390,42 @@ nothing is written on the host: no file in `/tmp` to clean up, and hosts that
 mount `/tmp` noexec run it like any other. What it prints is the host's
 variables, one JSON object.
 
-**The inline form** — an ssh connector with neither `location` nor `project`
-keeps the 0.35 behaviour, where `path` is the command itself and each source's
-`config.gather_mode` decides (`facts`, the default, reads `fact_path`'s `*.fact`
-and `*.json`; `script` runs `path`). It still works, with a warning at startup
-and in `--check-config`, and will be removed. A source whose connector sets
-`location` (or `project`) may not set `gather_mode` or `fact_path`: the
-connector's path decides. To move an inline connector:
+**`script`** — the script written in the item instead of a file: streamed and
+run exactly as a file from here is (its `#!` line, `script_args`, nothing
+written on the host). It takes no `project` or `location`, and an ssh connector
+has `path` or `script`, never both.
+
+**From 0.35** — 0.35 wrote the command (or a label such as `gather_facts`) in
+`path`, and each source's `config.gather_mode` said what it meant. 0.36 refuses
+both, naming what to write instead; a 0.34 directory migrated at startup is
+written in the new shape directly. Facts become files on the host, a script
+becomes `script`:
 
 ```yaml
-# Before (0.35): a label as the path, the mode on every source
+# 0.35: a label as the path, the mode on every source
 - name: ssh-gather-facts
   type: ssh
   path: gather_facts            # sources: gather_mode: facts, fact_path: /etc/ansible/facts.d
-# After
+# 0.36
 - name: ssh-gather-facts
   type: ssh
   location: host
-  path: /etc/ansible/facts.d/*.fact     # add *.json too if the hosts keep facts there
+  path: /etc/ansible/facts.d/*.fact     # 0.35 read *.json there too
 ```
 
 ```yaml
-# Before: the script inside the YAML, gather_mode: script on the source
+# 0.35: the script in path, gather_mode: script on the source
 - name: ssh-script
   type: ssh
   path: |-
-    j(){ printf '%s' "$1" | tr -d '"\'; }
+    . /etc/os-release
     ...
-# After: the same lines in ssh/osinfo.sh, in a project
+# 0.36: the same lines as script (or in a file, with path)
 - name: ssh-script
   type: ssh
-  project: prj-unified-connectors
-  path: ssh/osinfo.sh
+  script: |-
+    . /etc/os-release
+    ...
 ```
 
 Then remove `gather_mode` and `fact_path` from the sources' `config`.
@@ -427,7 +440,6 @@ Then remove `gather_mode` and `fact_path` from the sources' `config`.
 | `ssh_connect_timeout_seconds` | `30` | Per-host connection/exec timeout |
 | `ssh_legacy_algorithms` | `false` | `"true"` additionally offers SHA-1 KEX/MACs (appended last, modern servers still pick modern ones) for OpenSSH 5.x-era hosts (EL6) that lack `hmac-sha2` |
 | `ssh_known_hosts` | — | Path to an OpenSSH `known_hosts` file. When set, every server key is checked against it **before authentication**: an unknown or mismatched host is refused (it lands in `unreachable`, so its last known data is kept), and the refusal logs both fingerprints. A server presenting an OpenSSH host *certificate* is refused too — verification is defined over plain host keys. Unset = any server key is accepted, and every sync warns about it |
-| `gather_mode`, `fact_path` | `facts`, `/etc/ansible/facts.d` | The inline form only (see above) |
 
 **Host key verification:** collect the fleet's keys with `ssh-keyscan` (append
 `-p` entries for non-22 ports) and point `ssh_known_hosts` at the file. Plain,

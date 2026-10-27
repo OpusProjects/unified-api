@@ -336,20 +336,23 @@ async fn an_unreadable_known_hosts_file_fails_the_sync_loudly() {
 
 // A connector with a location, against the echoing host: the path and
 // arguments it is given, and what came back.
-async fn gather_at(location: &str, path: &str, args: &[String]) -> ConnectorOutput {
+// None: a connector that writes its script inline, handed over as the path.
+async fn gather_at(location: Option<&str>, path: &str, args: &[String]) -> ConnectorOutput {
     let addr = serve(Arc::new(AtomicBool::new(false)), true).await;
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("client_key");
     std::fs::write(&key_path, CLIENT_KEY).unwrap();
-    let config: HashMap<String, String> = HashMap::from([
+    let mut config: HashMap<String, String> = HashMap::from([
         ("hosts".into(), "127.0.0.1".into()),
         ("port".into(), addr.port().to_string()),
         ("ssh_connect_timeout_seconds".into(), "10".into()),
-        (
+    ]);
+    if let Some(location) = location {
+        config.insert(
             unified_api::ports::connector::SSH_LOCATION_CONFIG_KEY.into(),
             location.into(),
-        ),
-    ]);
+        );
+    }
     let credentials: HashMap<String, String> = HashMap::from([
         ("username".into(), "tester".into()),
         (
@@ -374,7 +377,7 @@ async fn a_script_here_is_streamed_to_the_interpreter_it_names() {
         "/tests/adapters/out/connectors/ssh/osinfo.sh"
     );
 
-    let output = gather_at("instance", script, &["--short".into(), "it's".into()]).await;
+    let output = gather_at(Some("instance"), script, &["--short".into(), "it's".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
     // The interpreter from #!, reading standard input, the arguments quoted.
@@ -414,11 +417,22 @@ async fn a_missing_script_here_fails_the_sync_naming_it() {
 
 #[tokio::test]
 async fn files_on_the_host_become_facts_named_after_them() {
-    let output = gather_at("host", "/etc/ansible/facts.d/*.fact", &[]).await;
+    let output = gather_at(Some("host"), "/etc/ansible/facts.d/*.fact", &[]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
     assert_eq!(host["owner"], serde_json::json!({"team": "platform"}));
     assert_eq!(host["rack"], serde_json::json!({"location": {"row": "4"}}));
     // Each fact is also a group, as before.
     assert!(output.dataset.groups.contains_key("rack"));
+}
+
+#[tokio::test]
+async fn an_inline_script_is_streamed_like_a_file() {
+    let script = "uname -r\nhostname\n";
+    let output = gather_at(None, script, &["--all".into()]).await;
+
+    let host = &output.dataset.hostvars["127.0.0.1"];
+    // No #!: sh, reading the script from standard input.
+    assert_eq!(host["command"], "sh -s -- '--all'");
+    assert_eq!(host["script"], script);
 }

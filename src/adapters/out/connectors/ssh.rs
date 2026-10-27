@@ -479,7 +479,7 @@ fn narrow_to_scope(
 // - host: every file the path matches there (one path matches itself) is
 //   run if executable, read if not, and becomes a fact named after it
 // - instance: the script file here, streamed to the host's interpreter
-// - absent: the inline form, as before location existed
+// - absent: the connector's own script, streamed the same way
 struct Plan {
     command: String,
     // Written to the remote command's standard input, then closed.
@@ -524,36 +524,14 @@ async fn plan(
             })
         }
         _ => {
-            // Once per command per process, not once per sync: startup has
-            // already named the connector, and an interval of warnings says
-            // nothing new.
-            static WARNED: std::sync::OnceLock<
-                std::sync::Mutex<std::collections::HashSet<String>>,
-            > = std::sync::OnceLock::new();
-            let first = WARNED
-                .get_or_init(Default::default)
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(script_path.to_string());
-            if first {
-                warn!(
-                    "An ssh connector writes its command inline; set location on the \
-                     connector (see its warning at startup)"
-                );
-            }
-            let gather_mode = config
-                .get("gather_mode")
-                .cloned()
-                .unwrap_or_else(|| "facts".to_string());
-            let fact_path = config
-                .get("fact_path")
-                .cloned()
-                .unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
+            // Written in the item: the same as a file from here, without
+            // the file.
+            let script = script_path.as_bytes().to_vec();
             Ok(Plan {
-                command: build_command(&gather_mode, &fact_path, script_path, args),
-                stdin: None,
+                command: with_args(&stdin_interpreter(&script), args),
+                stdin: Some(script),
                 facts: false,
-                what: "an inline command",
+                what: "the connector's script, streamed to each host",
             })
         }
     }
@@ -620,27 +598,6 @@ fn stdin_interpreter(script: &[u8]) -> String {
         format!("{program} -")
     } else {
         format!("{program} -s --")
-    }
-}
-
-fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[String]) -> String {
-    match gather_mode {
-        // In facts mode the command is fixed — script_args don't apply
-        "facts" => {
-            format!(
-                r#"echo '{{'; first=1; for f in {}/*.fact {}/*.json; do [ -f "$f" ] || continue; name=$(basename "$f" | sed 's/\.[^.]*$//'); if [ -x "$f" ]; then content=$("$f" 2>/dev/null); else content=$(cat "$f"); fi; if [ "$first" = "1" ]; then first=0; else echo ','; fi; printf '"%s": %s' "$name" "$content"; done; echo '}}'"#,
-                fact_path, fact_path
-            )
-        }
-        // script (and unknown modes): the script_path is a remote command;
-        // script_args are appended to it, space-separated
-        _ => {
-            if args.is_empty() {
-                script_path.to_string()
-            } else {
-                format!("{} {}", script_path, args.join(" "))
-            }
-        }
     }
 }
 
@@ -1075,45 +1032,6 @@ mod tests {
         let err = narrow_to_scope(hosts, &cfg).unwrap_err();
         assert!(err.message.contains("ghost.example"), "{}", err.message);
         assert!(err.message.contains("matched none"), "{}", err.message);
-    }
-
-    #[test]
-    fn build_command_script_mode_uses_script_path() {
-        assert_eq!(
-            build_command("script", "/facts", "/opt/gather.sh", &[]),
-            "/opt/gather.sh"
-        );
-    }
-
-    #[test]
-    fn build_command_unknown_mode_falls_back_to_script() {
-        assert_eq!(
-            build_command("bogus", "/facts", "/opt/gather.sh", &[]),
-            "/opt/gather.sh"
-        );
-    }
-
-    #[test]
-    fn build_command_script_mode_appends_args() {
-        let args = vec!["--list".to_string(), "-v".to_string()];
-        assert_eq!(
-            build_command("script", "/facts", "/opt/gather.sh", &args),
-            "/opt/gather.sh --list -v"
-        );
-    }
-
-    #[test]
-    fn build_command_facts_mode_ignores_args() {
-        let args = vec!["--list".to_string()];
-        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused", &args);
-        assert!(!cmd.contains("--list"));
-    }
-
-    #[test]
-    fn build_command_facts_mode_references_fact_path() {
-        let cmd = build_command("facts", "/etc/ansible/facts.d", "unused", &[]);
-        assert!(cmd.contains("/etc/ansible/facts.d"));
-        assert!(cmd.contains("basename"));
     }
 
     #[test]

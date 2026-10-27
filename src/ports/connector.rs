@@ -79,5 +79,6 @@ pub trait ConnectorPort: Send + Sync {
 
 // The key under which an ssh source's location (`host` or `instance`, see
 // domain::connector::Location) reaches the ssh adapter in its config.
-// Absent: the inline form, where the source's `gather_mode` decides.
+// Absent: a connector that writes its script inline, handed over as the
+// path.
 pub const SSH_LOCATION_CONFIG_KEY: &str = "ssh_location";

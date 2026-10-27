@@ -346,7 +346,9 @@ impl SourceDef {
                     Some((
                         kind,
                         c.project.clone(),
-                        c.path.clone(),
+                        // What the adapter is handed: a file, or the
+                        // script written in the item.
+                        c.script.clone().unwrap_or_else(|| c.path.clone()),
                         c.script_args.clone(),
                         c.host_args.clone(),
                         c.output_format.unwrap_or_default(),
@@ -356,17 +358,18 @@ impl SourceDef {
             },
         };
 
-        let ssh_location = connectors
+        let ssh = connectors
             .get(&self.connector)
-            .and_then(|c| c.ssh_location());
-        // A connector that says where its path is decides what runs; the
-        // source's old switches would only look like they still did.
-        if ssh_location.is_some() {
+            .filter(|c| c.kind == ConnectorKind::Ssh);
+        let ssh_location = ssh.and_then(|c| c.ssh_location());
+        // What runs is the connector's now; 0.35 asked each source. Refused
+        // rather than ignored, so a source still saying it is looked at.
+        if ssh.is_some() {
             for key in ["gather_mode", "fact_path"] {
                 if self.config.contains_key(key) {
                     errors.push(format!(
-                        "Source '{id}' sets config.{key}, but its connector '{}' sets where \
-                         its path is (location) — remove {key}: the connector's path decides",
+                        "Source '{id}' sets config.{key}, which is no longer read — its \
+                         connector '{}' decides what runs (its path, or its script): remove it",
                         self.connector
                     ));
                 }

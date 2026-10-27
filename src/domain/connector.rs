@@ -41,18 +41,23 @@ pub struct Connector {
 
     // ssh only: where `path` is. `host`: on each host, a file or a pattern
     // of files (/etc/ansible/facts.d/*.fact); each one is run if executable,
-    // read if not, and becomes a fact named after it.
-    // `instance`: a script on this instance (in `project`'s checkout, or on
-    // its disk), streamed to each host and run there; the default when
-    // `project` is set. Left out with no project: the inline form, where
-    // `path` is the command itself and each source's `gather_mode` decides
-    // (kept working, warned about at load).
+    // read if not, and becomes a fact named after it. `instance` (the
+    // default): a script on this instance, in `project`'s checkout or on its
+    // disk, streamed to each host and run there.
     #[serde(default)]
     pub location: Option<Location>,
 
-    // script: the file to run (relative to the project checkout, or absolute).
-    // ssh: see `location`.
+    // A file, always: script: the one to run (relative to the project
+    // checkout, or absolute); ssh: see `location`. An ssh connector has this
+    // or `script`, never both.
+    #[serde(default)]
     pub path: String,
+
+    // ssh only: the script itself, written in the item, streamed to each
+    // host and run there as a file from here would be — the inline choice
+    // beside `path`, as a CI step is either inline or a file.
+    #[serde(default)]
+    pub script: Option<String>,
 
     // CLI arguments, e.g. ["--list"] for an Ansible dynamic inventory script.
     // ssh: passed to the script streamed from here, to every executable a
@@ -138,28 +143,13 @@ pub const STATIC_INVENTORY: &str = "static_inventory";
 pub const BUILT_IN: [&str; 2] = [REMOTE, STATIC_INVENTORY];
 
 impl Connector {
-    // Where an ssh connector's path is; None for the inline form (and for
-    // script connectors, which always run here).
+    // Where an ssh connector's path is; None for one that writes its
+    // `script` inline (and for script connectors, which always run here).
     pub fn ssh_location(&self) -> Option<Location> {
         match self.kind {
             ConnectorKind::Script => None,
-            ConnectorKind::Ssh => self
-                .location
-                .or(self.project.as_ref().map(|_| Location::Instance)),
-        }
-    }
-
-    // What still works but should change: one line per connector, logged at
-    // startup and printed by --check-config.
-    pub fn warnings(&self, id: &str) -> Vec<String> {
-        if self.kind == ConnectorKind::Ssh && self.ssh_location().is_none() {
-            vec![format!(
-                "Connector '{id}' writes its ssh command inline: set location: host with a \
-                 path on the hosts (/etc/ansible/facts.d/*.fact), or put the script in a \
-                 file and set project (or location: instance) — the inline form will be removed"
-            )]
-        } else {
-            Vec::new()
+            ConnectorKind::Ssh if self.script.is_some() => None,
+            ConnectorKind::Ssh => Some(self.location.unwrap_or(Location::Instance)),
         }
     }
 
@@ -174,8 +164,38 @@ impl Connector {
                 REMOTE, STATIC_INVENTORY
             ));
         }
+        if let Some(script) = &self.script {
+            if self.kind != ConnectorKind::Ssh {
+                errors.push(format!(
+                    "Connector '{id}' sets script, which only an ssh connector takes — a \
+                     script connector runs a file: set path"
+                ));
+            }
+            if !self.path.is_empty() {
+                errors.push(format!(
+                    "Connector '{id}' sets both path and script — one or the other: a file, \
+                     or the script written here"
+                ));
+            }
+            if self.project.is_some() || self.location.is_some() {
+                errors.push(format!(
+                    "Connector '{id}' sets script with project or location — a script \
+                     written here is in no checkout and on no host"
+                ));
+            }
+            if script.trim().is_empty() {
+                errors.push(format!("Connector '{id}' has an empty script"));
+            }
+            return errors;
+        }
         if self.path.trim().is_empty() {
-            errors.push(format!("Connector '{id}' has an empty path"));
+            errors.push(match self.kind {
+                ConnectorKind::Ssh => {
+                    format!("Connector '{id}' needs a path (a file) or a script (written here)")
+                }
+                ConnectorKind::Script => format!("Connector '{id}' has an empty path"),
+            });
+            return errors;
         }
         match self.kind {
             ConnectorKind::Script => {
@@ -211,10 +231,19 @@ impl Connector {
                         }
                     }
                     Some(Location::Instance) => {
-                        if self.path.contains('\n') {
+                        // What 0.35 wrote here: a command, or a label such
+                        // as gather_facts, with each source's gather_mode
+                        // saying what it meant. A path is a file now.
+                        let command = self.path.contains('\n')
+                            || (self.project.is_none()
+                                && !std::path::Path::new(&self.path).is_absolute());
+                        if command {
                             errors.push(format!(
-                                "Connector '{id}' has location: instance, so its path names a \
-                                 script file; put the script's lines in that file"
+                                "Connector '{id}' writes a command or a label in path, the \
+                                 0.35 form, which is no longer read — a path names a file \
+                                 (in a project, or absolute here). Put the command in \
+                                 script:, or for Ansible facts set location: host with \
+                                 path: /etc/ansible/facts.d/*.fact"
                             ));
                         } else if is_pattern(&self.path) {
                             errors.push(format!(
@@ -283,18 +312,21 @@ mod tests {
             connector("name: f\ntype: ssh\nlocation: host\npath: /etc/ansible/facts.d/*.fact\n");
         assert_eq!(facts.ssh_location(), Some(Location::Host));
         assert!(facts.errors("f").is_empty(), "{:?}", facts.errors("f"));
-        assert!(facts.warnings("f").is_empty());
 
         // A project means a script in its checkout, location: instance.
         let script = connector("name: s\ntype: ssh\nproject: p\npath: ssh/osinfo.sh\n");
         assert_eq!(script.ssh_location(), Some(Location::Instance));
         assert!(script.errors("s").is_empty(), "{:?}", script.errors("s"));
 
-        // Neither: the inline form, still accepted, warned about.
-        let inline = connector("name: i\ntype: ssh\npath: \"uname -r\"\n");
+        // Written here: no location, streamed like a file.
+        let inline = connector("name: i\ntype: ssh\nscript: |\n  uname -r\n  hostname\n");
         assert_eq!(inline.ssh_location(), None);
-        assert!(inline.errors("i").is_empty());
-        assert!(inline.warnings("i")[0].contains("inline"));
+        assert!(inline.errors("i").is_empty(), "{:?}", inline.errors("i"));
+
+        // A file on this instance's disk, without a project.
+        let local = connector("name: l\ntype: ssh\npath: /opt/scripts/osinfo.sh\n");
+        assert_eq!(local.ssh_location(), Some(Location::Instance));
+        assert!(local.errors("l").is_empty());
     }
 
     #[test]
@@ -319,10 +351,44 @@ mod tests {
     }
 
     #[test]
+    fn the_0_35_form_is_refused_saying_what_to_write() {
+        for yaml in [
+            "name: o\ntype: ssh\npath: gather_facts\n",
+            "name: o\ntype: ssh\npath: \"uname -r\"\n",
+        ] {
+            let errors = connector(yaml).errors("o").join("");
+            assert!(errors.contains("0.35 form"), "{errors}");
+            assert!(errors.contains("script:"), "{errors}");
+            assert!(errors.contains("location: host"), "{errors}");
+        }
+    }
+
+    #[test]
+    fn a_script_is_written_here_alone() {
+        let both = connector("name: s\ntype: ssh\npath: /opt/a.sh\nscript: uname\n");
+        assert!(both.errors("s").join("").contains("both path and script"));
+        let placed = connector("name: s\ntype: ssh\nproject: p\nscript: uname\n");
+        assert!(placed.errors("s").join("").contains("in no checkout"));
+        let scripted = connector("name: s\ntype: script\nscript: uname\n");
+        assert!(
+            scripted
+                .errors("s")
+                .join("")
+                .contains("only an ssh connector")
+        );
+        let none = connector("name: s\ntype: ssh\n");
+        assert!(
+            none.errors("s")
+                .join("")
+                .contains("a path (a file) or a script")
+        );
+    }
+
+    #[test]
     fn a_script_here_is_a_file_not_lines_or_a_pattern() {
         let lines =
             connector("name: s\ntype: ssh\nlocation: instance\npath: \"uname -r\\nhostname\"\n");
-        assert!(lines.errors("s").join("").contains("script file"));
+        assert!(lines.errors("s").join("").contains("0.35 form"));
         let pattern = connector("name: s\ntype: ssh\nproject: p\npath: \"ssh/*.sh\"\n");
         assert!(pattern.errors("s").join("").contains("set location: host"));
         let script = connector("name: s\ntype: script\nlocation: host\npath: /opt/x.py\n");

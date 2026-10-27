@@ -528,18 +528,6 @@ struct ServerFile {
 // Expects to find: config.yaml, credentials.yaml, sources.yaml, etc.
 // Optional files are simply ignored if they do not exist.
 impl AppConfig {
-    // What loads and works but should change, one line each, sorted: logged
-    // at startup and printed by --check-config, never a reason to refuse.
-    pub fn warnings(&self) -> Vec<String> {
-        let mut warnings: Vec<String> = self
-            .connectors
-            .iter()
-            .flat_map(|(id, c)| c.warnings(id))
-            .collect();
-        warnings.sort();
-        warnings
-    }
-
     // Fails with every problem at once (see validate_errors), so one
     // --check-config run — or one rejected API write — reports the whole list
     // instead of the first line of it.
@@ -2139,7 +2127,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             format!(
-                "sources:\n  - name: src-fleet\n    description: \"Fleet\"\n    connector: c-src-fleet\n    ttl_seconds: 60\n    config:\n      hosts: \"a.example\"\n      ssh_known_hosts: \"{}\"\nconnectors:\n  - name: c-src-fleet\n    type: ssh\n    path: \"unused\"\n",
+                "sources:\n  - name: src-fleet\n    description: \"Fleet\"\n    connector: c-src-fleet\n    ttl_seconds: 60\n    config:\n      hosts: \"a.example\"\n      ssh_known_hosts: \"{}\"\nconnectors:\n  - name: c-src-fleet\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 kh_path.display()
             ),
         )
@@ -2329,7 +2317,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: inv\n    project: \"prj-test\"\n    path: \"x.py\"\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "sources:\n",
                 "  - name: src-script\n    connector: inv\n    ttl_seconds: 60\n",
                 "    hosts_from_source:\n      source: \"src-ssh\"\n",
@@ -2365,7 +2353,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "    host_args: [\"--host\", \"{target}\"]\n",
                 "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
                 "    config:\n      hosts: \"a.example.com\"\n",
@@ -2400,7 +2388,7 @@ mod tests {
         fs::write(
             dir.path().join("sources.yaml"),
             concat!(
-                "connectors:\n  - name: facts\n    type: ssh\n    path: \"gather_facts\"\n",
+                "connectors:\n  - name: facts\n    type: ssh\n    location: host\n    path: \"/etc/ansible/facts.d/*.fact\"\n",
                 "sources:\n  - name: src-ssh\n    connector: facts\n    ttl_seconds: 60\n",
                 "    hosts_from_source:\n      source: \"src-ghost\"\n",
             ),

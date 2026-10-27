@@ -251,7 +251,7 @@ sources:
 | `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `advertise_scope` | Explicit ownership claim served on `GET /sources/{id}/scope` (`groups` + `hosts`; must name at least one). Optional — an SSH source already advertises its `hosts_from_source` pattern; this overrides the derivation. The consumer side of federation reads it so view ownership stops being a duplicated truth |
-| `config` | Arbitrary `key: value` strings the connector receives (`SOURCE_CONFIG` for a script). The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30), `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync), and for the inline form only `gather_mode` and `fact_path`, from here; a `remote` source reads `url` and `source` — see [connectors](connectors.md) |
+| `config` | Arbitrary `key: value` strings the connector receives (`SOURCE_CONFIG` for a script). The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30) and `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync) from here (0.35's `gather_mode` and `fact_path` are refused: the connector decides what runs); a `remote` source reads `url` and `source` — see [connectors](connectors.md) |
 
 ### Source or connector?
 
@@ -343,8 +343,9 @@ connectors:
 |---|---|
 | `type` | `script` (default) runs a local process; `ssh` connects to the fleet natively |
 | `project` | The project whose checkout holds the script. Required for a script connector with a relative `path`; on ssh, the project of a script streamed to each host (refused with `location: host`) |
-| `location` | ssh only: `host` (path is on each host: files run or read as facts) or `instance` (a script here, streamed to each host; the default with `project`). See [connectors](connectors.md#ssh-connectors-type-ssh) |
-| `path` | script: the file to run, relative to the project checkout or absolute. ssh: a script here, or a file or pattern of files on each host |
+| `location` | ssh only: `host` (path is on each host: files run or read as facts) or `instance` (a script here, streamed to each host; the default). See [connectors](connectors.md#ssh-connectors-type-ssh) |
+| `path` | A file, always. script: the one to run, relative to the project checkout or absolute. ssh: a script here, or a file or pattern of files on each host |
+| `script` | ssh only, instead of `path`: the script written in the item, streamed to each host as a file from here would be |
 | `script_args` | CLI arguments, quoted. `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. On ssh, passed to the streamed script or to every executable a host path matches |
 | `host_args` | Script only. CLI arguments for a sync that names hosts, replacing `script_args` for that run, `{target}` substituted by the requested hostnames (comma-joined). Empty = call the script as a full sync would and filter the answer. See [connectors](connectors.md#asking-for-one-host-on-the-command-line-host_args) |
 | `output_format` | Script only. `native` (the Dataset shape) or `ansible` (dynamic inventory JSON with `_meta`, converted on the fly) |
@@ -352,7 +353,8 @@ connectors:
 
 Settings that look active and are not are refused rather than ignored:
 `host_args` and `output_format` on an ssh connector, `project` with
-`location: host`, `location` on a script connector, a relative script `path`
+`location: host`, `location` or `script` on a script connector, `path` and
+`script` together, a relative script `path`
 without a `project`, and the names `remote` and `static_inventory`, which belong
 to the built-ins.
 
@@ -785,7 +787,8 @@ sources:
       tenant: "a"
 ```
 
-An ssh source (the unused `project_id` is dropped):
+An ssh source (the unused `project_id` is dropped, and what its `gather_mode`
+meant moves to the connector: facts become files on the host):
 
 ```yaml
 # 0.34
@@ -804,13 +807,14 @@ src-ssh-dc1:
 ```
 
 ```yaml
-# 0.35 — connectors/ssh-gather-facts.yaml
+# converted — connectors/ssh-gather-facts.yaml
 connectors:
   - name: ssh-gather-facts
     type: "ssh"
-    path: "gather_facts"
+    location: "host"
+    path: "/etc/ansible/facts.d/*.fact"
 
-# 0.35 — sources/src-ssh-dc1.yaml
+# converted — sources/src-ssh-dc1.yaml
 sources:
   - name: src-ssh-dc1
     description: "Facts DC1"
@@ -820,9 +824,10 @@ sources:
     ttl_seconds: 3600
     hosts_from_source:
       source: "src-d42-a"
-    config:
-      gather_mode: "facts"
 ```
+
+A source in `gather_mode: script` gets a connector whose `script` is its
+`script_path`, byte for byte.
 
 A remote source (the remote source id moves into `config`):
 

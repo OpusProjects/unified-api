@@ -75,9 +75,6 @@ async fn main() {
         }
         match unified_api::config::load_config(&config_dir) {
             Ok(cfg) => {
-                for warning in cfg.warnings() {
-                    println!("warning: {warning}");
-                }
                 println!(
                     "configuration OK ({}): {} sources, {} connectors, {} views, \
                      {} credentials, {} enrichers, {} endpoints, {} projects",
@@ -171,9 +168,6 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    for warning in cfg.warnings() {
-        warn!("{warning}");
-    }
 
     // What this process is about to be BUILT with, recorded before the
     // configuration is consumed. A later reload diffs against it to name the

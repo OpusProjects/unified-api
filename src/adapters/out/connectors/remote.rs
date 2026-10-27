@@ -7,7 +7,6 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::domain::dataset::Dataset;
-use crate::domain::source::OutputFormat;
 use crate::ports::connector::{
     ConnectorError, ConnectorOutput, ConnectorPort, ConnectorResult, DatasetAges,
 };
@@ -85,7 +84,6 @@ impl ConnectorPort for RemoteConnector {
         // For this connector the "script" is the source id on the remote side
         script_path: &str,
         _args: &[String],
-        _output_format: OutputFormat,
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {

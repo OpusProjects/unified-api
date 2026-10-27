@@ -266,7 +266,6 @@ instance of the system?*
 | `type` (script / ssh) | connector | The protocol |
 | `project`, `path` | connector | Where the script is |
 | `script_args`, `host_args` | connector | How the script is called |
-| `output_format` | connector | What the script prints |
 | `timeout_seconds` | connector, overridable per source | A property of the script, except for the tenant ten times bigger |
 | `credentials`, `config` | source | Which instance, as whom |
 | `schedule`, `sync_interval_seconds`, `ttl_seconds`, `ttl_overrides` | source | How often and how fresh, per instance |
@@ -327,7 +326,6 @@ connectors:
     path: "dynamic/d42/inventory.py"
     script_args: ["--list"]             # CLI args, verbatim (no shell)
     host_args: ["--host", "{target}"]   # replace script_args for a host-scoped sync
-    output_format: "ansible"            # native (default) | ansible
     timeout_seconds: 300                # default 300; a source may override it
 
 # connectors/ssh-facts.yaml
@@ -348,11 +346,10 @@ connectors:
 | `script` | ssh only, instead of `path`: the script written in the item, streamed to each host as a file from here would be |
 | `script_args` | CLI arguments, quoted. `["--list"]` makes standard Ansible dynamic inventory scripts work unmodified. On ssh, passed to the streamed script or to every executable a host path matches |
 | `host_args` | Script only. CLI arguments for a sync that names hosts, replacing `script_args` for that run, `{target}` substituted by the requested hostnames (comma-joined). Empty = call the script as a full sync would and filter the answer. See [connectors](connectors.md#asking-for-one-host-on-the-command-line-host_args) |
-| `output_format` | Script only. `native` (the Dataset shape) or `ansible` (dynamic inventory JSON with `_meta`, converted on the fly) |
 | `timeout_seconds` | Bound on a sync through this connector (default 300); a source's own `timeout_seconds` overrides it |
 
 Settings that look active and are not are refused rather than ignored:
-`host_args` and `output_format` on an ssh connector, `project` with
+`host_args` on an ssh connector, `output_format` (removed in 0.36), `project` with
 `location: host`, `location` or `script` on a script connector, `path` and
 `script` together, a relative script `path`
 without a `project`, and the names `remote` and `static_inventory`, which belong
@@ -684,7 +681,7 @@ of maps at its top level, is migrated in place **once**, before loading:
    lose their `_id`. Values are written as they were: `1.10`, `0x1F` and
    `True` stay exactly that, never rewritten as the number they look like.
 2. **Extract connectors.** Sources sharing the same type, project, script,
-   `script_args`, `host_args` and `output_format` share one connector, named
+   `script_args` and `host_args` share one connector, named
    after the script (its folder when the file is generic — `d42/inventory.py`
    becomes `d42`), `ssh-<command>` for ssh. A name already taken (by another
    connector, or by a built-in: a script in a `remote/` folder) gets the lowest
@@ -773,7 +770,6 @@ connectors:
     project: "prj-inventory"
     path: "dynamic/d42/inventory.py"
     script_args: ["--list"]
-    output_format: "ansible"
 
 # 0.35 — sources/src-d42-a.yaml (src-d42-b.yaml alike)
 sources:

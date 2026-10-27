@@ -14,6 +14,22 @@ import os
 import sys
 import time
 
+
+# What a connector prints: Ansible dynamic inventory JSON, with host variables
+# under _meta.hostvars and each group a top-level key. The inventory is built
+# in the {"hostvars", "groups"} shape, which is easier to filter, and
+# converted on the way out.
+def to_ansible(inventory):
+    return {"_meta": {"hostvars": inventory.get("hostvars", {})}, **inventory.get("groups", {})}
+
+
+def dump_inventory(inventory, out, **kwargs):
+    json.dump(to_ansible(inventory), out, **kwargs)
+
+
+def inventory_json(inventory, **kwargs):
+    return json.dumps(to_ansible(inventory), **kwargs)
+
 config = json.loads(os.environ.get("SOURCE_CONFIG", "{}"))
 scope = config.get("scope", "full")
 target = config.get("target", "")
@@ -43,6 +59,6 @@ if scope == "host":
     if not known:
         print(f"host '{target}' not found", file=sys.stderr)
         sys.exit(1)
-    json.dump({"hostvars": {h: HOSTS[h] for h in known}, "groups": {}}, sys.stdout)
+    dump_inventory({"hostvars": {h: HOSTS[h] for h in known}, "groups": {}}, sys.stdout)
 else:
-    json.dump({"hostvars": HOSTS, "groups": {}}, sys.stdout)
+    dump_inventory({"hostvars": HOSTS, "groups": {}}, sys.stdout)

@@ -12,6 +12,22 @@ import json
 import os
 import sys
 
+
+# What a connector prints: Ansible dynamic inventory JSON, with host variables
+# under _meta.hostvars and each group a top-level key. The inventory is built
+# in the {"hostvars", "groups"} shape, which is easier to filter, and
+# converted on the way out.
+def to_ansible(inventory):
+    return {"_meta": {"hostvars": inventory.get("hostvars", {})}, **inventory.get("groups", {})}
+
+
+def dump_inventory(inventory, out, **kwargs):
+    json.dump(to_ansible(inventory), out, **kwargs)
+
+
+def inventory_json(inventory, **kwargs):
+    return json.dumps(to_ansible(inventory), **kwargs)
+
 # Read config from env (the unified-api will inject these)
 config_raw = os.environ.get("SOURCE_CONFIG", "{}")
 config = json.loads(config_raw)
@@ -243,4 +259,4 @@ elif scope == "group" and target:
         sys.exit(1)
 
 # Output to stdout — this is what the unified-api captures
-json.dump(inventory, sys.stdout, indent=2)
+dump_inventory(inventory, sys.stdout, indent=2)

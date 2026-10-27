@@ -484,13 +484,7 @@ async fn run_sync(
     // script: without it, a stuck process blocks its sync task forever.
     let executed = timeout(
         Duration::from_secs(source.timeout_seconds),
-        connector.execute(
-            &source.script_path,
-            &args,
-            source.output_format,
-            &config,
-            &credentials,
-        ),
+        connector.execute(&source.script_path, &args, &config, &credentials),
     )
     .await;
     // Counted once the script has run (or was stopped by the timeout), not
@@ -1341,7 +1335,6 @@ mod concurrency_tests {
     use crate::adapters::out::cache::memory::MemoryCache;
     use crate::adapters::out::secrets::mock::MockSecrets;
     use crate::domain::dataset::Dataset;
-    use crate::domain::source::OutputFormat;
     use crate::ports::connector::ConnectorResult;
     use std::future::Future;
     use std::pin::Pin;
@@ -1359,7 +1352,6 @@ mod concurrency_tests {
             &self,
             _script_path: &str,
             _args: &[String],
-            _output_format: OutputFormat,
             config: &HashMap<String, String>,
             _credentials: &HashMap<String, String>,
         ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
@@ -1476,7 +1468,6 @@ mod concurrency_tests {
             &self,
             _script_path: &str,
             _args: &[String],
-            _output_format: OutputFormat,
             _config: &HashMap<String, String>,
             _credentials: &HashMap<String, String>,
         ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {

@@ -1220,6 +1220,7 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
     let mut source_defs: HashMap<String, SourceDef> = take("source", so, &mut errors);
     if let Some(upgraded) = upgrade {
         upgrade_0_35_ssh(&mut connectors, &mut source_defs, upgraded, &mut errors);
+        upgrade_0_35_output_format(&mut connectors, upgraded);
     }
     let views = take("view", vi, &mut errors);
     let enrichers = take("enricher", en, &mut errors);
@@ -1381,6 +1382,32 @@ fn upgrade_0_35_ssh(
                 def.config.remove("gather_mode");
                 def.config.remove("fact_path");
             }
+        }
+    }
+}
+
+// 0.35's output_format, gone in 0.36: a script prints Ansible inventory JSON,
+// the one format left. `ansible` already said so. A `native` script prints a
+// shape 0.36 no longer reads and no change to the file can fix that, but it
+// should not stop the instance either: the key goes, the note says so, and
+// that connector's syncs fail naming what to print until the script changes.
+fn upgrade_0_35_output_format(
+    connectors: &mut HashMap<String, Connector>,
+    upgraded: &mut Vec<String>,
+) {
+    for (id, connector) in connectors.iter_mut() {
+        match connector.output_format.take().as_deref() {
+            None => {}
+            Some("ansible") => upgraded.push(format!(
+                "Connector '{id}' sets output_format: ansible, the only format 0.36 reads: \
+                 remove the key"
+            )),
+            Some(other) => upgraded.push(format!(
+                "Connector '{id}' sets output_format: {other}, which 0.36 no longer reads: \
+                 its syncs fail until its script prints Ansible inventory JSON (host \
+                 variables under _meta.hostvars, each group a top-level key); then remove \
+                 the key"
+            )),
         }
     }
 }
@@ -2931,6 +2958,39 @@ mod tests {
         assert!(c.path.is_empty() && c.script_args.is_empty());
         assert!(!cfg.sources["src-r"].config.contains_key("gather_mode"));
         assert_eq!(upgraded.len(), 1);
+    }
+
+    #[test]
+    fn startup_drops_output_format_and_says_what_a_native_script_needs() {
+        let dir = dir_with(&[(
+            "connectors/c.yaml",
+            "connectors:\n  - name: inv\n    path: /opt/inv.py\n    output_format: ansible\n  - name: old\n    path: /opt/old.py\n    output_format: native\n",
+        )]);
+        // The config API's load: refused by name.
+        let strict = match load_config_detailed(dir.path()) {
+            Ok(_) => panic!("output_format must be refused here"),
+            Err(e) => e.to_string(),
+        };
+        assert!(strict.contains("'inv' sets output_format"), "{strict}");
+        assert!(
+            strict.contains("'old' sets output_format: native"),
+            "{strict}"
+        );
+
+        // Startup's: both start; the native one is told its syncs fail
+        // until its script changes.
+        let (cfg, upgraded) = load_config_upgrading(dir.path()).unwrap();
+        assert!(cfg.connectors.values().all(|c| c.output_format.is_none()));
+        let notes = upgraded.join("\n");
+        assert!(
+            notes.contains("'inv' sets output_format: ansible"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("'old' sets output_format: native"),
+            "{notes}"
+        );
+        assert!(notes.contains("its syncs fail"), "{notes}");
     }
 
     #[test]

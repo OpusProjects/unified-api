@@ -84,7 +84,6 @@ fn remote_source(url: &str) -> Source {
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "remote".to_string(),
         connector_type: ConnectorType::Remote,
@@ -120,13 +119,7 @@ async fn fetches_the_remote_dataset_and_its_ages() {
 
     let connector = RemoteConnector::new();
     let output = connector
-        .execute(
-            "src-edge",
-            &[],
-            Default::default(),
-            &remote_config(&url),
-            &token("edge-key"),
-        )
+        .execute("src-edge", &[], &remote_config(&url), &token("edge-key"))
         .await
         .expect("remote fetch must succeed");
 
@@ -208,13 +201,7 @@ async fn a_second_full_pull_revalidates_and_reuses_the_dataset_on_304() {
     let connector = RemoteConnector::new();
     for _ in 0..2 {
         let output = connector
-            .execute(
-                "src-edge",
-                &[],
-                Default::default(),
-                &remote_config(&url),
-                &HashMap::new(),
-            )
+            .execute("src-edge", &[], &remote_config(&url), &HashMap::new())
             .await
             .expect("pull must succeed");
         // The 304 pull serves the remembered dataset, indistinguishable here
@@ -243,13 +230,7 @@ async fn a_host_scoped_pull_never_revalidates() {
     let connector = RemoteConnector::new();
     // A full pull first, so a memo exists to wrongly tempt the scoped one
     connector
-        .execute(
-            "src-edge",
-            &[],
-            Default::default(),
-            &remote_config(&url),
-            &HashMap::new(),
-        )
+        .execute("src-edge", &[], &remote_config(&url), &HashMap::new())
         .await
         .expect("full pull");
 
@@ -257,13 +238,7 @@ async fn a_host_scoped_pull_never_revalidates() {
     scoped.insert("scope".to_string(), "host".to_string());
     scoped.insert("target".to_string(), "web01.dc1.example.com".to_string());
     connector
-        .execute(
-            "src-edge",
-            &[],
-            Default::default(),
-            &scoped,
-            &HashMap::new(),
-        )
+        .execute("src-edge", &[], &scoped, &HashMap::new())
         .await
         .expect("scoped pull");
 
@@ -285,13 +260,7 @@ async fn revalidation_works_against_a_real_edge() {
     let connector = RemoteConnector::new();
     for _ in 0..2 {
         let output = connector
-            .execute(
-                "src-edge",
-                &[],
-                Default::default(),
-                &remote_config(&url),
-                &HashMap::new(),
-            )
+            .execute("src-edge", &[], &remote_config(&url), &HashMap::new())
             .await
             .expect("pull must succeed");
         assert_eq!(output.dataset.hostvars.len(), 2);
@@ -304,13 +273,7 @@ async fn wrong_key_is_a_clear_401_error() {
 
     let connector = RemoteConnector::new();
     let err = connector
-        .execute(
-            "src-edge",
-            &[],
-            Default::default(),
-            &remote_config(&url),
-            &token("wrong"),
-        )
+        .execute("src-edge", &[], &remote_config(&url), &token("wrong"))
         .await
         .expect_err("bad key must fail");
     assert!(err.message.contains("401"), "error was: {}", err.message);
@@ -322,13 +285,7 @@ async fn unknown_remote_source_is_a_clear_404_error() {
 
     let connector = RemoteConnector::new();
     let err = connector
-        .execute(
-            "src-ghost",
-            &[],
-            Default::default(),
-            &remote_config(&url),
-            &token("edge-key"),
-        )
+        .execute("src-ghost", &[], &remote_config(&url), &token("edge-key"))
         .await
         .expect_err("unknown source must fail");
     assert!(err.message.contains("404"), "error was: {}", err.message);
@@ -347,7 +304,6 @@ async fn central_cache_entry_keeps_the_origin_age() {
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "remote".to_string(),
         connector_type: ConnectorType::Remote,
@@ -567,7 +523,6 @@ async fn spawn_gathering_edge() -> (String, std::sync::Arc<unified_api::AppState
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,

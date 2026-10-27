@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use unified_api::adapters::out::connectors::static_inventory::StaticInventoryConnector;
-use unified_api::domain::source::OutputFormat;
 use unified_api::ports::connector::ConnectorPort;
 
 async fn write(path: &Path, contents: &str) {
@@ -57,7 +56,6 @@ async fn reads_a_full_inventory_layout_from_disk() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -109,7 +107,6 @@ async fn inventory_without_vars_dirs_still_works() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -127,7 +124,6 @@ async fn missing_inventory_file_is_a_clear_error() {
         .execute(
             "/nonexistent/inventory.yaml",
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -151,7 +147,6 @@ async fn vaulted_host_vars_fail_the_sync_naming_the_file() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -171,7 +166,6 @@ async fn a_missing_inventory_file_is_a_named_failure() {
         .execute(
             "/does/not/exist/inventory.yaml",
             &[],
-            OutputFormat::Native,
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         )
@@ -195,7 +189,6 @@ async fn an_unparseable_inventory_is_a_named_failure() {
         .execute(
             path.to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         )
@@ -226,7 +219,6 @@ async fn unparseable_group_vars_fail_rather_than_vanish() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         )
@@ -288,7 +280,6 @@ all:
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -332,7 +323,6 @@ async fn files_in_a_vars_directory_merge_alphabetically() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -361,7 +351,6 @@ async fn a_name_defined_as_both_file_and_directory_is_refused() {
         .execute(
             dir.path().join("inventory.yaml").to_str().unwrap(),
             &[],
-            OutputFormat::Native,
             &HashMap::new(),
             &HashMap::new(),
         )

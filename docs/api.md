@@ -440,10 +440,10 @@ connector names a script, its project and its arguments.
 
 Each carries `connector_id`, `name` (the description, or the id),
 `connector_type` (`script`, `ssh`, `remote`, `static_inventory`), `built_in`,
-`project_id`, `path`, `script_args`, `host_args`, `output_format` (null for ssh
-and the built-ins), `timeout_seconds` (null for the built-ins), `used_by` — each
-source naming it, with `source_id`, `name`, the `timeout_seconds` it actually
-syncs under (its override or the connector's), `failing` and `synced` — and
+`project_id`, `path`, `script_args`, `host_args`, `timeout_seconds` (null for
+the built-ins), `used_by` — each source naming it, with `source_id`, `name`,
+the `timeout_seconds` it actually syncs under (its override or the
+connector's), `failing` and `synced` — and
 `health`, those sources' sync health counted: `sources`, `healthy`, `failing`,
 `never_synced`. A broken script reads as a connector whose sources all fail at
 once. Full example in [connectors](connectors.md#inspecting-connectors-apiv1connectors).

@@ -183,7 +183,6 @@ connectors:
     project: "prj-connectors"
     path: "d42_inventory.py"
     script_args: ["--list"]
-    output_format: "ansible"
 
 # connectors/ssh-facts.yaml — native SSH, Ansible local facts
 connectors:

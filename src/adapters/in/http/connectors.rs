@@ -45,8 +45,6 @@ pub struct ConnectorInfo {
     pub script: Option<String>,
     pub script_args: Vec<String>,
     pub host_args: Vec<String>,
-    /// "native" or "ansible" for a script connector; null otherwise
-    pub output_format: Option<String>,
     /// The connector's own bound on a sync; a source may override it. Null for
     /// the built-ins, whose sources fall back to 300
     pub timeout_seconds: Option<u64>,
@@ -130,12 +128,6 @@ fn info(
             script: c.script.clone(),
             script_args: c.script_args.clone(),
             host_args: c.host_args.clone(),
-            output_format: match c.kind {
-                connector::ConnectorKind::Script => {
-                    Some(c.output_format.unwrap_or_default().name().to_string())
-                }
-                connector::ConnectorKind::Ssh => None,
-            },
             timeout_seconds: Some(c.timeout_seconds),
             used_by,
             health,
@@ -154,7 +146,6 @@ fn info(
             script: None,
             script_args: Vec::new(),
             host_args: Vec::new(),
-            output_format: None,
             timeout_seconds: None,
             used_by,
             health,

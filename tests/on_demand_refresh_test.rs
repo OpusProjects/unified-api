@@ -71,7 +71,6 @@ fn counting_source(
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,

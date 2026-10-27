@@ -104,7 +104,6 @@ const ORDER: [(&str, &[&str]); 8] = [
             "script",
             "script_args",
             "host_args",
-            "output_format",
             "timeout_seconds",
         ],
     ),
@@ -415,7 +414,6 @@ struct ConnectorKey {
     script_path: String,
     script_args: Vec<String>,
     host_args: Vec<String>,
-    output_format: Option<String>,
     // What the connector is named after: the 0.34 script_path, which for
     // ssh was the label (gather_facts) or the command.
     hint: String,
@@ -498,6 +496,17 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                 // What an ssh source's gather_mode meant moves to its
                 // connector: facts become files on the host, a script
                 // becomes the connector's own `script`.
+                // 0.36 reads one output, Ansible inventory JSON; 0.34's
+                // default was the other one. The script is not ours to
+                // change, so the note says what its syncs will need.
+                if !ssh && output_format.as_deref() != Some("ansible") {
+                    plan.notes.push(format!(
+                        "source '{id}': its script prints the {{\"hostvars\", \"groups\"}} \
+                         format, which 0.36 no longer reads — its syncs fail until it prints \
+                         Ansible inventory JSON (host variables under _meta.hostvars, each \
+                         group a top-level key)"
+                    ));
+                }
                 let hint = script_path.clone();
                 let (location, inline, script_path, script_args) = if ssh {
                     let mut config = body.get_mut("config").and_then(Value::as_object_mut);
@@ -541,13 +550,6 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                     script_path,
                     script_args,
                     host_args: if ssh { Vec::new() } else { host_args },
-                    // native is the default: writing it out would make two
-                    // sources that only differ in spelling it look different
-                    output_format: if ssh {
-                        None
-                    } else {
-                        output_format.filter(|f| f != "native")
-                    },
                     hint,
                 };
                 let timeout = body
@@ -599,9 +601,6 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
         }
         if !key.host_args.is_empty() {
             body.insert("host_args".to_string(), strings(&key.host_args));
-        }
-        if let Some(format) = &key.output_format {
-            body.insert("output_format".to_string(), Value::String(format.clone()));
         }
         if timeout != default_timeout {
             body.insert("timeout_seconds".to_string(), Value::from(timeout));
@@ -1221,7 +1220,7 @@ mod tests {
             plan.files["connectors/d42.yaml"],
             "---\nconnectors:\n  - name: d42\n    type: \"script\"\n    project: \"prj-inv\"\n    \
              path: \"d42/inventory.py\"\n    script_args: [\"--list\"]\n    \
-             output_format: \"ansible\"\n    timeout_seconds: 600\n"
+             timeout_seconds: 600\n"
         );
         assert_eq!(
             plan.files["sources/src-a.yaml"],
@@ -1596,7 +1595,6 @@ mod tests {
             script_path: path.into(),
             script_args: vec![],
             host_args: vec![],
-            output_format: None,
             hint: path.into(),
         };
         assert_eq!(

@@ -20,7 +20,6 @@ use russh::server::{self, Auth, ChannelOpenHandle, Msg, Session};
 use russh::{Channel, ChannelId};
 
 use unified_api::adapters::out::connectors::ssh::SshConnector;
-use unified_api::domain::source::OutputFormat;
 use unified_api::ports::connector::{ConnectorOutput, ConnectorPort};
 
 // Throwaway ed25519 keys generated for these tests, used nowhere else.
@@ -233,7 +232,6 @@ async fn gather(
         SshConnector::new().execute(
             "/remote/command/ignored/by/the/test/server",
             &[],
-            OutputFormat::Native,
             &config,
             &credentials,
         ),
@@ -328,7 +326,7 @@ async fn an_unreadable_known_hosts_file_fails_the_sync_loudly() {
     );
 
     let err = SshConnector::new()
-        .execute("cmd", &[], OutputFormat::Native, &config, &credentials)
+        .execute("cmd", &[], &config, &credentials)
         .await
         .expect_err("a sync that cannot verify anything must fail, not gather");
     assert!(err.message.contains("ssh_known_hosts"), "{}", err.message);
@@ -362,7 +360,7 @@ async fn gather_at(location: Option<&str>, path: &str, args: &[String]) -> Conne
     ]);
     tokio::time::timeout(
         Duration::from_secs(30),
-        SshConnector::new().execute(path, args, OutputFormat::Native, &config, &credentials),
+        SshConnector::new().execute(path, args, &config, &credentials),
     )
     .await
     .expect("the SSH gather deadlocked")
@@ -406,13 +404,7 @@ async fn a_missing_script_here_fails_the_sync_naming_it() {
         ),
     ]);
     let err = SshConnector::new()
-        .execute(
-            "/nowhere/osinfo.sh",
-            &[],
-            OutputFormat::Native,
-            &config,
-            &HashMap::new(),
-        )
+        .execute("/nowhere/osinfo.sh", &[], &config, &HashMap::new())
         .await
         .expect_err("no script, no sync");
     assert!(

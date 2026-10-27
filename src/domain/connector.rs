@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-use super::source::OutputFormat;
-
 // A connector says HOW to talk to a kind of system: which script to run, from
 // which project, with which arguments, and how to read what it prints. A
 // source says WHICH instance of that system (its credentials, its `config`,
@@ -74,11 +72,12 @@ pub struct Connector {
     #[serde(default)]
     pub host_args: Vec<String>,
 
-    // What the script prints (script connectors only — ssh builds its dataset
-    // itself). Option so that setting it on ssh can be refused rather than
-    // silently ignored; unset means native.
+    // Removed in 0.36: a script prints Ansible inventory JSON, the one
+    // format there is. Still parsed so the key is answered by name rather
+    // than as an unknown field: startup drops `ansible` (what every script
+    // already said) with a note, and anywhere else it is refused.
     #[serde(default)]
-    pub output_format: Option<OutputFormat>,
+    pub output_format: Option<String>,
 
     // Default bound on a sync through this connector. A source may override
     // it with its own timeout_seconds (a bigger tenant of the same system).
@@ -213,6 +212,19 @@ impl Connector {
                 REMOTE, STATIC_INVENTORY
             ));
         }
+        match self.output_format.as_deref() {
+            None => {}
+            Some("native") => errors.push(format!(
+                "Connector '{id}' sets output_format: native, which 0.36 no longer reads: \
+                 change its script to print Ansible inventory JSON (host variables under \
+                 _meta.hostvars, each group a top-level key), then remove the key"
+            )),
+            Some(_) => errors.push(format!(
+                "Connector '{id}' sets output_format, which 0.36 removed: a script prints \
+                 Ansible inventory JSON, the one format there is, and an ssh connector \
+                 builds its dataset itself — remove the key"
+            )),
+        }
         if let Some(script) = &self.script {
             if self.kind != ConnectorKind::Ssh {
                 errors.push(format!(
@@ -323,12 +335,6 @@ impl Connector {
                         "Connector '{id}' sets host_args but is not a script connector"
                     ));
                 }
-                if self.output_format.is_some() {
-                    errors.push(format!(
-                        "Connector '{id}' sets output_format, which an ssh connector ignores \
-                         — it builds its dataset itself"
-                    ));
-                }
             }
         }
         errors
@@ -344,10 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn a_script_connector_defaults_to_native_output_and_the_shared_timeout() {
+    fn a_script_connector_defaults_to_the_shared_timeout() {
         let c = connector("name: d42\nproject: prj\npath: d42.py\n");
         assert_eq!(c.kind, ConnectorKind::Script);
-        assert_eq!(c.output_format, None);
         assert_eq!(c.timeout_seconds, 300);
         assert!(c.errors("d42").is_empty());
     }
@@ -362,12 +367,18 @@ mod tests {
 
     #[test]
     fn script_only_settings_are_refused_on_ssh() {
-        let c = connector(
-            "name: s\ntype: ssh\npath: gather_facts\nhost_args: [\"{target}\"]\noutput_format: ansible\n",
-        );
+        let c = connector("name: s\ntype: ssh\npath: gather_facts\nhost_args: [\"{target}\"]\n");
         let errors = c.errors("s").join("\n");
         assert!(errors.contains("host_args"), "{errors}");
-        assert!(errors.contains("output_format"), "{errors}");
+    }
+
+    #[test]
+    fn output_format_is_refused_by_name() {
+        let errors = |yaml: &str| connector(yaml).errors("d").join("\n");
+        let e = errors("name: d\nproject: prj\npath: d.py\noutput_format: ansible\n");
+        assert!(e.contains("remove the key"), "{e}");
+        let e = errors("name: d\nproject: prj\npath: d.py\noutput_format: native\n");
+        assert!(e.contains("change its script to print Ansible"), "{e}");
     }
 
     #[test]

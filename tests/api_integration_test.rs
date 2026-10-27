@@ -114,7 +114,6 @@ fn script_source(script_path: &str) -> unified_api::domain::source::Source {
         script_args: vec![],
         host_args: vec![],
         host_sync_updates_group_vars: false,
-        output_format: Default::default(),
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: unified_api::domain::source::ConnectorType::Script,
@@ -361,7 +360,6 @@ async fn readyz_returns_503_before_sync() {
             script_args: vec![],
             host_args: vec![],
             host_sync_updates_group_vars: false,
-            output_format: Default::default(),
             hosts_from_source: None,
             connector: "script-test".to_string(),
             connector_type: unified_api::domain::source::ConnectorType::Script,
@@ -402,7 +400,6 @@ async fn readyz_require_all_sources_waits_for_every_source() {
                 script_args: vec![],
                 host_args: vec![],
                 host_sync_updates_group_vars: false,
-                output_format: Default::default(),
                 hosts_from_source: None,
                 connector: "script-test".to_string(),
                 connector_type: unified_api::domain::source::ConnectorType::Script,
@@ -1693,7 +1690,7 @@ async fn a_script_appearing_in_a_checkout_after_boot_is_used_by_the_next_sync() 
     let script = projects_dir.path().join("prj-test/fetch.py");
     std::fs::write(
         &script,
-        "#!/usr/bin/env python3\nprint('{\"hostvars\": {\"checkout.example\": {}}, \"groups\": {}}')\n",
+        "#!/usr/bin/env python3\nprint('{\"_meta\": {\"hostvars\": {\"checkout.example\": {}}}}')\n",
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();

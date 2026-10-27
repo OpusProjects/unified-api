@@ -250,6 +250,7 @@ transactional — a rejected push touched nothing.
 | `403` naming `config_api.enabled` | The API is off (the default). Set `config_api.enabled: true` in the mounted `config.yaml` and restart — it cannot be enabled over the API itself, on purpose |
 | `400` with an `errors` list | The staged directory did not validate — the same list `--check-config` prints, every problem at once. Nothing was written; fix and re-push |
 | `400`: `Connector '<id>' is in the 0.35 form` (or a source's `config.gather_mode` refused) | The instance started on 0.35 ssh connectors and runs them converted in memory (`--check-config` says "startup converts"); a push must be in 0.36's shape. Rewrite the connector as the error says and remove `gather_mode`/`fact_path` from its sources, in the same push — see [connectors → from 0.35](connectors.md#ssh-connectors-type-ssh) |
+| `400`: `Connector '<id>' sets output_format` | 0.36 removed the key: a script prints Ansible inventory JSON, the one format there is. Startup drops it with a note; a push must not carry it. Remove it — and for `output_format: native`, change the script first ([below](#a-script-connector-fails-with-the-hostvars-groups-format)) |
 | `400`: `unknown key '<id>' ... this is the 0.34 layout` | The pipeline pushed files still in the 0.34 layout (items keyed by id). The instance converted its own directory at startup; the repository was not. Run `unified-api --migrate-config` on the repository, commit, push again — see [configuration → upgrading](configuration.md#upgrading-from-034) |
 | `404` naming the path rule | `{path}` is not one the loader would read: it must be relative, end in `.yaml`/`.yml`, and use only letters, digits, `-`, `_` and `.` in segments that do not start with a dot |
 | `412` | Your `If-Match` no longer matches: someone else wrote the file (or the directory) first. `GET` it again for a fresh `ETag`, merge, retry |
@@ -265,6 +266,21 @@ pushed this and when" is a log search away — see
 [observability](observability.md).
 
 ---
+
+## A script connector fails with `the {"hostvars", "groups"} format`
+
+The script prints the shape versions before 0.36 read by default
+(`output_format: native`). 0.36 reads one output, Ansible inventory JSON, and
+refuses this one rather than syncing it as two groups and no host variables.
+Wrap what the script prints:
+
+```python
+print(json.dumps({"_meta": {"hostvars": inventory["hostvars"]}, **inventory["groups"]}))
+```
+
+Startup tells you which connectors these are: `--check-config` lists each
+`output_format: native` under "startup converts". A script that relied on the
+default without saying so is only found by its first sync.
 
 ## Useful one-liners
 

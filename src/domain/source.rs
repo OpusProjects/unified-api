@@ -23,31 +23,6 @@ pub enum ConnectorType {
     Remote,
 }
 
-// What the connector script prints on stdout.
-// `Copy` because it's a tiny enum passed around by value everywhere.
-#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputFormat {
-    // The Dataset shape: {"hostvars": {...}, "groups": {...}}
-    #[default]
-    Native,
-    // Standard Ansible dynamic inventory JSON: hostvars under _meta.hostvars,
-    // groups as top-level keys. Converted to a Dataset on the fly, so existing
-    // inventory scripts (--list) work unmodified. See Dataset::from_ansible_inventory.
-    Ansible,
-}
-
-impl OutputFormat {
-    // As written after `output_format:` in a connector, for anything that
-    // shows the configuration back (the connectors listing).
-    pub fn name(self) -> &'static str {
-        match self {
-            OutputFormat::Native => "native",
-            OutputFormat::Ansible => "ansible",
-        }
-    }
-}
-
 // A source as it RUNS: the per-instance settings from its item file, with
 // its connector's settings resolved into it at load (see SourceDef::resolve).
 //
@@ -116,10 +91,6 @@ pub struct Source {
     // its groups, which `--host` has no room for) states its own flag.
     #[serde(default)]
     pub host_args: Vec<String>,
-
-    // Format of the script's stdout (script connector only)
-    #[serde(default)]
-    pub output_format: OutputFormat,
 
     // Maximum seconds a sync may run before it is aborted — protects the
     // scheduler and API from a hung connector script. The source's own
@@ -280,7 +251,7 @@ impl SourceDef {
         let default_timeout = crate::domain::default_timeout_seconds();
 
         // (connector_type, project, script_path, script_args, host_args,
-        // output_format, connector timeout)
+        // connector timeout)
         let resolved = match self.connector.as_str() {
             connector::REMOTE => {
                 for key in ["url", "source"] {
@@ -300,7 +271,6 @@ impl SourceDef {
                     remote_id,
                     Vec::new(),
                     Vec::new(),
-                    OutputFormat::Native,
                     default_timeout,
                 ))
             }
@@ -327,7 +297,6 @@ impl SourceDef {
                     path,
                     Vec::new(),
                     Vec::new(),
-                    OutputFormat::Native,
                     default_timeout,
                 ))
             }
@@ -352,7 +321,6 @@ impl SourceDef {
                         c.script.clone().unwrap_or_else(|| c.path.clone()),
                         c.script_args.clone(),
                         c.host_args.clone(),
-                        c.output_format.unwrap_or_default(),
                         c.timeout_seconds,
                     ))
                 }
@@ -390,7 +358,6 @@ impl SourceDef {
             script_path,
             script_args,
             host_args,
-            output_format,
             connector_timeout,
         )) = resolved
         else {
@@ -409,7 +376,6 @@ impl SourceDef {
             script_path,
             script_args,
             host_args,
-            output_format,
             timeout_seconds: self.timeout_seconds.unwrap_or(connector_timeout),
             host_sync_updates_group_vars: self.host_sync_updates_group_vars,
             sync_mode: self.sync_mode.clone(),
@@ -757,7 +723,7 @@ mod tests {
             ("facts", "name: facts\ntype: ssh\npath: gather_facts\n"),
             (
                 "inv",
-                "name: inv\nproject: prj\npath: inv.py\nscript_args: [\"--list\"]\noutput_format: ansible\ntimeout_seconds: 120\n",
+                "name: inv\nproject: prj\npath: inv.py\nscript_args: [\"--list\"]\ntimeout_seconds: 120\n",
             ),
         ]
         .into_iter()
@@ -782,7 +748,6 @@ mod tests {
         assert_eq!(s.project_id.as_deref(), Some("prj"));
         assert_eq!(s.script_path, "inv.py");
         assert_eq!(s.script_args, vec!["--list"]);
-        assert_eq!(s.output_format, OutputFormat::Ansible);
         assert_eq!(s.timeout_seconds, 120, "the connector's timeout");
         assert_eq!(s.credential_ids, vec!["cred-a"]);
         assert_eq!(s.config["tenant"], "a");

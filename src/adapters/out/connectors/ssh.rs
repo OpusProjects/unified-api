@@ -104,7 +104,6 @@ impl ConnectorPort for SshConnector {
         // The SSH connector aggregates per-host outputs into the Dataset
         // itself — there is no single stdout to reinterpret, so the format
         // does not apply here.
-        _output_format: crate::domain::source::OutputFormat,
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {

@@ -174,10 +174,9 @@ connectors:
     project: "prj-connectors"
     path: "d42/d42_inventory.py"          # resolved inside the checkout
     script_args: ["--list"]
-    output_format: "ansible"
 
-# connectors/netbox.yaml — a native-format script (reads SOURCE_CONFIG,
-# prints {"hostvars": ..., "groups": ...})
+# connectors/netbox.yaml — a script that reads SOURCE_CONFIG and prints
+# Ansible inventory JSON, as every script connector does
 connectors:
   - name: netbox
     description: "NetBox"
@@ -411,8 +410,8 @@ curl -s $BASE/metrics | grep unified_api_sync_total      # public, no key
 ```
 
 A failing credential fails the sync with a clear error (never a silent
-skip); a script that prints Ansible JSON while the source says `native`
-logs a WARN telling you to set `output_format: "ansible"`.
+skip); a script that prints the `{"hostvars", "groups"}` shape older versions
+read fails the sync, saying to print Ansible inventory JSON instead.
 
 > Deploying across several datacenters? The topology — one instance per DC,
 > one central federating them — is [its own page](federation.md).

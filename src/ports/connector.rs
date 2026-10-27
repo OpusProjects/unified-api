@@ -1,5 +1,4 @@
 use crate::domain::dataset::Dataset;
-use crate::domain::source::OutputFormat;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -71,7 +70,6 @@ pub trait ConnectorPort: Send + Sync {
         // How to interpret the script's stdout (native Dataset vs Ansible
         // inventory JSON). The SSH connector builds its Dataset itself and
         // ignores this.
-        output_format: OutputFormat,
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>>;

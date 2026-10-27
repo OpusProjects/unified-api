@@ -75,6 +75,19 @@ impl Dataset {
             .as_object()
             .ok_or("expected a JSON object at the top level")?;
 
+        // The shape this type serializes to, {"hostvars", "groups"}, which a
+        // script could print before 0.36. Read as Ansible it is two groups
+        // named hostvars and groups and no host variables — a sync that
+        // "works" and serves junk — so it is refused, saying what to print.
+        if !obj.contains_key("_meta") && obj.contains_key("hostvars") {
+            return Err(
+                "this is the {\"hostvars\", \"groups\"} format, which 0.36 no longer \
+                 reads: print Ansible inventory JSON, with host variables under \
+                 _meta.hostvars and each group as a top-level key"
+                    .to_string(),
+            );
+        }
+
         let mut warnings: Vec<String> = Vec::new();
 
         let hostvars: HashMap<String, HostVars> = match obj.get("_meta") {
@@ -163,12 +176,6 @@ impl Dataset {
             },
             warnings,
         ))
-    }
-
-    // Cheap heuristic used to help misconfigured sources: an object with a
-    // `_meta` key is almost certainly Ansible inventory output.
-    pub fn looks_like_ansible_inventory(value: &serde_json::Value) -> bool {
-        value.get("_meta").is_some()
     }
 }
 
@@ -305,12 +312,11 @@ mod tests {
     }
 
     #[test]
-    fn detects_ansible_looking_output() {
-        assert!(Dataset::looks_like_ansible_inventory(&serde_json::json!({
-            "_meta": {"hostvars": {}}
-        })));
-        assert!(!Dataset::looks_like_ansible_inventory(&serde_json::json!({
-            "hostvars": {}, "groups": {}
-        })));
+    fn the_hostvars_groups_shape_is_refused() {
+        let err = Dataset::from_ansible_inventory(serde_json::json!({
+            "hostvars": {"h1": {"a": 1}}, "groups": {}
+        }))
+        .unwrap_err();
+        assert!(err.contains("_meta.hostvars"), "{err}");
     }
 }

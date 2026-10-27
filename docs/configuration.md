@@ -257,8 +257,7 @@ sources:
 
 What a source used to say about its script now lives on a connector, so ten
 Device42 tenants are ten sources and **one** connector instead of ten copies of
-the same script path, arguments and output format that drift apart one edit at a
-time. The split follows one question — *does it describe the script, or this
+the same script path and arguments that drift apart one edit at a time. The split follows one question — *does it describe the script, or this
 instance of the system?*
 
 | Field | Lives on | Why |
@@ -325,7 +324,7 @@ connectors:
     project: "prj-inventory"            # the checkout `path` resolves in
     path: "dynamic/d42/inventory.py"
     script_args: ["--list"]             # CLI args, verbatim (no shell)
-    host_args: ["--host", "{target}"]   # replace script_args for a host-scoped sync
+    host_args: ["--host-with-groups", "{target}"]  # replace script_args for a host sync
     timeout_seconds: 300                # default 300; a source may override it
 
 # connectors/ssh-facts.yaml
@@ -349,7 +348,8 @@ connectors:
 | `timeout_seconds` | Bound on a sync through this connector (default 300); a source's own `timeout_seconds` overrides it |
 
 Settings that look active and are not are refused rather than ignored:
-`host_args` on an ssh connector, `output_format` (removed in 0.36), `project` with
+`host_args` or `output_format` on an ssh connector, `output_format` other than
+`ansible` on a script connector, `project` with
 `location: host`, `location` or `script` on a script connector, `path` and
 `script` together, a relative script `path`
 without a `project`, and the names `remote` and `static_inventory`, which belong

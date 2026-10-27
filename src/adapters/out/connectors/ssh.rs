@@ -100,10 +100,9 @@ impl ConnectorPort for SshConnector {
     fn execute(
         &self,
         script_path: &str,
-        args: &[String],
         // The SSH connector aggregates per-host outputs into the Dataset
-        // itself — there is no single stdout to reinterpret, so the format
-        // does not apply here.
+        // itself — there is no single stdout to convert.
+        args: &[String],
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {

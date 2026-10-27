@@ -493,9 +493,6 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                          runs nothing from a checkout"
                     ));
                 }
-                // What an ssh source's gather_mode meant moves to its
-                // connector: facts become files on the host, a script
-                // becomes the connector's own `script`.
                 // 0.36 reads one output, Ansible inventory JSON; 0.34's
                 // default was the other one. The script is not ours to
                 // change, so the note says what its syncs will need.
@@ -508,6 +505,9 @@ fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items
                     ));
                 }
                 let hint = script_path.clone();
+                // What an ssh source's gather_mode meant moves to its
+                // connector: facts become files on the host, a script
+                // becomes the connector's own `script`.
                 let (location, inline, script_path, script_args) = if ssh {
                     let mut config = body.get_mut("config").and_then(Value::as_object_mut);
                     let mut take = |key: &str| {

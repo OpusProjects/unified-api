@@ -2,7 +2,7 @@
 """
 Sample connector that can gather ONE host without gathering the inventory.
 
-Two modes, both printing the native Dataset shape:
+Two modes, both printing Ansible inventory JSON:
 
   --list                   the whole inventory (motoko and batou, both in
                            "legacy")

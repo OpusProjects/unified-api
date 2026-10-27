@@ -36,7 +36,7 @@ impl ConnectorPort for StaticInventoryConnector {
     fn execute(
         &self,
         script_path: &str,
-        // No process, no stdout: args and output_format don't apply here
+        // No process, no stdout: args don't apply here
         _args: &[String],
         _config: &HashMap<String, String>,
         _credentials: &HashMap<String, String>,

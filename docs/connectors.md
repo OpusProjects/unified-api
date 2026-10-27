@@ -98,7 +98,9 @@ ignored: `host_args` on an ssh connector, `project` with
 `location: host`, `location` or `script` on a script connector, `path` and
 `script` together, a relative script `path`
 without a `project`, and `project` / `path` on any source that is not
-`static_inventory`. `output_format`, which 0.36 removed, is refused by name.
+`static_inventory`. `output_format: ansible`, which 0.35 configurations carry,
+is still read and changes nothing (it is the only format); `native` is refused
+by name.
 
 Two connectors are **built in** and need no item, because there is nothing about
 their HOW to configure — the protocol is fixed, and the WHERE is per source:
@@ -196,11 +198,11 @@ connectors:
 value `config.target` carries, since `?host=` accepts a list. The substitution
 happens inside each argument, so `["--host={target}"]` works too.
 
-**No CLI convention is imposed.** `host_args: ["--host", "{target}"]` reproduces
-Ansible's contract exactly; a script that can do more states its own flag, as
-above. What the script must always return is Ansible inventory JSON with the
-requested hosts in it — not Ansible's bare `--host` dictionary,
-which carries no groups and is not a shape this service reads.
+**No CLI convention is imposed**, and Ansible's own `--host <hostname>` is not
+one to copy: it prints one host's bare variables, `{"ansible_host": ...}`, with
+no `_meta` and no groups, which reads as groups named after the variables and
+fails the sync. A script states its own flag, as above, and answers it with
+Ansible inventory JSON holding the requested hosts.
 
 Omitting `host_args` keeps the old behaviour: the script is called exactly as a
 full sync would call it and the requested hosts are picked out of whatever comes
@@ -313,15 +315,18 @@ existing dynamic inventory script works unmodified (pair it with
 It is converted to the [Dataset](#the-dataset-shape):
 
 - `_meta.hostvars` → `hostvars`. A missing `_meta` is accepted with a warning
-  (hosts will have no variables).
+  (hosts will have no variables); `_meta` without `hostvars` means the same,
+  without the warning, as Ansible reads it.
 - Every other top-level key becomes a group. Both the object form
   (`{hosts, children, vars}`) and the legacy list form (`"web": ["h1", "h2"]`)
   are accepted.
-- The implicit meta-groups `all` and `ungrouped` are skipped; if they carried
-  `vars` or `children`, a warning says so (that information has no Dataset
-  equivalent).
+- A host named in a group but not in `_meta.hostvars` is a host with no
+  variables, as `ansible-inventory --list` prints it: it is kept, not dropped.
+- The implicit meta-groups `all` and `ungrouped` are skipped, but their hosts
+  are kept; `vars` on them have no Dataset equivalent, and a warning says so.
 - Malformed input is an **error that fails the sync**, naming the offending
-  group — never a silent skip.
+  group — never a silent skip. That includes a key a group does not take
+  (`"host": [...]` for `"hosts"`).
 - The `{"hostvars", "groups"}` shape a script could print before 0.36 fails the
   sync saying what to print. Read as Ansible it would be two groups called
   `hostvars` and `groups` and no host variables: a sync that "works" and serves
@@ -570,7 +575,7 @@ A built-in connector, so the source names the file itself: `project` + `path`, t
 same pair a script connector uses for its script. Both are required. The path
 resolves inside the checkout, so the project's periodic pull (or the on-demand
 `POST /api/v1/projects/{id}/sync`) is what brings in new data — the next source
-sync reads the updated files. Arguments, output formats, credentials and
+sync reads the updated files. Arguments, credentials and
 `SOURCE_CONFIG` don't apply to this connector.
 
 **What lands where:**

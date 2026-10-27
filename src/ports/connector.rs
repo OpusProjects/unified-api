@@ -67,9 +67,6 @@ pub trait ConnectorPort: Send + Sync {
         // CLI arguments for the script — many inventory scripts follow the
         // Ansible dynamic inventory convention and require e.g. `--list`
         args: &[String],
-        // How to interpret the script's stdout (native Dataset vs Ansible
-        // inventory JSON). The SSH connector builds its Dataset itself and
-        // ignores this.
         config: &HashMap<String, String>,
         credentials: &HashMap<String, String>,
     ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>>;

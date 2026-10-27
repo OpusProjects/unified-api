@@ -1,11 +1,11 @@
 use serde::Deserialize;
 
 // A connector says HOW to talk to a kind of system: which script to run, from
-// which project, with which arguments, and how to read what it prints. A
-// source says WHICH instance of that system (its credentials, its `config`,
-// its schedule and TTLs) and names its connector. Ten Device42 tenants are
-// ten sources and one connector; before connectors existed the script, its
-// arguments and its output format were copied into each of the ten.
+// which project, with which arguments. A source says WHICH instance of that
+// system (its credentials, its `config`, its schedule and TTLs) and names its
+// connector. Ten Device42 tenants are ten sources and one connector; before
+// connectors existed the script and its arguments were copied into each of
+// the ten.
 //
 // Two connectors are built in and need no item: `remote` (another
 // unified-api, see adapters/out/connectors/remote.rs) and `static_inventory`
@@ -72,10 +72,12 @@ pub struct Connector {
     #[serde(default)]
     pub host_args: Vec<String>,
 
-    // Removed in 0.36: a script prints Ansible inventory JSON, the one
-    // format there is. Still parsed so the key is answered by name rather
-    // than as an unknown field: startup drops `ansible` (what every script
-    // already said) with a note, and anywhere else it is refused.
+    // What 0.35 asked: a script prints Ansible inventory JSON, the one
+    // format 0.36 reads. `ansible` says exactly that and is accepted, so a
+    // configuration that carries it works on 0.35 and 0.36 alike while
+    // instances are upgraded one by one (removing it first would make a 0.35
+    // instance read its scripts as `native`: an empty inventory). `native`
+    // is the format that is gone, refused by name; anything else too.
     #[serde(default)]
     pub output_format: Option<String>,
 
@@ -214,15 +216,20 @@ impl Connector {
         }
         match self.output_format.as_deref() {
             None => {}
+            Some(_) if self.kind == ConnectorKind::Ssh => errors.push(format!(
+                "Connector '{id}' sets output_format, which an ssh connector does not take \
+                 — it builds its dataset itself"
+            )),
+            Some("ansible") => {}
             Some("native") => errors.push(format!(
                 "Connector '{id}' sets output_format: native, which 0.36 no longer reads: \
                  change its script to print Ansible inventory JSON (host variables under \
                  _meta.hostvars, each group a top-level key), then remove the key"
             )),
-            Some(_) => errors.push(format!(
-                "Connector '{id}' sets output_format, which 0.36 removed: a script prints \
-                 Ansible inventory JSON, the one format there is, and an ssh connector \
-                 builds its dataset itself — remove the key"
+            Some(other) => errors.push(format!(
+                "Connector '{id}' sets output_format: {other} — a script prints Ansible \
+                 inventory JSON, the one format there is (output_format: ansible says so, \
+                 and can be left out)"
             )),
         }
         if let Some(script) = &self.script {
@@ -370,13 +377,21 @@ mod tests {
         let c = connector("name: s\ntype: ssh\npath: gather_facts\nhost_args: [\"{target}\"]\n");
         let errors = c.errors("s").join("\n");
         assert!(errors.contains("host_args"), "{errors}");
+        let c = connector("name: s\ntype: ssh\nscript: uname\noutput_format: ansible\n");
+        assert!(
+            c.errors("s")
+                .join("\n")
+                .contains("ssh connector does not take")
+        );
     }
 
     #[test]
-    fn output_format_is_refused_by_name() {
+    fn output_format_ansible_is_accepted_and_the_rest_refused_by_name() {
         let errors = |yaml: &str| connector(yaml).errors("d").join("\n");
         let e = errors("name: d\nproject: prj\npath: d.py\noutput_format: ansible\n");
-        assert!(e.contains("remove the key"), "{e}");
+        assert!(e.is_empty(), "ansible is what every script prints: {e}");
+        let e = errors("name: d\nproject: prj\npath: d.py\noutput_format: yaml\n");
+        assert!(e.contains("output_format: yaml"), "{e}");
         let e = errors("name: d\nproject: prj\npath: d.py\noutput_format: native\n");
         assert!(e.contains("change its script to print Ansible"), "{e}");
     }

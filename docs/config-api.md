@@ -201,7 +201,7 @@ is already running.
 | `connectors` | A source is resolved through its connector, so the sources using a changed connector count as changed themselves and restart on it |
 | `views`, `enrichers`, `endpoints` | Live on the next request/tick |
 | `projects` | Pull tasks restart; a project that arrived with the reload is cloned in the background |
-| `credentials`, `secrets:` | The resolver chain is rebuilt (which also drops the resolution cache) |
+| `credentials`, `secrets:` | The resolver chain is rebuilt (which also drops each Vault's resolution cache) |
 | `api_keys` | In force on the next request |
 | `server.readyz_require_all_sources` | Next probe |
 | `server.refresh_timeout_seconds`, `server.refresh_max_concurrent` | Next refresh. A shrunk concurrency cap lets in-flight refreshes finish under the old limit and reclaims their permits as they land |

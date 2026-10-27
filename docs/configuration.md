@@ -188,15 +188,6 @@ cache:
 projects:
   dir: "/var/lib/unified-api/projects"   # default "projects"
 
-# Optional. Credential resolution behavior.
-secrets:
-  # How long a resolved credential is reused before the backend is asked
-  # again (default 60; 0 = resolve fresh on every sync). Resolution runs on
-  # every sync of every source — free against env vars, a request storm
-  # against a networked backend. This is also the rotation latency: a rotated
-  # secret is picked up within this many seconds.
-  cache_ttl_seconds: 60
-
 # Optional, OFF by default. Lets an admin key read, write and reload this
 # directory over HTTP, so a pipeline can push a change instead of publishing
 # an artifact the instance has to pull. Turning it on means an admin key can
@@ -468,7 +459,8 @@ credentials:
   - name: cred-d42-vault
     description: "Device42 (from Vault)"
     type: "username_password"
-    vault_path: "infra/device42"  # KV v2 path under secrets.vault.mount
+    vault: "cred-vault"           # the type: vault credential to read from
+    vault_path: "infra/device42"  # KV v2 path under that Vault's mount
     secret_keys:                  # our key -> field in the Vault secret
       username: "user"            # (omit secret_keys to take every field)
       password: "pass"
@@ -485,29 +477,60 @@ USERNAME}` reads `SECTION9_USERNAME`), is still read but **deprecated**: startup
 and `--check-config` print the `env_vars` to write instead, and a later release
 refuses it. Setting both forms on one credential is refused.
 
-Native Vault resolution is opt-in via the `secrets.vault:` block in
-`config.yaml` (a `vault_path` without it fails validation at startup):
+A Vault is a credential too, of `type: vault`, as AWX models a HashiCorp
+Vault lookup: the credentials that read from it name it with `vault:` and
+say where with `vault_path`. Several Vaults can coexist, each with its own
+login and cache.
 
 ```yaml
-secrets:
-  cache_ttl_seconds: 60          # see the config.yaml section above
-  vault:
-    address: "https://vault.example.com:8200"
-    mount: "secret"              # KV v2 mount (default "secret")
-    token_env: "VAULT_TOKEN"     # token auth: env var holding the token
-    # kubernetes_role: "unified-api"   # OR Kubernetes auth: exchange the
-    # jwt_path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-    #                                  # service-account JWT for a client token
-    timeout_seconds: 10          # bound on every Vault request
+# credentials/cred-vault.yaml — the connection to a Vault
+credentials:
+  - name: cred-vault
+    description: Vault
+    type: vault
+    address: https://vault.example.com:8200
+    mount: secret                  # KV v2 mount (default "secret")
+    env_vars:
+      token: VAULT_TOKEN           # token auth: re-read per resolution,
+                                   # so rotating the token needs no restart
+    # kubernetes_role: unified-api # OR Kubernetes auth: the service-account
+    # jwt_path: /var/run/secrets/kubernetes.io/serviceaccount/token
+    #                              # JWT is exchanged for a client token,
+    #                              # cached and renewed at 80% of its lease
+    timeout_seconds: 10            # bound on every request (default 10)
+    cache_ttl_seconds: 60          # how long a value read here is reused
+                                   # (default 60; 0 = every resolution)
+
+# credentials/cred-d42-vault.yaml — a login read from it
+credentials:
+  - name: cred-d42-vault
+    type: username_password
+    vault: cred-vault
+    vault_path: infra/device42
+    secret_keys:                   # our key -> field in the Vault secret
+      username: user               # (omit secret_keys to take every field)
+      password: pass
 ```
 
+| `type: vault` field | Notes |
+|---|---|
+| `address` | Required. `http://` or `https://` |
+| `mount` | The KV v2 mount `vault_path` values live under (default `secret`) |
+| `env_vars.token` / `kubernetes_role` | How to log in: exactly one. `jwt_path` goes with `kubernetes_role` |
+| `timeout_seconds` | Bound on every request (default 10) |
+| `cache_ttl_seconds` | How long a value read from this Vault is reused (default 60; `0` = every resolution): what keeps the sync schedule from becoming a request storm, and also how long a rotation takes to show |
+
 The adapter speaks **KV v2 only** and reads `<address>/v1/<mount>/data/<vault_path>`.
-Credentials *without* a `vault_path` keep resolving from env/files, so adoption
-is per credential — move them one at a time. With Kubernetes auth the client
-token is cached and renewed at 80% of its lease; with token auth the env var is
-re-read on every resolution, so rotating the token needs no restart. Pair Vault
-with `secrets.cache_ttl_seconds` (it is what keeps the sync schedule from
-becoming a request storm against Vault).
+Credentials *without* a `vault_path` keep resolving from env/files, uncached, so
+adoption is per credential — move them one at a time. A Vault credential is
+never handed to a source, project or LDAP bind: naming one there is refused,
+since its token is not a login.
+
+The `secrets:` block in `config.yaml` (`cache_ttl_seconds`, and a single
+`vault:` with `token_env`) still loads but is **deprecated**: startup and
+`--check-config` say what to write instead, and a later release refuses it.
+While it is set, its `cache_ttl_seconds` still caches every credential, as it
+did, and a `vault_path` with no `vault:` reads from its `vault:`.
 
 ---
 

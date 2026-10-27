@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::domain::credential::Credential;
 use crate::domain::ldap::LdapConfig;
 use crate::domain::project::GitProject;
 use crate::domain::source::Source;
@@ -87,9 +88,11 @@ fn id_prefix(credential_id: &str) -> String {
 }
 
 // What names a credential in its configuration: the sources that pass it
-// to their connector, the projects that clone with it, and the directory
-// login's service account. Sorted, so a page and a diff of it are stable.
+// to their connector, the projects that clone with it, the directory
+// login's service account, and — for a Vault — the credentials reading from
+// it. Sorted, so a page and a diff of it are stable.
 pub struct CredentialUsers {
+    pub credentials: Vec<String>,
     pub sources: Vec<String>,
     pub projects: Vec<String>,
     pub ldap: bool,
@@ -97,6 +100,7 @@ pub struct CredentialUsers {
 
 pub fn users_of(
     credential_id: &str,
+    credentials: &HashMap<String, Credential>,
     sources: &HashMap<String, Source>,
     projects: &HashMap<String, GitProject>,
     ldap: Option<&LdapConfig>,
@@ -113,7 +117,15 @@ pub fn users_of(
         .map(|(id, _)| id.clone())
         .collect();
     project_ids.sort();
+    // A Vault's users are the credentials reading from it (their `vault:`).
+    let mut credential_ids: Vec<String> = credentials
+        .iter()
+        .filter(|(_, c)| c.vault.as_deref() == Some(credential_id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    credential_ids.sort();
     CredentialUsers {
+        credentials: credential_ids,
         sources: source_ids,
         projects: project_ids,
         ldap: ldap.is_some_and(|l| l.bind_credential == credential_id),
@@ -201,6 +213,29 @@ mod tests {
         assert_eq!(id_prefix("cred-vcenter-aa1"), "vcenter_aa1");
         assert_eq!(id_prefix("cred_ucs.a6"), "ucs_a6");
         assert_eq!(id_prefix("Edge-PQ-DC4"), "edge_pq_dc4");
+    }
+
+    #[test]
+    fn a_vaults_users_are_the_credentials_reading_from_it() {
+        let credential = |yaml: &str| -> Credential { serde_saphyr::from_str(yaml).unwrap() };
+        let credentials = HashMap::from([
+            (
+                "cred-vault".to_string(),
+                credential("name: V\ntype: vault\naddress: https://v\nenv_vars:\n  token: T\n"),
+            ),
+            (
+                "cred-d42".to_string(),
+                credential("name: D\ntype: token\nvault: cred-vault\nvault_path: d42\n"),
+            ),
+        ]);
+        let users = users_of(
+            "cred-vault",
+            &credentials,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        );
+        assert_eq!(users.credentials, vec!["cred-d42"]);
     }
 
     #[tokio::test]

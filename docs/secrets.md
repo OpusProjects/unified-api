@@ -26,7 +26,7 @@ all-or-nothing.
 |---|---|---|
 | Environment variables | `env_vars` (field → the full variable name) | `SECTION9_USERNAME` etc., injected by the platform (k8s Secret via `envFrom`, `.env`, ESO) |
 | JSON file | `secret_file` + `secret_keys` | A mounted file of values, re-read per resolution |
-| Vault (KV v2) | `vault_path` (+ the `secrets.vault:` block) | Read over HTTPS at resolution time |
+| Vault (KV v2) | `vault` (a `type: vault` credential) + `vault_path` | Read over HTTPS at resolution time |
 
 `file_keys` is orthogonal to all three: files a script consumes **by path**
 (SSH keys, certificates) — the path is delivered, never the content.
@@ -78,41 +78,63 @@ particular never puts a secret on a command line. See
 
 ## The resolution cache and rotation
 
-Resolution runs on every sync of every source — free against env vars, a
-request storm against a networked backend — so successful resolutions are
-reused for `secrets.cache_ttl_seconds` (default 60; `0` disables).
+Resolution runs on every sync of every source. Against env vars that is
+free, and a file is a small local read, so those are read fresh every time: a
+rotated mounted file is seen on the next sync. Against Vault it would be a
+request storm, so each Vault credential reuses what it read for its own
+`cache_ttl_seconds` (default 60; `0` disables).
 
-The TTL **is** the rotation latency, stated plainly: a value rotated in the
-environment, on disk, or in Vault is picked up within `cache_ttl_seconds`,
-not on the very next sync. Errors are never cached — a transient backend blip
-is retried on the next resolution instead of being remembered for the TTL.
+That TTL **is** the Vault's rotation latency, stated plainly: a value rotated
+in Vault is picked up within `cache_ttl_seconds`, not on the very next sync.
+Errors are never cached — a transient backend blip is retried on the next
+resolution instead of being remembered for the TTL.
+
+The deprecated `secrets.cache_ttl_seconds` in `config.yaml`, while set, still
+caches every credential for that long, as it did.
 
 ---
 
 ## Native Vault
 
-Give a credential a `vault_path` and configure the `secrets.vault:` block;
-everything without a `vault_path` keeps resolving exactly as before.
+Declare the Vault as a credential of `type: vault`, and give each credential
+that reads from it `vault:` and a `vault_path`; everything without a
+`vault_path` keeps resolving exactly as before.
 
 ```yaml
-secrets:
-  cache_ttl_seconds: 60
-  vault:
-    address: "https://vault.example.com:8200"
-    mount: "secret"                # KV v2 mount (default "secret")
-    token_env: "VAULT_TOKEN"       # token auth: re-read per resolution,
+# credentials/cred-vault.yaml — the connection to a Vault
+credentials:
+  - name: cred-vault
+    description: Vault
+    type: vault
+    address: https://vault.example.com:8200
+    mount: secret                  # KV v2 mount (default "secret")
+    env_vars:
+      token: VAULT_TOKEN           # token auth: re-read per resolution,
                                    # so rotating the token needs no restart
-    # kubernetes_role: "unified-api"   # OR Kubernetes auth: the service-account
-    # jwt_path: "/var/run/secrets/kubernetes.io/serviceaccount/token"
-    #                                  # JWT is exchanged for a client token,
-    #                                  # cached and renewed at 80% of its lease
-    timeout_seconds: 10
+    # kubernetes_role: unified-api # OR Kubernetes auth: the service-account
+    # jwt_path: /var/run/secrets/kubernetes.io/serviceaccount/token
+    #                              # JWT is exchanged for a client token,
+    #                              # cached and renewed at 80% of its lease
+    timeout_seconds: 10            # bound on every request (default 10)
+    cache_ttl_seconds: 60          # how long a value read here is reused
+                                   # (default 60; 0 = every resolution)
+
+# credentials/cred-d42-vault.yaml — a login read from it
+credentials:
+  - name: cred-d42-vault
+    type: username_password
+    vault: cred-vault
+    vault_path: infra/device42
+    secret_keys:                   # our key -> field in the Vault secret
+      username: user               # (omit secret_keys to take every field)
+      password: pass
 ```
 
 The adapter speaks **KV v2 only** (`/v1/<mount>/data/<path>`) and says so if
-a v1-shaped answer comes back. A `vault_path` with no `secrets.vault:` block
-fails validation at startup. The resolution cache above is what keeps the
-sync schedule from becoming a request storm against Vault.
+a v1-shaped answer comes back. A `vault_path` naming no Vault, or naming a
+credential that is not one, fails validation at startup. The old
+`secrets.vault:` block in `config.yaml` still works, deprecated (see
+[configuration](configuration.md#credentials)).
 
 ---
 

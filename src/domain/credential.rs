@@ -7,6 +7,10 @@ pub enum CredentialType {
     UsernamePassword,
     Token,
     SshKey,
+    // Not a login a script uses: the connection to a Vault that other
+    // credentials read from (they name it with `vault:`), as AWX models a
+    // HashiCorp Vault lookup as a credential of its own.
+    Vault,
 }
 
 // Reference to a credential — comes from configuration YAML.
@@ -25,14 +29,47 @@ pub struct Credential {
     #[serde(rename = "type")]
     pub credential_type: CredentialType,
 
-    // KV v2 path (under `secrets.vault.mount`) to read this credential from
-    // Vault. When set, `secret_keys` maps our names to fields of that secret
-    // (empty = every field verbatim) and env_prefix/secret_file are not
-    // consulted. Requires the `secrets.vault:` block in config.yaml —
+    // KV v2 path (under the Vault's `mount`) to read this credential from.
+    // When set, `secret_keys` maps our names to fields of that secret (empty
+    // = every field verbatim) and env_vars/env_prefix/secret_file are not
+    // consulted. `vault` names the `type: vault` credential to read it from
+    // (absent = the deprecated `secrets.vault:` block in config.yaml) —
     // validated at startup, so a vault_path without a Vault fails the deploy
     // rather than the first sync.
     #[serde(default)]
     pub vault_path: Option<String>,
+
+    #[serde(default)]
+    pub vault: Option<String>,
+
+    // A `type: vault` credential's own settings: where the Vault is and how
+    // to log in to it (a token in env_vars.token, or Kubernetes auth). Refused
+    // on any other type.
+    #[serde(default)]
+    pub address: Option<String>,
+
+    // The KV v2 mount the vault_path values live under (default "secret")
+    #[serde(default)]
+    pub mount: Option<String>,
+
+    // Kubernetes auth: the pod's service-account JWT (at jwt_path) is
+    // exchanged for a client token under this role, instead of env_vars.token.
+    #[serde(default)]
+    pub kubernetes_role: Option<String>,
+
+    #[serde(default)]
+    pub jwt_path: Option<String>,
+
+    // Bound on every request to this Vault (default 10)
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+
+    // How long a value read from this Vault is reused (default 60; 0 = read
+    // on every resolution) — also how long a rotation takes to be seen. Only
+    // a Vault has one: env vars cannot change under a running process, and a
+    // file is a cheap local read that should pick a rotation up at once.
+    #[serde(default)]
+    pub cache_ttl_seconds: Option<u64>,
 
     // Our field name → the full name of the environment variable holding it.
     // ex: {"username": "SECTION9_USERNAME"} → reads SECTION9_USERNAME and
@@ -68,6 +105,7 @@ impl CredentialType {
             CredentialType::UsernamePassword => "username_password",
             CredentialType::Token => "token",
             CredentialType::SshKey => "ssh_key",
+            CredentialType::Vault => "vault",
         }
     }
 }
@@ -78,7 +116,7 @@ impl Credential {
     // then a JSON file. "files" is a credential made only of file_keys
     // (paths handed to the script, an SSH key, a certificate).
     pub fn backend(&self) -> &'static str {
-        if self.vault_path.is_some() {
+        if self.vault_path.is_some() || self.credential_type == CredentialType::Vault {
             "vault"
         } else if !self.env_vars.is_empty() || self.env_prefix.is_some() {
             "env"
@@ -126,6 +164,81 @@ impl Credential {
     // secret_keys with nowhere to read them from.
     pub fn errors(&self, id: &str) -> Vec<String> {
         let mut errors = Vec::new();
+        let connection = [
+            ("address", self.address.is_some()),
+            ("mount", self.mount.is_some()),
+            ("kubernetes_role", self.kubernetes_role.is_some()),
+            ("jwt_path", self.jwt_path.is_some()),
+            ("timeout_seconds", self.timeout_seconds.is_some()),
+            ("cache_ttl_seconds", self.cache_ttl_seconds.is_some()),
+        ];
+        if self.credential_type == CredentialType::Vault {
+            match &self.address {
+                None => errors.push(format!(
+                    "Credential '{id}' is a Vault but has no address (https://vault.example.com:8200)"
+                )),
+                Some(a) if !(a.starts_with("https://") || a.starts_with("http://")) => errors
+                    .push(format!(
+                        "Credential '{id}': address '{a}' must be an http:// or https:// address"
+                    )),
+                Some(_) => {}
+            }
+            for field in self.env_vars.keys().filter(|f| *f != "token") {
+                errors.push(format!(
+                    "Credential '{id}': env_vars.{field} is not a field of a Vault — the only \
+                     one is `token`, the variable holding its token"
+                ));
+            }
+            match (
+                self.env_vars.contains_key("token"),
+                self.kubernetes_role.is_some(),
+            ) {
+                (true, true) => errors.push(format!(
+                    "Credential '{id}' logs in to Vault both with env_vars.token and \
+                     kubernetes_role — keep one"
+                )),
+                (false, false) => errors.push(format!(
+                    "Credential '{id}' has no way to log in to Vault: set env_vars: {{token: \
+                     <VAR>}} or kubernetes_role"
+                )),
+                _ => {}
+            }
+            for (key, set) in [
+                ("vault_path", self.vault_path.is_some()),
+                ("vault", self.vault.is_some()),
+                ("env_prefix", self.env_prefix.is_some()),
+                ("secret_file", self.secret_file.is_some()),
+                ("secret_keys", !self.secret_keys.is_empty()),
+                ("file_keys", !self.file_keys.is_empty()),
+            ] {
+                if set {
+                    errors.push(format!(
+                        "Credential '{id}' is a Vault and sets {key}, which only the \
+                         credentials reading from a Vault use"
+                    ));
+                }
+            }
+            if self.jwt_path.is_some() && self.kubernetes_role.is_none() {
+                errors.push(format!(
+                    "Credential '{id}' sets jwt_path without kubernetes_role — it is only \
+                     read for Kubernetes auth"
+                ));
+            }
+            return errors;
+        }
+        for (key, set) in connection {
+            if set {
+                errors.push(format!(
+                    "Credential '{id}' sets {key}, which only a `type: vault` credential uses"
+                ));
+            }
+        }
+        if self.vault.is_some() && self.vault_path.is_none() {
+            errors.push(format!(
+                "Credential '{id}' names vault '{}' but no vault_path to read there",
+                self.vault.as_deref().unwrap_or_default()
+            ));
+        }
         if !self.env_vars.is_empty() && self.env_prefix.is_some() {
             errors.push(format!(
                 "Credential '{id}' sets both env_vars and env_prefix — keep env_vars, \
@@ -147,6 +260,13 @@ impl Credential {
 
     // The deprecated env form, and the env_vars that replace it, written out.
     pub fn deprecation(&self, id: &str) -> Option<String> {
+        if self.vault_path.is_some() && self.vault.is_none() {
+            return Some(format!(
+                "credential '{id}': a vault_path without `vault:` reads from config.yaml's \
+                 secrets.vault, which is deprecated and will be refused in a later release; \
+                 declare the Vault as a `type: vault` credential and write vault: <its name>"
+            ));
+        }
         let prefix = self.env_prefix.as_ref()?;
         if self.vault_path.is_some() || !self.env_vars.is_empty() {
             return None;

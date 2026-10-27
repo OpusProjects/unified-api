@@ -100,6 +100,7 @@ impl Modify for SecurityAddon {
         http::connectors::ConnectorHealth,
         http::credentials::CredentialInfo,
         http::credentials::FileKeyInfo,
+        http::credentials::VaultConnectionInfo,
         http::credentials::CredentialUsersInfo,
         http::settings::Settings,
         http::host_search::HostSearchResult,

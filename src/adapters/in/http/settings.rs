@@ -87,9 +87,9 @@ pub struct ProjectsSettings {
 
 #[derive(Serialize, ToSchema)]
 pub struct SecretsSettings {
-    /// How long a resolved secret is reused: also how long a rotation takes
-    /// to be picked up
-    pub cache_ttl_seconds: u64,
+    /// The deprecated config.yaml cache over every credential, when still
+    /// set (a Vault credential now has its own `cache_ttl_seconds`)
+    pub cache_ttl_seconds: Option<u64>,
     pub vault: Option<VaultSettings>,
 }
 

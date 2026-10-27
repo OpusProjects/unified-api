@@ -20,9 +20,10 @@ use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 // Failures surface exactly like any other resolution failure: the sync fails,
 // names the credential, and lands in `sync_health` — no new machinery.
 
-// Config shape of the `secrets.vault:` block in config.yaml. Defined next to
-// the adapter it configures and embedded by config::SecretsConfig; strict
-// like every config struct (see the policy comment in config.rs).
+// One Vault's settings: built from a `type: vault` credential, or parsed
+// from the deprecated `secrets.vault:` block in config.yaml (embedded by
+// config::SecretsConfig, strict like every config struct — see the policy
+// comment in config.rs).
 #[derive(Debug, Clone, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct VaultConfig {
@@ -63,8 +64,10 @@ fn default_token_env() -> String {
     "VAULT_TOKEN".to_string()
 }
 
+pub const DEFAULT_JWT_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
 fn default_jwt_path() -> String {
-    "/var/run/secrets/kubernetes.io/serviceaccount/token".to_string()
+    DEFAULT_JWT_PATH.to_string()
 }
 
 fn default_timeout() -> u64 {
@@ -114,10 +117,7 @@ impl VaultSecrets {
     async fn auth_token(&self) -> Result<String, SecretsError> {
         let Some(role) = &self.config.kubernetes_role else {
             return std::env::var(&self.config.token_env).map_err(|_| SecretsError {
-                message: format!(
-                    "Vault token env var '{}' is not set (secrets.vault.token_env)",
-                    self.config.token_env
-                ),
+                message: format!("Vault token env var '{}' is not set", self.config.token_env),
             });
         };
 

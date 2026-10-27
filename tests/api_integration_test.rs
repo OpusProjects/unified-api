@@ -615,6 +615,14 @@ async fn metrics_exposes_sync_counters() {
     // Bucketed, not a summary: aggregatable across instances
     assert!(body.contains("unified_api_sync_duration_seconds_bucket"));
     assert!(body.contains("src-metrics"));
+    // A script connector called its system: one outgoing request.
+    assert!(
+        body.contains(
+            r#"unified_api_source_requests_total{source="src-metrics",operation="full",outcome="success"} 1"#
+        ),
+        "missing outgoing request in: {}",
+        body
+    );
 }
 
 // Freshness gauges are computed at scrape time from the cache, so they answer

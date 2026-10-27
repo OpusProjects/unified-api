@@ -94,6 +94,11 @@ pub async fn run_enricher(
         "source" => enricher.target_id.clone(),
     )
     .record(outcome.duration_ms as f64 / 1000.0);
+    crate::application::sync::count_source_request(
+        &enricher.target_id,
+        "enrich",
+        outcome.success(),
+    );
 
     Some(outcome)
 }

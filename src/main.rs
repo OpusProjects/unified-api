@@ -81,11 +81,13 @@ async fn main() {
                     println!("startup converts: {line}");
                 }
                 println!(
-                    "configuration OK ({}): {} sources, {} connectors, {} views, \
-                     {} credentials, {} enrichers, {} endpoints, {} projects",
+                    "configuration OK ({}): {} sources, {} connectors, {} hosts, {} groups, \
+                     {} views, {} credentials, {} enrichers, {} endpoints, {} projects",
                     config_dir,
                     cfg.sources.len(),
                     cfg.connectors.len(),
+                    cfg.hosts.len(),
+                    cfg.groups.len(),
                     cfg.views.len(),
                     cfg.credentials.len(),
                     cfg.enrichers.len(),
@@ -212,6 +214,8 @@ async fn main() {
     info!(
         sources = cfg.sources.len(),
         connectors = cfg.connectors.len(),
+        hosts = cfg.hosts.len(),
+        groups = cfg.groups.len(),
         views = cfg.views.len(),
         credentials = cfg.credentials.len(),
         enrichers = cfg.enrichers.len(),

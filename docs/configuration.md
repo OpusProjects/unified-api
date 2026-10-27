@@ -226,11 +226,6 @@ sources:
     # schedule: "30 2 * * *"             # OR a cron cadence (UTC) — pick one
     ttl_seconds: 3600                    # dataset-level TTL (required)
     # timeout_seconds: 900               # override the connector's bound, this source only
-    ttl_overrides:                       # optional per-group / per-host TTLs
-      groups:
-        production: 900
-      hosts:
-        motoko.section9.net: 300
     host_sync_updates_group_vars: false  # may a host-scoped sync take the vars of
                                          #   the groups it joins? (default false)
     allow_on_demand_refresh: false       # may a READ trigger a sync? (default false)
@@ -246,12 +241,51 @@ sources:
 | `timeout_seconds` | Overrides the connector's `timeout_seconds` for this source only — the bigger tenant of the same system. Absent = the connector's (default 300). A timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
 | `host_sync_updates_group_vars` | Whether a host-scoped sync also takes the vars of the groups it places those hosts in, and only those groups. Off by default: a granular call answers about a host, not about what a group means for its other members |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
-| `ttl_*` | See [caching](caching.md) for the freshness model |
+| `ttl_seconds` | See [caching](caching.md) for the freshness model. A host or a group that needs another TTL on this source says so in its own item: see [hosts and groups](#hosts-and-groups). `ttl_overrides` on a source is refused, naming the new form |
 | `allow_on_demand_refresh` | Whether `GET /dataset?host=X&refresh=true` may gather the named hosts. Off by default: a read that can cause SSH into a datacenter is a capability. Turning it on makes `ttl_seconds` load bearing — it becomes the threshold at which a read pays for a gather — so review it first. See [on-demand refresh](on-demand-refresh.md) |
 | `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
 | `advertise_scope` | Explicit ownership claim served on `GET /sources/{id}/scope` (`groups` + `hosts`; must name at least one). Optional — an SSH source already advertises its `hosts_from_source` pattern; this overrides the derivation. The consumer side of federation reads it so view ownership stops being a duplicated truth |
 | `config` | Arbitrary `key: value` strings the connector receives (`SOURCE_CONFIG` for a script). The SSH connector reads `hosts`, `port`, `concurrency`, `ssh_connect_timeout_seconds` (per-host, default 30) and `ssh_known_hosts` (host key verification — unset accepts any key, with a warning per sync) from here (0.35's `gather_mode` and `fact_path` are refused: the connector decides what runs); a `remote` source reads `url` and `source` — see [connectors](connectors.md) |
+
+### Hosts and groups
+
+What a source does differently for one host, or for every host in one of
+its groups, lives in a host or group item rather than in the source: one
+file per host (`hosts/<host>.yaml`) or group (`groups/<group>.yaml`), named
+by the host or group as the sources' datasets spell it. Each entry under
+`sources` names a source and what that source does for it.
+
+```yaml
+# hosts/motoko.section9.net.yaml
+hosts:
+  - name: motoko.section9.net
+    description: "Major's workstation"   # optional label
+    sources:
+      src-section9:
+        ttl_seconds: 300                 # fresh for 5 min here; the source says 1 h
+
+# groups/production.yaml
+groups:
+  - name: production
+    sources:
+      src-section9:
+        ttl_seconds: 900                 # every host in the group, joiners included
+```
+
+| Field | Notes |
+|---|---|
+| `sources.<id>.ttl_seconds` | This source's TTL for the host, or for every host in the group of **that source's** dataset: the [refresh gate](on-demand-refresh.md) and what its freshness is reported against. A host's own TTL beats a group's, which beats the source's `ttl_seconds` |
+
+- **Per source, not for the host everywhere.** A TTL describes one source's copy
+  of the host: a host in Device42, VMware and the SSH facts may only need its
+  facts kept fresh.
+- **Checked against the configuration, not the data.** A source id that does not
+  exist is refused, and a view's id is refused naming the member to use
+  instead (a view keeps no copy of its own). A host or group no source has today
+  is not an error: hosts come and go with the systems the sources read.
+- **Folded in at load**, as a source's connector is: a reload applies a changed
+  item, and reports it as a change to the sources it names.
 
 ### Source or connector?
 
@@ -267,7 +301,7 @@ instance of the system?*
 | `script_args`, `host_args` | connector | How the script is called |
 | `timeout_seconds` | connector, overridable per source | A property of the script, except for the tenant ten times bigger |
 | `credentials`, `config` | source | Which instance, as whom |
-| `schedule`, `sync_interval_seconds`, `ttl_seconds`, `ttl_overrides` | source | How often and how fresh, per instance |
+| `schedule`, `sync_interval_seconds`, `ttl_seconds` | source | How often and how fresh, per instance (per host or group: [their own items](#hosts-and-groups)) |
 | `sync_mode`, `host_sync_updates_group_vars` | source | Cache policy of this instance's entry, not a property of the script |
 | `hosts_from_source`, `allow_on_demand_refresh`, `advertise_scope` | source | Per instance |
 
@@ -390,7 +424,7 @@ views:
 | `members[].owns.groups` | Groups of that source whose members this member owns |
 | `members[].owns.hosts` | Hosts claimed literally, whether or not the inventory knows them — a host built this morning is exactly the one somebody needs to reach |
 | `members[].owns.advertised` | Route by what the member SOURCE claims to own (its `advertise_scope` locally, the edge's `GET /scope` for remote members, refreshed per sync with the last-known claim surviving an unreachable edge). `groups`/`hosts` become the fallback; with neither claim nor fallback the member claims nothing — see [views](views.md#advertised-ownership) |
-| `ttl_seconds` | The view's own freshness policy, which is also the **gate** for `refresh=true`. Absent = each host inherits its owning member's TTL. A member's per-host/per-group `ttl_overrides` win either way |
+| `ttl_seconds` | The view's own freshness policy, which is also the **gate** for `refresh=true`. Absent = each host inherits its owning member's TTL. A member's [host and group items](#hosts-and-groups) win either way |
 
 Ownership is **declared, not inferred from what a member has cached**: facts
 sources often sync daily on purpose, and some hosts (appliances that take no

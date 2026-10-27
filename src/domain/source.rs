@@ -221,8 +221,11 @@ pub struct SourceDef {
 
     pub ttl_seconds: u64,
 
+    // Moved to host and group items (domain/host.rs). Read only to
+    // refuse it naming where it went: deny_unknown_fields would refuse it
+    // too, but say nothing of the new form.
     #[serde(default)]
-    pub ttl_overrides: TtlOverrides,
+    ttl_overrides: Option<serde::de::IgnoredAny>,
 
     #[serde(default)]
     pub hosts_from_source: Option<HostsFromSource>,
@@ -249,6 +252,13 @@ impl SourceDef {
     ) -> Result<Source, Vec<String>> {
         let mut errors = Vec::new();
         let default_timeout = crate::domain::default_timeout_seconds();
+        if self.ttl_overrides.is_some() {
+            errors.push(format!(
+                "Source '{id}' sets ttl_overrides, which moved to host and group items: \
+                 a hosts/<host>.yaml or groups/<group>.yaml naming this source under \
+                 `sources:` with its ttl_seconds (see docs/configuration.md)"
+            ));
+        }
 
         // (connector_type, project, script_path, script_args, host_args,
         // connector timeout)
@@ -383,7 +393,9 @@ impl SourceDef {
             schedule: self.schedule.clone(),
             sync_interval_seconds: self.sync_interval_seconds,
             ttl_seconds: self.ttl_seconds,
-            ttl_overrides: self.ttl_overrides.clone(),
+            // Filled from host and group items once every source is resolved
+            // (domain::host::fold_into_sources).
+            ttl_overrides: TtlOverrides::default(),
             hosts_from_source: self.hosts_from_source.clone(),
             allow_on_demand_refresh: self.allow_on_demand_refresh,
             advertise_scope: self.advertise_scope.clone(),

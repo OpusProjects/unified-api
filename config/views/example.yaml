@@ -42,7 +42,7 @@
 #     # different refresh rules is fine as a deliberate consumer-facing policy;
 #     # what it must never be is an accident.
 #     #
-#     # A member's per-host and per-group ttl_overrides still win over this: an
+#     # A member's host and group items (hosts/, groups/) still win over this: an
 #     # override beats the default, here as everywhere else.
 #     # ttl_seconds: 30
 #

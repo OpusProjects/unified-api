@@ -50,6 +50,8 @@ pub struct ConfigFileInfo {
 pub struct ConfigSummary {
     pub sources: usize,
     pub connectors: usize,
+    pub hosts: usize,
+    pub groups: usize,
     pub views: usize,
     pub credentials: usize,
     pub enrichers: usize,
@@ -255,6 +257,8 @@ fn summarize(cfg: &AppConfig) -> ConfigSummary {
     ConfigSummary {
         sources: cfg.sources.len(),
         connectors: cfg.connectors.len(),
+        hosts: cfg.hosts.len(),
+        groups: cfg.groups.len(),
         views: cfg.views.len(),
         credentials: cfg.credentials.len(),
         enrichers: cfg.enrichers.len(),

@@ -269,7 +269,7 @@ an SSH session.
 | absent | the owning member's TTL — the member keeps deciding |
 | set | the view's value, for every member's hosts |
 
-A member's per-host and per-group `ttl_overrides` still win either way: *an
+A member's [host and group items](configuration.md#hosts-and-groups) still win either way: *an
 override beats the default*, here as everywhere else in the codebase. A view
 cannot silently cancel the five-minute TTL somebody put on a critical host.
 

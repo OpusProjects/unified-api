@@ -124,8 +124,9 @@ JSON
               "sources/dc4/src-dc4.yaml"],
   "deleted": ["sources/src-old.yaml"],
   "etag": "9f2c…",
-  "summary": {"sources": 1, "connectors": 1, "views": 0, "credentials": 0,
-              "enrichers": 0, "endpoints": 0, "projects": 1, "api_keys": 0},
+  "summary": {"sources": 1, "connectors": 1, "hosts": 0, "groups": 0, "views": 0,
+              "credentials": 0, "enrichers": 0, "endpoints": 0, "projects": 1,
+              "api_keys": 0},
   "reloaded": {
     "generation": 3,
     "applied": ["sources", "connectors"],

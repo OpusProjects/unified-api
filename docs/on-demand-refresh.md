@@ -33,7 +33,7 @@ This is the part worth reading twice, because everything else follows from it.
 
 | Who | Decides | With |
 |---|---|---|
-| **Operator** | how much staleness is acceptable | `ttl_seconds`, `ttl_overrides` on the source |
+| **Operator** | how much staleness is acceptable | `ttl_seconds` on the source, and its host and group items |
 | **Operator** | whether reads may refresh at all | `allow_on_demand_refresh` on the source |
 | **Consumer** | whether to wait or be served fast | `refresh=true` |
 
@@ -286,13 +286,9 @@ sources:
     # The scheduler keeps working as before: the central pulls the edge's cache
     # on its own interval and NEVER causes SSH by doing so.
     sync_interval_seconds: 600
-    ttl_overrides:
-      hosts:
-        # A box whose state changes fast enough to be worth gathering more often
-        node100: 60
-      groups:
-        # ...or a whole group of them
-        oracle_db: 120
+    # A box whose state changes fast enough to be worth gathering more often,
+    # or a whole group of them, gets its own TTL in a host or group item
+    # (hosts/node100.yaml, groups/oracle_db.yaml naming src-edge-dc2).
     config:
       url: "https://unified-api-dc2.example.com"
       source: "src-ssh-facts"         # the source id ON THE EDGE
@@ -526,8 +522,8 @@ sync_interval_seconds: 3600  # "...but I only sync hourly"
 
 will refresh on nearly every consumer request once the flag goes on. Still
 bounded (one gather per host per minute), but probably not what the operator
-meant. Look at the TTLs before enabling, and use `ttl_overrides.hosts` to
-tighten the few hosts that genuinely need it rather than the whole source.
+meant. Look at the TTLs before enabling, and use [host items](configuration.md#hosts-and-groups)
+to tighten the few hosts that genuinely need it rather than the whole source.
 
 ### Tuning the two server knobs
 
@@ -626,7 +622,7 @@ Deliberately out of scope for now; each would be a separate change:
   a `refresh_max_hosts` per source is the fix.
 - **A `refresh_ttl_seconds` separate from `ttl_seconds`**, for deployments where
   "when is this stale" and "when is it worth gathering" genuinely differ.
-  `ttl_overrides.hosts` covers the cases seen so far.
+  Host items cover the cases seen so far.
 - **Refresh on `/status`** and on output endpoints. Only `/dataset` has it.
 - **Group-scoped refresh on SSH sources**, which needs the connector to learn
   group membership.

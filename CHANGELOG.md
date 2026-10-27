@@ -9,6 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - A source's and a project's last runs: `history` on `GET /api/v1/sources/{id}` (its syncs) and on each project in `GET /api/v1/projects` (its pulls), newest first, up to 50 each, in memory since the process started. Each says when it started, how long it took, why (`scheduled`, `manual`, `refresh`, `startup`) and, for a manual run, who (the API key's name or the signed-in user, to admin keys only), and how it ended; a sync what it covered and the hosts and groups it brought, a pull the commit it moved the checkout from and to. A downstream unified-api's on-demand refresh of a federated source reads `refresh` on the origin (its remote connector sends `X-Unified-API-Refresh: 1` with the re-gather), and a refresh that outlasted its budget is a row with its error. See `docs/api.md`.
+- Host and group items: `hosts/<host>.yaml` and `groups/<group>.yaml` say what a source does differently for one host, or for every host in one of its groups, naming the source under `sources:` with its `ttl_seconds`. A host's TTL beats a group's, which beats the source's. A source that does not exist is refused, and so is a view, naming the member to use; `--check-config`, the startup log and the config API's `summary` count `hosts` and `groups`. See `docs/configuration.md#hosts-and-groups`.
+
+### Changed
+
+- **Breaking (who sets `ttl_overrides`):** a source's `ttl_overrides` moved to host and group items, and a source still setting it is refused, naming the new form: at startup, by `--check-config` and by the config API, with no conversion. Move each `ttl_overrides.hosts` entry to a `hosts/<host>.yaml` and each `ttl_overrides.groups` entry to a `groups/<group>.yaml` naming the source, in the same change as the upgrade. An instance still on the previous version refuses a `hosts` or `groups` item, so the image and the configuration have to change together. A 0.34 directory migrated at startup is written in the new shape.
 
 ### Fixed
 

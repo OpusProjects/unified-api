@@ -48,6 +48,7 @@ src/
 ├── domain/                   # Core domain types (pure, no dependencies)
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # SourceDef (file) → Source (resolved with its connector), TtlOverrides
+│   ├── host.rs               # HostDef, GroupDef: per-host / per-group TTLs, folded into sources at load
 │   ├── connector.rs          # Connector item (how to talk to a system); built-ins remote/static_inventory
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
 │   ├── sync_health.rs        # SyncHealth + registry (one per kind: sync/enrich/project/snapshot)

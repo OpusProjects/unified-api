@@ -8,6 +8,7 @@ use crate::domain::connector::Connector;
 use crate::domain::credential::Credential;
 use crate::domain::endpoint::{BUILTIN_SETTINGS, OutputEndpoint, renamed_setting};
 use crate::domain::enricher::Enricher;
+use crate::domain::host::{GroupDef, HostDef};
 use crate::domain::host_filter::HostFilter;
 use crate::domain::project::GitProject;
 use crate::domain::source::{Source, SourceDef};
@@ -29,6 +30,11 @@ pub struct AppConfig {
     // /connectors listing and for what a reload reports.
     pub sources: HashMap<String, Source>,
     pub connectors: HashMap<String, Connector>,
+    // Per-host and per-group settings, already folded into the sources they
+    // name (domain::host::fold_into_sources); kept for the counts that
+    // --check-config, the startup log and the config API report.
+    pub hosts: HashMap<String, HostDef>,
+    pub groups: HashMap<String, GroupDef>,
     pub views: HashMap<String, View>,
     pub enrichers: HashMap<String, Enricher>,
     pub projects: HashMap<String, GitProject>,
@@ -271,8 +277,10 @@ pub struct ConfigApiConfig {
 pub const REQUIRED_CONFIG_FILE: &str = "config.yaml";
 
 // The top-level keys an item file may use.
-pub const SECTIONS: [&str; 8] = [
+pub const SECTIONS: [&str; 10] = [
     "sources",
+    "hosts",
+    "groups",
     "views",
     "endpoints",
     "enrichers",
@@ -1204,11 +1212,13 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
         }
     }
     let mut section = |name: &str| entries.remove(name).unwrap_or_default();
-    let (cr, pr, co, so, vi, en, ep, ak) = (
+    let (cr, pr, co, so, ho, gr, vi, en, ep, ak) = (
         section("credentials"),
         section("projects"),
         section("connectors"),
         section("sources"),
+        section("hosts"),
+        section("groups"),
         section("views"),
         section("enrichers"),
         section("endpoints"),
@@ -1222,7 +1232,9 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
         upgrade_0_35_ssh(&mut connectors, &mut source_defs, upgraded, &mut errors);
         upgrade_0_35_output_format(&mut connectors, upgraded);
     }
-    let views = take("view", vi, &mut errors);
+    let hosts: HashMap<String, HostDef> = take("host", ho, &mut errors);
+    let groups: HashMap<String, GroupDef> = take("group", gr, &mut errors);
+    let views: HashMap<String, View> = take("view", vi, &mut errors);
     let enrichers = take("enricher", en, &mut errors);
     let endpoints = take("endpoint", ep, &mut errors);
     let api_keys = take("API key", ak, &mut errors);
@@ -1247,6 +1259,13 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
             Err(found) => errors.extend(found),
         }
     }
+    let view_ids: Vec<&String> = views.keys().collect();
+    errors.extend(crate::domain::host::fold_into_sources(
+        &hosts,
+        &groups,
+        &mut sources,
+        &view_ids,
+    ));
     if !errors.is_empty() {
         errors.sort();
         return Err(ConfigErrors::new(errors));
@@ -1261,6 +1280,8 @@ fn load(dir: &Path, upgrade: Option<&mut Vec<String>>) -> Result<AppConfig, Conf
         credentials,
         sources,
         connectors,
+        hosts,
+        groups,
         views,
         enrichers,
         projects,
@@ -2583,6 +2604,61 @@ mod tests {
             .err()
             .expect("expected validation error")
             .to_string()
+    }
+
+    // A host's and a group's TTLs live in their own items and land on the
+    // sources they name; the source file no longer says them.
+    #[test]
+    fn host_and_group_items_set_the_ttls_of_the_sources_they_name() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("web01.example.com.yaml"),
+            "hosts:\n  - name: web01.example.com\n    sources:\n      src-a:\n        ttl_seconds: 30\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("production.yaml"),
+            "groups:\n  - name: production\n    description: \"Prod\"\n    sources:\n      src-a:\n        ttl_seconds: 900\n",
+        )
+        .unwrap();
+
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+
+        let overrides = &cfg.sources["src-a"].ttl_overrides;
+        assert_eq!(overrides.hosts["web01.example.com"], 30);
+        assert_eq!(overrides.groups["production"], 900);
+        assert_eq!((cfg.hosts.len(), cfg.groups.len()), (1, 1));
+    }
+
+    #[test]
+    fn a_host_item_naming_an_unknown_source_is_refused() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("web01.yaml"),
+            "hosts:\n  - name: web01\n    sources:\n      src-gone:\n        ttl_seconds: 30\n",
+        )
+        .unwrap();
+        let err = load_err(&dir);
+        assert!(
+            err.contains("Host 'web01' references unknown source 'src-gone'"),
+            "{err}"
+        );
+    }
+
+    // ttl_overrides moved out of the source: refused, saying where to.
+    #[test]
+    fn a_source_with_ttl_overrides_is_refused_naming_the_new_form() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\n    ttl_overrides:\n      hosts:\n        web01: 30\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
+        )
+        .unwrap();
+        let err = load_err(&dir);
+        assert!(
+            err.contains("Source 'src-a' sets ttl_overrides, which moved to host and group items"),
+            "{err}"
+        );
     }
 
     #[test]

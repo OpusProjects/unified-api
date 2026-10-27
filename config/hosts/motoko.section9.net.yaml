@@ -1,0 +1,11 @@
+---
+# What a source does differently for one host. `name` is the host as the
+# sources' datasets spell it; each entry under `sources` names a source and
+# what it does for this host. A host's own TTL beats a group's, which beats
+# the source's ttl_seconds.
+hosts:
+  - name: motoko.section9.net
+    description: "Major's workstation"
+    sources:
+      src-section9:
+        ttl_seconds: 300               # fresh for 5 min here, 1 h for the rest

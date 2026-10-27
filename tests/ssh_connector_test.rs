@@ -368,24 +368,20 @@ async fn gather_at(location: &str, path: &str, args: &[String]) -> ConnectorOutp
 
 #[tokio::test]
 async fn a_script_here_is_streamed_to_the_interpreter_it_names() {
-    let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("osinfo.sh");
-    let body = "#!/bin/bash\necho '{\"os\": \"linux\"}'\n";
-    std::fs::write(&script, body).unwrap();
+    // The sample script, as a connector with location: instance reads it.
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/adapters/out/connectors/ssh/osinfo.sh"
+    );
 
-    let output = gather_at(
-        "instance",
-        script.to_str().unwrap(),
-        &["--short".into(), "it's".into()],
-    )
-    .await;
+    let output = gather_at("instance", script, &["--short".into(), "it's".into()]).await;
 
     let host = &output.dataset.hostvars["127.0.0.1"];
     // The interpreter from #!, reading standard input, the arguments quoted.
-    assert_eq!(host["command"], r"/bin/bash -s -- '--short' 'it'\''s'");
+    assert_eq!(host["command"], r"/bin/sh -s -- '--short' 'it'\''s'");
     // The file itself, byte for byte, over the connection: nothing written
     // on the host.
-    assert_eq!(host["script"], body);
+    assert_eq!(host["script"], std::fs::read_to_string(script).unwrap());
 }
 
 #[tokio::test]

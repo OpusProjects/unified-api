@@ -77,6 +77,12 @@ pub struct Source {
     #[serde(default)]
     pub connector_type: ConnectorType,
 
+    // ssh only: where script_path is (domain::connector::Location). None for
+    // the inline form, where script_path is the command and the source's
+    // `gather_mode` decides, and for every other connector.
+    #[serde(default)]
+    pub ssh_location: Option<crate::domain::connector::Location>,
+
     // The checkout a relative script_path (or static inventory path) resolves
     // in. None for remote and ssh, which run nothing from a checkout.
     #[serde(default)]
@@ -350,6 +356,23 @@ impl SourceDef {
             },
         };
 
+        let ssh_location = connectors
+            .get(&self.connector)
+            .and_then(|c| c.ssh_location());
+        // A connector that says where its path is decides what runs; the
+        // source's old switches would only look like they still did.
+        if ssh_location.is_some() {
+            for key in ["gather_mode", "fact_path"] {
+                if self.config.contains_key(key) {
+                    errors.push(format!(
+                        "Source '{id}' sets config.{key}, but its connector '{}' sets where \
+                         its path is (location) — remove {key}: the connector's path decides",
+                        self.connector
+                    ));
+                }
+            }
+        }
+
         let Some((
             connector_type,
             project_id,
@@ -370,6 +393,7 @@ impl SourceDef {
             name: self.name.clone(),
             connector: self.connector.clone(),
             connector_type,
+            ssh_location,
             project_id,
             script_path,
             script_args,

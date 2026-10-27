@@ -98,6 +98,7 @@ fn member_source(counter_file: &str, ttl_seconds: u64, allow: bool) -> Source {
         hosts_from_source: None,
         connector: "script-test".to_string(),
         connector_type: ConnectorType::Script,
+        ssh_location: None,
         sync_mode: Default::default(),
         credential_ids: vec![],
         schedule: None,

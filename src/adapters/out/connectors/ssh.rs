@@ -127,14 +127,7 @@ impl ConnectorPort for SshConnector {
                 .get("ssh_connect_timeout_seconds")
                 .and_then(|t| t.parse().ok())
                 .unwrap_or(30);
-            let gather_mode = config
-                .get("gather_mode")
-                .cloned()
-                .unwrap_or_else(|| "facts".to_string());
-            let fact_path = config
-                .get("fact_path")
-                .cloned()
-                .unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
+            let plan = plan(&script_path, &args, &config).await?;
             let legacy_algorithms = config
                 .get("ssh_legacy_algorithms")
                 .is_some_and(|v| v == "true");
@@ -203,12 +196,15 @@ impl ConnectorPort for SshConnector {
                     exit_code: None,
                 })?;
 
-            let command = build_command(&gather_mode, &fact_path, &script_path, &args);
-
             info!(
                 hosts = hosts.len(),
-                concurrency, gather_mode, "SSH connector starting"
+                concurrency,
+                what = plan.what,
+                "SSH connector starting"
             );
+            let facts = plan.facts;
+            let stdin = plan.stdin.map(Arc::new);
+            let command = plan.command;
 
             let semaphore = Arc::new(Semaphore::new(concurrency));
             let private_key = Arc::new(private_key);
@@ -228,6 +224,7 @@ impl ConnectorPort for SshConnector {
                     let key = Arc::clone(&private_key);
                     let user = username.clone();
                     let cmd = command.clone();
+                    let stdin = stdin.clone();
                     let known_hosts = known_hosts.clone();
 
                     tasks.spawn(async move {
@@ -253,6 +250,7 @@ impl ConnectorPort for SshConnector {
                                     &user,
                                     &key,
                                     &cmd,
+                                    stdin.as_deref().map(Vec::as_slice),
                                     legacy_algorithms,
                                     known_hosts.clone(),
                                 ),
@@ -293,7 +291,11 @@ impl ConnectorPort for SshConnector {
             while let Some(result) = tasks.join_next().await {
                 match result {
                     Ok((host, Some(output))) => {
-                        let vars = parse_host_output(&output, &host);
+                        let vars = if facts {
+                            parse_facts_output(&output)
+                        } else {
+                            parse_host_output(&output, &host)
+                        };
                         reachable.push(host.clone());
                         hostvars.insert(host, vars);
                     }
@@ -472,6 +474,155 @@ fn narrow_to_scope(
     Ok(narrowed)
 }
 
+// What one sync runs on every host, decided once from the connector's
+// location (ports::connector::SSH_LOCATION_CONFIG_KEY):
+// - host: every file the path matches there (one path matches itself) is
+//   run if executable, read if not, and becomes a fact named after it
+// - instance: the script file here, streamed to the host's interpreter
+// - absent: the inline form, as before location existed
+struct Plan {
+    command: String,
+    // Written to the remote command's standard input, then closed.
+    stdin: Option<Vec<u8>>,
+    // Output is a stream of facts files (parse_facts_output), not one JSON.
+    facts: bool,
+    // For the log line.
+    what: &'static str,
+}
+
+async fn plan(
+    script_path: &str,
+    args: &[String],
+    config: &HashMap<String, String>,
+) -> Result<Plan, ConnectorError> {
+    let fail = |message: String| ConnectorError {
+        message,
+        stderr: String::new(),
+        exit_code: None,
+    };
+    match config
+        .get(crate::ports::connector::SSH_LOCATION_CONFIG_KEY)
+        .map(String::as_str)
+    {
+        Some("host") => Ok(Plan {
+            command: facts_command(script_path, args),
+            stdin: None,
+            facts: true,
+            what: "files on each host",
+        }),
+        Some("instance") => {
+            // Read at every sync, like a script connector's file: a push to
+            // the project is live at the next run, no restart.
+            let script = tokio::fs::read(script_path)
+                .await
+                .map_err(|e| fail(format!("Cannot read ssh script '{script_path}': {e}")))?;
+            Ok(Plan {
+                command: with_args(&stdin_interpreter(&script), args),
+                stdin: Some(script),
+                facts: false,
+                what: "a script streamed to each host",
+            })
+        }
+        _ => {
+            // Once per command per process, not once per sync: startup has
+            // already named the connector, and an interval of warnings says
+            // nothing new.
+            static WARNED: std::sync::OnceLock<
+                std::sync::Mutex<std::collections::HashSet<String>>,
+            > = std::sync::OnceLock::new();
+            let first = WARNED
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(script_path.to_string());
+            if first {
+                warn!(
+                    "An ssh connector writes its command inline; set location on the \
+                     connector (see its warning at startup)"
+                );
+            }
+            let gather_mode = config
+                .get("gather_mode")
+                .cloned()
+                .unwrap_or_else(|| "facts".to_string());
+            let fact_path = config
+                .get("fact_path")
+                .cloned()
+                .unwrap_or_else(|| "/etc/ansible/facts.d".to_string());
+            Ok(Plan {
+                command: build_command(&gather_mode, &fact_path, script_path, args),
+                stdin: None,
+                facts: false,
+                what: "an inline command",
+            })
+        }
+    }
+}
+
+// Every file matching `pattern` on the host (a plain path matches itself),
+// the way Ansible reads local facts: an executable is run and its output
+// used (with the connector's script_args, quoted), anything else is read. Each file is announced by a record separator (0x1e, which neither
+// JSON nor INI carries) and its name without the extension, so a file that
+// is not valid JSON spoils only its own fact. The pattern goes in unquoted,
+// so the remote shell expands it; Connector::errors allowed only characters
+// that shell reads as a path or a pattern.
+fn facts_command(pattern: &str, args: &[String]) -> String {
+    let run = with_args(r#""$f""#, args);
+    format!(
+        r#"for f in {pattern}; do [ -f "$f" ] || continue; n=${{f##*/}}; n=${{n%.*}}; printf '\036%s\n' "$n"; if [ -x "$f" ]; then {run} 2>/dev/null; else cat "$f"; fi; echo; done"#
+    )
+}
+
+// A program and its arguments as one remote command line, each argument
+// quoted: an argument is a value, never shell syntax.
+fn with_args(program: &str, args: &[String]) -> String {
+    let mut line = program.to_string();
+    for arg in args {
+        line.push(' ');
+        line.push_str(&shell_quote(arg));
+    }
+    line
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+// The remote command that runs a script read from standard input: the
+// interpreter its #! line names (through env or not), sh when it names none.
+// Shells take `-s --`, so the arguments that follow are $1, $2…; Python,
+// Perl, Ruby and the like take `-`.
+fn stdin_interpreter(script: &[u8]) -> String {
+    let first = script.split(|b| *b == b'\n').next().unwrap_or_default();
+    let first = String::from_utf8_lossy(first);
+    let program = first
+        .strip_prefix("#!")
+        .and_then(|rest| {
+            let mut words = rest.split_whitespace();
+            let program = words.next()?;
+            if program.ends_with("/env") {
+                words.next()
+            } else {
+                Some(program)
+            }
+        })
+        .filter(|p| {
+            p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+        })
+        .unwrap_or("sh")
+        .to_string();
+    let name = program.rsplit('/').next().unwrap_or(&program);
+    let reads_dash = ["python", "perl", "ruby", "node", "php"]
+        .iter()
+        .any(|interpreter| name.starts_with(interpreter));
+    if reads_dash {
+        format!("{program} -")
+    } else {
+        format!("{program} -s --")
+    }
+}
+
 fn build_command(gather_mode: &str, fact_path: &str, script_path: &str, args: &[String]) -> String {
     match gather_mode {
         // In facts mode the command is fixed — script_args don't apply
@@ -549,12 +700,14 @@ fn rsa_hash_candidates(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_on_host(
     host: &str,
     port: u16,
     username: &str,
     key: &Arc<PrivateKey>,
     command: &str,
+    stdin: Option<&[u8]>,
     legacy_algorithms: bool,
     known_hosts: Option<Arc<KnownHosts>>,
 ) -> Result<String, HostError> {
@@ -629,6 +782,16 @@ async fn execute_on_host(
         .exec(true, command)
         .await
         .map_err(|e| HostError::Other(format!("Exec on {} failed: {}", host, e)))?;
+    // A script streamed from here: written to the command's standard input,
+    // which is then closed so the interpreter knows the script ended.
+    if let Some(script) = stdin {
+        channel.data(script).await.map_err(|e| {
+            HostError::Other(format!("Sending the script to {} failed: {}", host, e))
+        })?;
+        channel.eof().await.map_err(|e| {
+            HostError::Other(format!("Sending the script to {} failed: {}", host, e))
+        })?;
+    }
 
     let mut output = Vec::new();
     let mut exit_status: Option<u32> = None;
@@ -680,6 +843,60 @@ fn finish_host_output(
         ))),
         _ => Ok(String::from_utf8_lossy(&output).to_string()),
     }
+}
+
+// The facts files one host printed (facts_command): each one becomes a
+// fact named after its file. JSON first, then INI (a section is an object of
+// strings, keys lowercased, as Ansible's configparser reads them); a file
+// that is neither becomes the same error string Ansible would put there,
+// rather than dropping the host.
+fn parse_facts_output(output: &str) -> HostVars {
+    let mut vars = HashMap::new();
+    for record in output.split('\u{1e}').skip(1) {
+        let (name, content) = record.split_once('\n').unwrap_or((record, ""));
+        if name.is_empty() {
+            continue;
+        }
+        vars.insert(name.to_string(), parse_fact(content.trim()));
+    }
+    vars
+}
+
+fn parse_fact(content: &str) -> serde_json::Value {
+    if let Ok(value) = serde_json::from_str(content) {
+        return value;
+    }
+    parse_ini(content).unwrap_or_else(|| {
+        serde_json::Value::String("error loading fact - please check content".to_string())
+    })
+}
+
+fn parse_ini(content: &str) -> Option<serde_json::Value> {
+    let mut sections = serde_json::Map::new();
+    let mut current: Option<String> = None;
+    for line in content.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(section) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            current = Some(section.trim().to_string());
+            sections
+                .entry(section.trim().to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            continue;
+        }
+        // A key before any section, or a line that is not `key = value`:
+        // not INI.
+        let section = current.as_ref()?;
+        let (key, value) = line.split_once(['=', ':'])?;
+        if let Some(serde_json::Value::Object(map)) = sections.get_mut(section) {
+            map.insert(
+                key.trim().to_lowercase(),
+                serde_json::Value::String(value.trim().to_string()),
+            );
+        }
+    }
+    (!sections.is_empty()).then_some(serde_json::Value::Object(sections))
 }
 
 fn parse_host_output(output: &str, host: &str) -> HostVars {
@@ -950,5 +1167,60 @@ mod tests {
         let vars = parse_host_output("not json", "h1");
         assert_eq!(vars.get("raw_output").unwrap(), "not json");
         assert!(vars.contains_key("parse_error"));
+    }
+
+    #[test]
+    fn facts_files_become_facts_named_after_their_file() {
+        let output = "\u{1e}osinfo\n{\"id\": \"rhel\"}\n\n\u{1e}rack\n[location]\nRow = 4\n# comment\nslot: 12\n\n\u{1e}broken\nnot json or ini\n";
+        let vars = parse_facts_output(output);
+        assert_eq!(vars["osinfo"], serde_json::json!({"id": "rhel"}));
+        // INI as Ansible reads it: sections of strings, keys lowercased.
+        assert_eq!(
+            vars["rack"],
+            serde_json::json!({"location": {"row": "4", "slot": "12"}})
+        );
+        // One bad file spoils only its own fact.
+        assert_eq!(vars["broken"], "error loading fact - please check content");
+        assert_eq!(vars.len(), 3);
+    }
+
+    #[test]
+    fn the_facts_command_lets_the_remote_shell_expand_the_pattern() {
+        let command = facts_command("/etc/ansible/facts.d/*.fact", &[]);
+        assert!(command.contains(r#"then "$f" 2>/dev/null"#), "{command}");
+        // Arguments reach every executable, quoted.
+        let with = facts_command("/opt/bin/inventory", &["--format".into(), "json".into()]);
+        assert!(
+            with.contains(r#"then "$f" '--format' 'json' 2>/dev/null"#),
+            "{with}"
+        );
+        assert!(
+            command.starts_with("for f in /etc/ansible/facts.d/*.fact; do"),
+            "{command}"
+        );
+        assert!(command.contains(r"printf '\036%s\n'"), "{command}");
+    }
+
+    #[test]
+    fn a_streamed_script_runs_in_the_interpreter_it_names() {
+        assert_eq!(stdin_interpreter(b"echo hi\n"), "sh -s --");
+        assert_eq!(
+            stdin_interpreter(b"#!/bin/bash\necho hi\n"),
+            "/bin/bash -s --"
+        );
+        assert_eq!(
+            stdin_interpreter(b"#!/usr/bin/env python3\nprint(1)\n"),
+            "python3 -"
+        );
+        // Anything that is not a plain program name falls back to sh.
+        assert_eq!(stdin_interpreter(b"#!/bin/sh; rm -rf /\n"), "sh -s --");
+    }
+
+    #[test]
+    fn arguments_are_quoted_values() {
+        assert_eq!(
+            with_args("sh -s --", &["--list".into(), "it's".into()]),
+            r"sh -s -- '--list' 'it'\''s'"
+        );
     }
 }

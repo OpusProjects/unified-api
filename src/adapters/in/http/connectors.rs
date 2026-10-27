@@ -28,10 +28,15 @@ pub struct ConnectorInfo {
     pub connector_type: String,
     /// One of the connectors every instance has, which no item defines
     pub built_in: bool,
-    /// The project whose checkout holds the script. Null for ssh (the script
-    /// runs on the remote host) and for the built-ins (a static_inventory
-    /// source names its own project)
+    /// The project whose checkout holds the script. Null for a script on
+    /// this instance's disk, for an ssh path on the hosts, and for the
+    /// built-ins (a static_inventory source names its own project)
     pub project_id: Option<String>,
+    /// ssh only: where `path` is. "host": on each host, a file or a
+    /// pattern of files, each run if executable or read if not, as facts;
+    /// "instance": a script here, streamed to each host. Null for the inline form, where `path` is the command itself,
+    /// and for every other connector
+    pub location: Option<String>,
     /// Null for the built-ins
     pub path: Option<String>,
     pub script_args: Vec<String>,
@@ -116,6 +121,7 @@ fn info(
             connector_type: c.kind.name().to_string(),
             built_in: false,
             project_id: c.project.clone(),
+            location: c.ssh_location().map(|l| l.name().to_string()),
             path: Some(c.path.clone()),
             script_args: c.script_args.clone(),
             host_args: c.host_args.clone(),
@@ -138,6 +144,7 @@ fn info(
             connector_type: id.to_string(),
             built_in: true,
             project_id: None,
+            location: None,
             path: None,
             script_args: Vec::new(),
             host_args: Vec::new(),

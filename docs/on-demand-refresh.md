@@ -190,7 +190,8 @@ connectors:
   - name: ssh-facts
     description: "Ansible local facts over SSH"
     type: "ssh"
-    path: "gather_facts"              # a label: facts mode runs no command of ours
+    location: "host"
+    path: "/etc/ansible/facts.d/*.fact" # read on each host, nothing of ours runs
 ```
 
 ```yaml
@@ -221,8 +222,6 @@ sources:
     # consumer's read is worth a gather.
     ttl_seconds: 3600
     config:
-      gather_mode: "facts"
-      fact_path: "/etc/ansible/facts.d"
       concurrency: "40"
       ssh_connect_timeout_seconds: "20"
 ```

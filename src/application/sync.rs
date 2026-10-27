@@ -469,6 +469,14 @@ async fn run_sync(
     }
 
     let args = args_for_scope(source, &scope);
+    // Where an ssh connector's path is, for the adapter (its contract, like
+    // hosts_spec above); absent for the inline form.
+    if let Some(location) = source.ssh_location {
+        config.insert(
+            crate::ports::connector::SSH_LOCATION_CONFIG_KEY.to_string(),
+            location.name().to_string(),
+        );
+    }
 
     let start = Instant::now();
 

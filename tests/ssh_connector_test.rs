@@ -5,7 +5,9 @@
 // What is covered end to end: host key verification (the recorded key
 // gathers; a mismatched or unknown key is refused BEFORE authentication and
 // the host lands in `unreachable`, keeping its last known data upstream),
-// and the accept-any behaviour when no known_hosts is configured.
+// the accept-any behaviour when no known_hosts is configured, and the two
+// connector locations: a script here streamed to the host's interpreter,
+// and files on the host read as facts.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -45,13 +47,34 @@ VhOywZ7lu/u6xmtxrOepAAAABmNsaWVudAECAwQFBgc=
 const OTHER_PUBLIC: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz+d7teqxdefYuytF921PeNhFlO0SDtXy57BMwsJWLh";
 
-// Accepts any public key auth, and answers every exec with one JSON object
-// and a clean exit — the shape parse_host_output stores as host vars.
+// Accepts any public key auth. Without `echo`, answers every exec with one
+// JSON object and a clean exit — the shape parse_host_output stores as host
+// vars. With it, plays a host: a script on standard input is answered once
+// the input ends, with the command and the script it got; the facts loop is
+// answered with two facts files, one JSON and one INI.
 struct TestServer {
     auth_attempted: Arc<AtomicBool>,
     // The server half of the session channel; dropping it would close the
     // channel under the client, so it is parked here for the handler's life.
     channel: Option<Channel<Msg>>,
+    echo: bool,
+    command: String,
+    stdin: Vec<u8>,
+}
+
+impl TestServer {
+    fn answer(
+        &self,
+        channel: ChannelId,
+        body: Vec<u8>,
+        session: &mut Session,
+    ) -> Result<(), russh::Error> {
+        session.data(channel, body)?;
+        session.exit_status_request(channel, 0)?;
+        session.eof(channel)?;
+        session.close(channel)?;
+        Ok(())
+    }
 }
 
 impl server::Handler for TestServer {
@@ -80,21 +103,56 @@ impl server::Handler for TestServer {
     async fn exec_request(
         &mut self,
         channel: ChannelId,
-        _command: &[u8],
+        command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
-        session.data(channel, &b"{\"probe\": true}"[..])?;
-        session.exit_status_request(channel, 0)?;
-        session.eof(channel)?;
-        session.close(channel)?;
+        if !self.echo {
+            return self.answer(channel, b"{\"probe\": true}".to_vec(), session);
+        }
+        self.command = String::from_utf8_lossy(command).into_owned();
+        if self.command.starts_with("for f in ") {
+            let facts =
+                "\u{1e}owner\n{\"team\": \"platform\"}\n\n\u{1e}rack\n[location]\nRow = 4\n\n";
+            return self.answer(channel, facts.as_bytes().to_vec(), session);
+        }
+        // A script on standard input: answered when the input ends.
         Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        _channel: ChannelId,
+        data: &[u8],
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.stdin.extend_from_slice(data);
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        if !self.echo {
+            return Ok(());
+        }
+        let body = serde_json::json!({
+            "command": self.command,
+            "script": String::from_utf8_lossy(&self.stdin),
+        });
+        self.answer(channel, body.to_string().into_bytes(), session)
     }
 }
 
 // Bind on an ephemeral loopback port and serve connections until the test
 // ends (the listener task dies with the runtime).
 async fn start_server(auth_attempted: Arc<AtomicBool>) -> SocketAddr {
+    serve(auth_attempted, false).await
+}
+
+async fn serve(auth_attempted: Arc<AtomicBool>, echo: bool) -> SocketAddr {
     let key = russh::keys::decode_secret_key(SERVER_KEY, None).unwrap();
     let config = Arc::new(server::Config {
         keys: vec![key],
@@ -113,6 +171,9 @@ async fn start_server(auth_attempted: Arc<AtomicBool>) -> SocketAddr {
             let handler = TestServer {
                 auth_attempted: Arc::clone(&auth_attempted),
                 channel: None,
+                echo,
+                command: String::new(),
+                stdin: Vec::new(),
             };
             tokio::spawn(async move {
                 if let Ok(session) = server::run_stream(config, socket, handler).await {
@@ -271,4 +332,97 @@ async fn an_unreadable_known_hosts_file_fails_the_sync_loudly() {
         .await
         .expect_err("a sync that cannot verify anything must fail, not gather");
     assert!(err.message.contains("ssh_known_hosts"), "{}", err.message);
+}
+
+// A connector with a location, against the echoing host: the path and
+// arguments it is given, and what came back.
+async fn gather_at(location: &str, path: &str, args: &[String]) -> ConnectorOutput {
+    let addr = serve(Arc::new(AtomicBool::new(false)), true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("client_key");
+    std::fs::write(&key_path, CLIENT_KEY).unwrap();
+    let config: HashMap<String, String> = HashMap::from([
+        ("hosts".into(), "127.0.0.1".into()),
+        ("port".into(), addr.port().to_string()),
+        ("ssh_connect_timeout_seconds".into(), "10".into()),
+        (
+            unified_api::ports::connector::SSH_LOCATION_CONFIG_KEY.into(),
+            location.into(),
+        ),
+    ]);
+    let credentials: HashMap<String, String> = HashMap::from([
+        ("username".into(), "tester".into()),
+        (
+            "ssh_key_path".into(),
+            key_path.to_string_lossy().into_owned(),
+        ),
+    ]);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        SshConnector::new().execute(path, args, OutputFormat::Native, &config, &credentials),
+    )
+    .await
+    .expect("the SSH gather deadlocked")
+    .expect("the gather succeeds")
+}
+
+#[tokio::test]
+async fn a_script_here_is_streamed_to_the_interpreter_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("osinfo.sh");
+    let body = "#!/bin/bash\necho '{\"os\": \"linux\"}'\n";
+    std::fs::write(&script, body).unwrap();
+
+    let output = gather_at(
+        "instance",
+        script.to_str().unwrap(),
+        &["--short".into(), "it's".into()],
+    )
+    .await;
+
+    let host = &output.dataset.hostvars["127.0.0.1"];
+    // The interpreter from #!, reading standard input, the arguments quoted.
+    assert_eq!(host["command"], r"/bin/bash -s -- '--short' 'it'\''s'");
+    // The file itself, byte for byte, over the connection: nothing written
+    // on the host.
+    assert_eq!(host["script"], body);
+}
+
+#[tokio::test]
+async fn a_missing_script_here_fails_the_sync_naming_it() {
+    let addr = serve(Arc::new(AtomicBool::new(false)), true).await;
+    let config: HashMap<String, String> = HashMap::from([
+        ("hosts".into(), "127.0.0.1".into()),
+        ("port".into(), addr.port().to_string()),
+        (
+            unified_api::ports::connector::SSH_LOCATION_CONFIG_KEY.into(),
+            "instance".into(),
+        ),
+    ]);
+    let err = SshConnector::new()
+        .execute(
+            "/nowhere/osinfo.sh",
+            &[],
+            OutputFormat::Native,
+            &config,
+            &HashMap::new(),
+        )
+        .await
+        .expect_err("no script, no sync");
+    assert!(
+        err.message.contains("/nowhere/osinfo.sh"),
+        "{}",
+        err.message
+    );
+}
+
+#[tokio::test]
+async fn files_on_the_host_become_facts_named_after_them() {
+    let output = gather_at("host", "/etc/ansible/facts.d/*.fact", &[]).await;
+
+    let host = &output.dataset.hostvars["127.0.0.1"];
+    assert_eq!(host["owner"], serde_json::json!({"team": "platform"}));
+    assert_eq!(host["rack"], serde_json::json!({"location": {"row": "4"}}));
+    // Each fact is also a group, as before.
+    assert!(output.dataset.groups.contains_key("rack"));
 }

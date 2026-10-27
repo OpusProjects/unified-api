@@ -8,7 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- ssh connectors say where their `path` is with `location`: `host` runs or reads every file the path matches on each host (one file or a pattern such as `/etc/ansible/facts.d/*.fact`), each becoming a fact named after it, JSON or INI as Ansible reads local facts, executables given the connector's `script_args`; `instance` (the default when `project` is set) reads a script from a project checkout or this instance's disk at every sync and streams it over the connection to the interpreter its `#!` line names, writing nothing on the hosts. `project` is now accepted on ssh connectors, and `GET /api/v1/connectors` adds `location` (see `docs/connectors.md`).
 - Metric `unified_api_source_requests_total{source,operation,outcome}`: every call this instance makes to an external system's API, one per run of a script connector (a full sync, or a partial one: a refresh, a host, a group) or an enricher, leaving out coalesced syncs, `ssh`, `static_inventory` and `remote` (another unified-api); what the Overview's outgoing requests chart reads.
+
+### Deprecated
+
+- The inline ssh form, a connector with neither `location` nor `project` whose `path` is the command and whose sources set `gather_mode`/`fact_path`: it keeps working exactly as in 0.35, warned about at startup and by `--check-config`, and will be removed; `docs/connectors.md` shows how to move it. A source whose connector sets `location` may not set `gather_mode` or `fact_path`.
 
 ### Fixed
 

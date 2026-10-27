@@ -528,6 +528,18 @@ struct ServerFile {
 // Expects to find: config.yaml, credentials.yaml, sources.yaml, etc.
 // Optional files are simply ignored if they do not exist.
 impl AppConfig {
+    // What loads and works but should change, one line each, sorted: logged
+    // at startup and printed by --check-config, never a reason to refuse.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings: Vec<String> = self
+            .connectors
+            .iter()
+            .flat_map(|(id, c)| c.warnings(id))
+            .collect();
+        warnings.sort();
+        warnings
+    }
+
     // Fails with every problem at once (see validate_errors), so one
     // --check-config run — or one rejected API write — reports the whole list
     // instead of the first line of it.

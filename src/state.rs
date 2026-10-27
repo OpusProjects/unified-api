@@ -295,14 +295,19 @@ impl AppState {
     // None = the id is not in sources.yaml, same contract as sources.get().
     pub fn source_for_sync(&self, id: &str) -> Option<crate::domain::source::Source> {
         let mut source = self.config().sources.get(id)?.clone();
-        // Only script and static_inventory sources read a file on this
-        // machine; ssh runs its script_path remotely and remote speaks HTTP,
-        // and neither carries a project.
+        // Script and static_inventory sources read a file on this machine,
+        // and so does an ssh source whose script is here (location:
+        // instance), which it then streams to each host. Remote speaks HTTP,
+        // and an ssh path on the hosts is resolved there.
+        let reads_here = match source.connector_type {
+            ConnectorType::Remote => false,
+            ConnectorType::Ssh => {
+                source.ssh_location == Some(crate::domain::connector::Location::Instance)
+            }
+            ConnectorType::Script | ConnectorType::StaticInventory => true,
+        };
         if let Some(project_id) = source.project_id.clone()
-            && !matches!(
-                source.connector_type,
-                ConnectorType::Ssh | ConnectorType::Remote
-            )
+            && reads_here
         {
             source.script_path = crate::application::scripts::resolve_script_path(
                 &self.projects_dir,
@@ -310,6 +315,9 @@ impl AppState {
                 &project_id,
                 &source.script_path,
             );
+            if source.connector_type == ConnectorType::Ssh {
+                return Some(source);
+            }
             // Same per-execution stance for the project's virtualenv: if one
             // exists on disk, the process adapter puts it on the child's PATH
             if let Some(bin) =

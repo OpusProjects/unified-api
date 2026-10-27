@@ -212,6 +212,54 @@ has **never** synced successfully has no cache entry, so it doesn't appear in
 `GET /sources` at all — watch `unified_api_source_cached` or `/readyz`'s
 `sources_pending` for that case.
 
+### Sync and pull history
+
+The health block sums up the runs; `history` lists them. `GET /sources/{id}`
+carries a source's last syncs and `GET /projects` each project's last pulls,
+newest first, up to 50 each, kept in memory since the process started (a
+restart starts them over, as it does the health):
+
+```json
+{
+  "history": [
+    {
+      "started_at": 1793116800,
+      "duration_ms": 4210,
+      "trigger": "manual",
+      "by": "key-ops",
+      "scope": "full",
+      "hosts": 1234,
+      "groups": 12
+    },
+    {
+      "started_at": 1793113200,
+      "duration_ms": 300000,
+      "trigger": "scheduled",
+      "scope": "full",
+      "error": "sync timed out after 300s"
+    }
+  ]
+}
+```
+
+- `trigger`: `scheduled` (the timer), `manual` (Sync, Pull, the API),
+  `refresh` (an on-demand read with `?refresh=true`, here or on a downstream
+  unified-api federating this source) or `startup` (a clone of a missing
+  checkout, at boot or on a reload). Set by unified-api, never by the caller:
+  an `x-request-id` reaches the script, not the history.
+- `by`: who asked, the API key's name or the signed-in user, for a manual run
+  and for a downstream instance's refresh (its key); shown to admin keys only.
+- A sync has `scope` (`full`, `host:a,b`, `group:x`), and `hosts` and
+  `groups` when it worked; a pull has `revision_before` and `revision`, the
+  commit it found the checkout at and left it at. `error` when it failed.
+- A refresh that outlasts its budget is a row too, with its `error`
+  (`refresh did not finish within 10s`) and the time it waited.
+- A sync's `duration_ms` is the gather and the cache write, as the
+  `sync_duration_ms` of the sync response; enrichment re-applied after it is
+  not included. Two pulls of one project never overlap: the second waits.
+- A sync that coalesced into one already running is not a run of its own:
+  the one that ran is in the history. A view's is empty: it syncs nothing.
+
 ### Discovery
 
 Two cheap routes answer "what's in this source" without transferring the

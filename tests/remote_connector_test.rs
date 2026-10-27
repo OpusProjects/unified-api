@@ -12,7 +12,7 @@ use unified_api::application::sync::{
 use unified_api::domain::cache_entry::CacheEntry;
 use unified_api::domain::dataset::Dataset;
 use unified_api::domain::source::{ConnectorType, Source};
-use unified_api::domain::sync_health::SyncHealthRegistry;
+use unified_api::domain::sync_health::{RunTrigger, SyncHealthRegistry};
 use unified_api::ports::cache::CachePort;
 use unified_api::ports::connector::ConnectorPort;
 
@@ -662,6 +662,50 @@ async fn refresh_origin_makes_the_edge_re_gather_the_host() {
     assert!(central_age < 30, "central age was {}", central_age);
     // the script's real output replaced the stale fixture
     assert_ne!(entry.dataset.hostvars["motoko.section9.net"]["os"], "stale");
+}
+
+// The origin's history says why it re-gathered: a downstream refresh of a read
+// arrives as `refresh` (the remote connector says so with a header), while a
+// downstream sync that merely asked for refresh_origin — a person's Sync
+// button on the federated source — stays `manual`. Both by the peer's key
+// (here an open edge, so "open").
+#[tokio::test]
+async fn the_origin_records_a_downstream_refresh_as_refresh() {
+    let (url, edge_state) = spawn_gathering_edge().await;
+
+    let central = |run_trigger: RunTrigger| {
+        let url = url.clone();
+        async move {
+            let outcome = sync_source(
+                &MemoryCache::new(),
+                &RemoteConnector::new(),
+                &MockSecrets::new(),
+                &SyncHealthRegistry::new(),
+                &unified_api::domain::source::AdvertisedScopeRegistry::new(),
+                &SyncCoordinator::new(),
+                "src-central",
+                &remote_source(&url),
+                SyncRequest::refreshing_origin(
+                    SyncScope::Hosts(vec!["motoko.section9.net".to_string()]),
+                    DEFAULT_REFRESH_DEPTH,
+                )
+                .with_run_trigger(run_trigger),
+                None,
+            )
+            .await;
+            assert!(outcome.success(), "sync failed: {:?}", outcome.error);
+        }
+    };
+    central(RunTrigger::Manual).await;
+    central(RunTrigger::Refresh).await;
+
+    let history = edge_state.sync_health.history("src-edge");
+    let triggers: Vec<RunTrigger> = history.iter().map(|run| run.trigger).collect();
+    assert_eq!(triggers, [RunTrigger::Refresh, RunTrigger::Manual]);
+    assert!(
+        history.iter().all(|run| run.by.as_deref() == Some("open")),
+        "{history:?}"
+    );
 }
 
 // A refresh the origin cannot satisfy is reported, not papered over with older

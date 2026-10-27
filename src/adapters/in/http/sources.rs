@@ -307,6 +307,60 @@ impl From<SyncHealth> for SyncHealthInfo {
     }
 }
 
+// One run of a source's syncs or a project's pulls, newest first in the
+// `history` beside the health above: what that health sums up, run by run.
+// The fields a kind does not have are left out.
+#[derive(Serialize, ToSchema)]
+pub struct RunInfo {
+    /// When it started, unix seconds
+    pub started_at: u64,
+    /// How long it took. A sync's is the gather and the cache write (the
+    /// sync response's `sync_duration_ms`), not the enrichment after it
+    pub duration_ms: u64,
+    /// "scheduled", "manual" (Sync, Pull, the API), "refresh" (an on-demand
+    /// read, here or on a downstream instance federating the source) or
+    /// "startup" (a clone of a missing checkout, at boot or on a reload)
+    pub trigger: &'static str,
+    /// Who asked, for a manual run or a downstream instance's refresh: the
+    /// API key's name or the signed-in user. Admin keys only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// What a sync covered: "full", "host:a,b" or "group:x"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Why it failed; absent when it worked
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// What a sync that worked brought
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<usize>,
+    /// The commit a pull found the checkout at, and left it at
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+impl RunInfo {
+    // `who`: whether this caller may see who asked (admin keys).
+    pub fn from_run(run: crate::domain::sync_health::RunRecord, who: bool) -> Self {
+        Self {
+            started_at: run.started_at,
+            duration_ms: run.duration_ms,
+            trigger: run.trigger.name(),
+            by: run.by.filter(|_| who),
+            scope: run.scope,
+            error: run.error,
+            hosts: run.hosts,
+            groups: run.groups,
+            revision_before: run.revision_before,
+            revision: run.revision,
+        }
+    }
+}
+
 // #[utoipa::path] describes the endpoint for documentation:
 // - get = HTTP method
 // - path = the URL

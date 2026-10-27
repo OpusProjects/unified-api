@@ -2651,3 +2651,133 @@ async fn hosts_route_takes_the_dataset_selectors() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["error"].as_str().unwrap().contains("no operator"));
 }
+
+// A source's detail carries its last syncs, newest first: why, what each
+// covered and brought. Who asked shows to admin keys only.
+#[tokio::test]
+async fn a_sources_detail_carries_its_sync_history() {
+    let keys = vec![
+        ResolvedApiKey {
+            id: "admin".to_string(),
+            name: "key-ops".to_string(),
+            secret: "admin-secret".to_string(),
+            permissions: Permissions::Admin,
+        },
+        ResolvedApiKey {
+            id: "alpha-only".to_string(),
+            name: "alpha-only".to_string(),
+            secret: "alpha-secret".to_string(),
+            permissions: Permissions::Scoped {
+                sources: ["src-alpha".to_string()].into_iter().collect(),
+                endpoints: std::collections::HashSet::new(),
+            },
+        },
+    ];
+    let sources = std::collections::HashMap::from([(
+        "src-alpha".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    )]);
+    let app = unified_api::AppBuilder::new()
+        .sources(sources)
+        .api_keys(keys)
+        .build();
+
+    let sync = Request::builder()
+        .method("POST")
+        .uri("/api/v1/sources/src-alpha/sync")
+        .header("x-api-key", "admin-secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(sync).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let detail = |key: &'static str| {
+        let app = app.clone();
+        async move {
+            let request = Request::builder()
+                .uri("/api/v1/sources/src-alpha")
+                .header("x-api-key", key)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        }
+    };
+    let admin = detail("admin-secret").await;
+    let run = &admin["history"][0];
+    assert_eq!(run["trigger"], "manual");
+    assert_eq!(run["by"], "key-ops");
+    assert_eq!(run["scope"], "full");
+    assert!(run["hosts"].as_u64().unwrap() > 0, "{run}");
+    assert!(run.get("error").is_none());
+    assert!(run["started_at"].as_u64().unwrap() > 0);
+
+    let restricted = detail("alpha-secret").await;
+    assert_eq!(restricted["history"][0]["trigger"], "manual");
+    assert!(restricted["history"][0].get("by").is_none(), "admin only");
+}
+
+// The history's trigger is the caller's to set, not the client's: a request
+// id that says "scheduled" is still a manual sync, refresh_origin alone (a
+// person's Sync button on a federated source) is still manual, and only a
+// peer's refresh — refresh_origin plus the header its remote connector adds
+// — reads `refresh`, by the peer key's name.
+#[tokio::test]
+async fn a_syncs_history_trigger_cannot_be_named_by_the_client() {
+    let keys = vec![ResolvedApiKey {
+        id: "admin".to_string(),
+        name: "key-peer".to_string(),
+        secret: "admin-secret".to_string(),
+        permissions: Permissions::Admin,
+    }];
+    let sources = std::collections::HashMap::from([(
+        "src-alpha".to_string(),
+        script_source("tests/adapters/out/connectors/inventory.py"),
+    )]);
+    let (app, state) = unified_api::AppBuilder::new()
+        .sources(sources)
+        .api_keys(keys)
+        .build_with_state();
+
+    let sync = |query: &'static str, headers: &'static [(&'static str, &'static str)]| {
+        let app = app.clone();
+        async move {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/sources/src-alpha/sync{query}"))
+                .header("x-api-key", "admin-secret");
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let response = app
+                .oneshot(request.body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    };
+
+    sync("", &[("x-request-id", "scheduled")]).await;
+    sync("", &[("x-request-id", "refresh")]).await;
+    sync("?refresh_origin=true", &[]).await;
+    // the header means nothing without the refresh it qualifies
+    sync("", &[("x-unified-api-refresh", "1")]).await;
+    sync("?refresh_origin=true", &[("x-unified-api-refresh", "1")]).await;
+
+    let history = state.sync_health.history("src-alpha");
+    let triggers: Vec<&str> = history.iter().map(|run| run.trigger.name()).collect();
+    assert_eq!(
+        triggers,
+        ["refresh", "manual", "manual", "manual", "manual"],
+        "newest first"
+    );
+    assert!(
+        history
+            .iter()
+            .all(|run| run.by.as_deref() == Some("key-peer")),
+        "{history:?}"
+    );
+}

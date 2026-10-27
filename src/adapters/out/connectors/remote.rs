@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 use crate::domain::dataset::Dataset;
 use crate::ports::connector::{
     ConnectorError, ConnectorOutput, ConnectorPort, ConnectorResult, DatasetAges,
+    REFRESH_ON_READ_CONFIG_KEY, REFRESH_ON_READ_HEADER,
 };
 
 // Federation connector: another unified-api instance is the source.
@@ -142,7 +143,13 @@ impl ConnectorPort for RemoteConnector {
                     remote_source,
                     refresh_query(&host_filter, remaining)
                 );
-                trigger_remote_refresh(&client, &sync_url, &api_key).await?;
+                // Said only when an on-demand read caused this, so the origin's
+                // history tells a peer's refresh from a person's Sync button —
+                // both arrive with refresh_origin=true.
+                let on_read = config
+                    .get(REFRESH_ON_READ_CONFIG_KEY)
+                    .is_some_and(|v| v == "true");
+                trigger_remote_refresh(&client, &sync_url, &api_key, on_read).await?;
             }
 
             // 1. The data. Only a FULL pull revalidates: a host-scoped
@@ -325,6 +332,7 @@ async fn trigger_remote_refresh(
     client: &reqwest::Client,
     url: &str,
     api_key: &Option<String>,
+    on_read: bool,
 ) -> Result<(), ConnectorError> {
     #[derive(Deserialize)]
     struct RemoteSyncResult {
@@ -335,7 +343,12 @@ async fn trigger_remote_refresh(
         total_hosts: usize,
     }
 
-    let response = send(client, reqwest::Method::POST, url, api_key, None).await?;
+    let extra: &[(&str, &str)] = if on_read {
+        &[(REFRESH_ON_READ_HEADER, "1")]
+    } else {
+        &[]
+    };
+    let response = send(client, reqwest::Method::POST, url, api_key, None, extra).await?;
     let result: RemoteSyncResult = response.json().await.map_err(|e| {
         connector_error(&format!(
             "remote sync at '{}' did not answer a sync result: {}",
@@ -430,6 +443,7 @@ async fn get_conditional(
         url,
         api_key,
         if_none_match.as_deref(),
+        &[],
     )
     .await
 }
@@ -442,8 +456,12 @@ async fn send(
     url: &str,
     api_key: &Option<String>,
     if_none_match: Option<&str>,
+    extra_headers: &[(&str, &str)],
 ) -> Result<reqwest::Response, ConnectorError> {
     let mut request = client.request(method, url);
+    for (name, value) in extra_headers {
+        request = request.header(*name, *value);
+    }
     if let Some(key) = api_key {
         request = request.header("x-api-key", key);
     }

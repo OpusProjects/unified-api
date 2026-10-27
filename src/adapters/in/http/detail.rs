@@ -8,7 +8,7 @@ use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::adapters::r#in::http::index;
-use crate::adapters::r#in::http::sources::SyncHealthInfo;
+use crate::adapters::r#in::http::sources::{RunInfo, SyncHealthInfo};
 use crate::adapters::r#in::http::views;
 use crate::domain::source::ConnectorType;
 use crate::domain::sync_mode::SyncMode;
@@ -53,6 +53,10 @@ pub struct SourceDetail {
     pub dataset_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_health: Option<SyncHealthInfo>,
+    /// Its last syncs, newest first (up to 50, kept in memory since this
+    /// process started): when, why, what each covered and how it ended.
+    /// Empty for a view, which syncs nothing.
+    pub history: Vec<RunInfo>,
 
     /// How this source gathers. Absent for a view, which gathers nothing, and
     /// absent for a non-admin key: it names the git project, the script path
@@ -164,6 +168,12 @@ pub async fn get_source(
         total_groups: entry.as_ref().map(|e| e.dataset.groups.len()),
         dataset_bytes: entry.as_ref().and_then(|e| e.serialized_len()),
         sync_health: state.sync_health.get(&id).map(Into::into),
+        history: state
+            .sync_health
+            .history(&id)
+            .into_iter()
+            .map(|run| RunInfo::from_run(run, auth.permissions.is_admin()))
+            .collect(),
         gathering: auth.permissions.is_admin().then(|| Gathering {
             connector: source.connector.clone(),
             connector_type: source.connector_type.clone(),

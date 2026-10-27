@@ -10,7 +10,7 @@ use crate::application::enrich::run_enricher;
 use crate::application::projects::sync_project;
 use crate::application::sync::{SyncRequest, SyncScope, sync_source};
 use crate::domain::project::GitProject;
-use crate::domain::sync_health::SyncHealthRegistry;
+use crate::domain::sync_health::{RunTrigger, SyncHealthRegistry};
 use crate::ports::cache::CachePort;
 use crate::ports::git::GitPort;
 use crate::ports::secrets::SecretsPort;
@@ -204,7 +204,9 @@ async fn scheduled_sync(
         &state.syncs,
         source_id,
         &source,
-        SyncRequest::new(SyncScope::Full).with_trigger("scheduled"),
+        SyncRequest::new(SyncScope::Full)
+            .with_trigger("scheduled")
+            .with_run_trigger(RunTrigger::Scheduled),
         Some(&enrichment),
     )
     .await;
@@ -315,6 +317,9 @@ async fn scheduled_project_pull(
         project_id,
         project,
         projects_dir,
+        crate::application::projects::RunOrigin::of(
+            crate::domain::sync_health::RunTrigger::Scheduled,
+        ),
     )
     .await
     {
@@ -543,6 +548,9 @@ fn clone_missing_checkouts(state: Arc<AppState>) -> Vec<tokio::task::JoinHandle<
                 &project_id,
                 &project,
                 &state.projects_dir,
+                crate::application::projects::RunOrigin::of(
+                    crate::domain::sync_health::RunTrigger::Startup,
+                ),
             )
             .await
             {

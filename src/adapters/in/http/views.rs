@@ -549,6 +549,8 @@ pub fn detail(
         dataset_bytes: None,
         // Nothing syncs a view; each member's health is in `members`.
         sync_health: None,
+        // A view syncs nothing: its members' pages have their histories.
+        history: Vec::new(),
         gathering: None,
         members: Some(member_statuses(state, view, &snap)),
         related: crate::adapters::r#in::http::index::view_related(id),

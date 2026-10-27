@@ -13,6 +13,8 @@ use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::sync::{
     DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source as application_sync_source,
 };
+use crate::domain::sync_health::RunTrigger;
+use crate::ports::connector::REFRESH_ON_READ_HEADER;
 
 // IntoParams = utoipa generates documentation for query params
 // Each Option<String> field appears as an optional parameter in Swagger
@@ -103,11 +105,24 @@ pub async fn sync_source(
     // The refresh intent is separate from the scope: the scope says which hosts,
     // this says whether a federated source's origin should go and re-gather them
     // rather than hand over what it already has.
-    let mut request = if params.refresh_origin.unwrap_or(false) {
+    let refresh_origin = params.refresh_origin.unwrap_or(false);
+    let mut request = if refresh_origin {
         SyncRequest::refreshing_origin(scope, params.refresh_depth.unwrap_or(DEFAULT_REFRESH_DEPTH))
     } else {
         SyncRequest::new(scope)
     };
+    // What the source's history calls this sync. A downstream unified-api's
+    // remote connector marks the re-gather an on-demand read caused with
+    // REFRESH_ON_READ_HEADER; refresh_origin alone is not enough, because a
+    // person's Sync button on a federated source sends it too. Everything
+    // else that arrives over HTTP is somebody asking — never the x-request-id,
+    // which the client chooses and could call "scheduled".
+    let on_read = refresh_origin && headers.contains_key(REFRESH_ON_READ_HEADER);
+    request = request.with_run_trigger(if on_read {
+        RunTrigger::Refresh
+    } else {
+        RunTrigger::Manual
+    });
     // The id the request-id layer assigned (or the caller sent): handed to
     // the connector as SOURCE_CONFIG's `trigger`, so the script's own logs
     // join the same trace as the access log
@@ -117,6 +132,8 @@ pub async fn sync_source(
     {
         request = request.with_trigger(request_id);
     }
+    // Who, for the source's history: as the audit log names them.
+    request = request.by(auth.key_name.as_deref().unwrap_or("open"));
 
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)

@@ -81,6 +81,7 @@ impl Modify for SecurityAddon {
         http::sources::HostStatus,
         http::sources::SourceStatus,
         http::sources::SyncHealthInfo,
+        http::sources::RunInfo,
         http::scope::ScopeInfo,
         http::views::ViewMemberStatus,
         http::cache::EvictResult,

@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
-use crate::adapters::r#in::http::sources::SyncHealthInfo;
+use crate::adapters::r#in::http::sources::{RunInfo, SyncHealthInfo};
 use crate::application::projects::sync_project;
 
 // Operational routes for git project checkouts. Admin-only: this is deploy
@@ -46,6 +46,10 @@ pub struct ProjectInfo {
     /// visible: `checkout_present` stays true while every pull fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_health: Option<SyncHealthInfo>,
+    /// Its last pulls, newest first (up to 50, kept in memory since this
+    /// process started): when, why and by whom, and the commit each moved
+    /// the checkout from and to.
+    pub history: Vec<RunInfo>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -132,6 +136,12 @@ pub async fn list_projects(
                 enrichers: users_of(&config.enrichers, id, |e| e.project_id.as_deref()),
             },
             sync_health: state.project_health.get(id).map(Into::into),
+            history: state
+                .project_health
+                .history(id)
+                .into_iter()
+                .map(|run| RunInfo::from_run(run, true))
+                .collect(),
         });
     }
 
@@ -185,6 +195,10 @@ pub async fn sync_project_now(
         &id,
         project,
         &state.projects_dir,
+        crate::application::projects::RunOrigin {
+            trigger: crate::domain::sync_health::RunTrigger::Manual,
+            by: Some(auth.key_name.as_deref().unwrap_or("open").to_string()),
+        },
     )
     .await;
     let duration_ms = start.elapsed().as_millis();

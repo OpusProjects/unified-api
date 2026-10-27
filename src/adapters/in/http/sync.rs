@@ -117,6 +117,8 @@ pub async fn sync_source(
     {
         request = request.with_trigger(request_id);
     }
+    // Who, for the source's history: as the audit log names them.
+    request = request.by(auth.key_name.as_deref().unwrap_or("open"));
 
     // The handler only translates HTTP ↔ use case; the sync logic
     // lives in application::sync (shared with the scheduler)

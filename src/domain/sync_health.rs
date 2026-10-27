@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -21,6 +21,59 @@ pub struct SyncHealth {
     /// Failed attempts since the last success — 0 while healthy
     pub consecutive_failures: u32,
 }
+
+// What started a run: the timer, a person (Sync, Pull, the API), an
+// on-demand refresh of a read, or the process itself (the clones at boot,
+// a project added by a reload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunTrigger {
+    Scheduled,
+    Manual,
+    Refresh,
+    Startup,
+}
+
+impl RunTrigger {
+    pub fn name(self) -> &'static str {
+        match self {
+            RunTrigger::Scheduled => "scheduled",
+            RunTrigger::Manual => "manual",
+            RunTrigger::Refresh => "refresh",
+            RunTrigger::Startup => "startup",
+        }
+    }
+}
+
+// One run, as the history keeps it: when, why and by whom, what it covered,
+// and how it ended. The fields a kind does not have stay None: hosts and
+// groups are a sync's, the revisions a pull's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRecord {
+    /// When it started, unix seconds
+    pub started_at: u64,
+    pub duration_ms: u64,
+    pub trigger: RunTrigger,
+    /// Who asked, for a manual run: the API key's name or the signed-in user
+    pub by: Option<String>,
+    /// What a sync covered: "full", "host:a,b" or "group:x"
+    pub scope: Option<String>,
+    /// Why it failed; None when it worked
+    pub error: Option<String>,
+    pub hosts: Option<usize>,
+    pub groups: Option<usize>,
+    /// The commit before and after a pull
+    pub revision_before: Option<String>,
+    pub revision: Option<String>,
+}
+
+// How many runs each id keeps. In memory only, like the health above: a
+// restart starts the history over. Enough for a day of half-hourly syncs,
+// and the same number an application keeps in unified-gitops.
+pub const HISTORY: usize = 50;
+
+// An error is kept whole up to this length: a connector's stderr can be
+// long, and fifty of them per source are held in memory.
+const HISTORY_ERROR: usize = 2000;
 
 // What is stored internally: Instants, converted to ages when read.
 #[derive(Debug)]
@@ -48,6 +101,9 @@ struct Record {
 #[derive(Debug, Default)]
 pub struct SyncHealthRegistry {
     inner: Mutex<HashMap<String, Record>>,
+    // The last runs of each id, newest first: what the health above sums up
+    // (the last attempt, the streak), one row per run.
+    history: Mutex<HashMap<String, VecDeque<RunRecord>>>,
 }
 
 impl SyncHealthRegistry {
@@ -101,6 +157,40 @@ impl SyncHealthRegistry {
         })
     }
 
+    // Keeps one run in the id's history, newest first, the oldest dropped
+    // past HISTORY. Separate from record_success/record_failure, which every
+    // caller already makes: only the runs a person reads about pass here.
+    pub fn record_run(&self, id: &str, mut run: RunRecord) {
+        if let Some(error) = &mut run.error
+            && error.len() > HISTORY_ERROR
+        {
+            let mut cut = HISTORY_ERROR;
+            while !error.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            error.truncate(cut);
+            error.push('…');
+        }
+        let mut map = self
+            .history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runs = map.entry(id.to_string()).or_default();
+        runs.push_front(run);
+        runs.truncate(HISTORY);
+    }
+
+    // The id's runs, newest first; empty when it has none yet.
+    pub fn history(&self, id: &str) -> Vec<RunRecord> {
+        let map = self
+            .history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.get(id)
+            .map(|runs| runs.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     // A panic elsewhere while this lock was held must not take the API down:
     // health data is a side-channel for humans, so recovering the map from a
     // poisoned lock is strictly better than propagating the panic into every
@@ -117,6 +207,44 @@ impl SyncHealthRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(started_at: u64, error: Option<&str>) -> RunRecord {
+        RunRecord {
+            started_at,
+            duration_ms: 10,
+            trigger: RunTrigger::Scheduled,
+            by: None,
+            scope: Some("full".into()),
+            error: error.map(str::to_string),
+            hosts: None,
+            groups: None,
+            revision_before: None,
+            revision: None,
+        }
+    }
+
+    #[test]
+    fn the_history_is_newest_first_and_keeps_the_last_fifty() {
+        let registry = SyncHealthRegistry::new();
+        assert!(registry.history("src-a").is_empty());
+        for at in 0..60 {
+            registry.record_run("src-a", run(at, None));
+        }
+        let history = registry.history("src-a");
+        assert_eq!(history.len(), HISTORY);
+        assert_eq!(history[0].started_at, 59, "newest first");
+        assert_eq!(history[HISTORY - 1].started_at, 10, "the oldest dropped");
+        assert!(registry.history("src-b").is_empty(), "per id");
+    }
+
+    #[test]
+    fn a_long_error_is_cut_on_a_character() {
+        let registry = SyncHealthRegistry::new();
+        registry.record_run("src-a", run(1, Some(&"é".repeat(3000))));
+        let error = registry.history("src-a")[0].error.clone().unwrap();
+        assert!(error.len() <= HISTORY_ERROR + '…'.len_utf8());
+        assert!(error.ends_with('…'));
+    }
 
     #[test]
     fn unknown_source_has_no_health() {

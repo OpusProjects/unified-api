@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::domain::project::GitProject;
-use crate::domain::sync_health::SyncHealthRegistry;
+use crate::domain::sync_health::{RunRecord, RunTrigger, SyncHealthRegistry};
 use crate::ports::git::GitPort;
 use crate::ports::secrets::SecretsPort;
 use crate::ports::venv::{VenvOutcome, VenvPort};
@@ -18,6 +18,21 @@ use crate::ports::venv::{VenvOutcome, VenvPort};
 // nothing an operator could query or alert on. A broken requirements.txt is
 // the same kind of invisible without this: the scripts would fail at import
 // time, one confusing sync error per source, with the actual cause nowhere.
+// What started a pull and who asked, for the project's history.
+#[derive(Debug, Clone)]
+pub struct RunOrigin {
+    pub trigger: RunTrigger,
+    // The API key's name or the signed-in user, for a manual pull.
+    pub by: Option<String>,
+}
+
+impl RunOrigin {
+    pub fn of(trigger: RunTrigger) -> Self {
+        Self { trigger, by: None }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn sync_project(
     git: &dyn GitPort,
     secrets: &dyn SecretsPort,
@@ -26,13 +41,36 @@ pub async fn sync_project(
     project_id: &str,
     project: &GitProject,
     projects_dir: &Path,
+    origin: RunOrigin,
 ) -> Result<(), String> {
+    let dir = projects_dir.join(project_id);
+    let started_at = crate::domain::unix_now();
+    let start = std::time::Instant::now();
+    // The commit before and after: what the pull moved the checkout over,
+    // which is when desired state or a script changed.
+    let before = git.revision(&dir).await;
     let result = run(git, secrets, venv, project_id, project, projects_dir).await;
+    let after = git.revision(&dir).await;
 
     match &result {
         Ok(()) => health.record_success(project_id),
         Err(error) => health.record_failure(project_id, error),
     }
+    health.record_run(
+        project_id,
+        RunRecord {
+            started_at,
+            duration_ms: start.elapsed().as_millis() as u64,
+            trigger: origin.trigger,
+            by: origin.by,
+            scope: None,
+            error: result.as_ref().err().cloned(),
+            hosts: None,
+            groups: None,
+            revision_before: before,
+            revision: after,
+        },
+    );
 
     result
 }
@@ -187,6 +225,7 @@ mod tests {
             "prj-a",
             &project(),
             &dir,
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect_err("the stub fails");
@@ -204,6 +243,7 @@ mod tests {
             "prj-a",
             &project(),
             &dir,
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect("the stub succeeds");
@@ -211,6 +251,63 @@ mod tests {
         let recorded = health.get("prj-a").unwrap();
         assert_eq!(recorded.consecutive_failures, 0);
         assert_eq!(recorded.last_error, None);
+    }
+
+    // A checkout whose commit moves on each pull: "aaa" before, "bbb" after.
+    struct MovingGit {
+        at: std::sync::Mutex<&'static str>,
+    }
+
+    impl GitPort for MovingGit {
+        fn ensure(
+            &self,
+            _dir: &Path,
+            _project: &GitProject,
+            _credentials: &HashMap<String, String>,
+        ) -> GitFuture<'_> {
+            *self.at.lock().unwrap() = "bbb";
+            Box::pin(async { Ok(()) })
+        }
+
+        fn revision(&self, _dir: &Path) -> crate::ports::git::RevisionFuture<'_> {
+            let at = self.at.lock().unwrap().to_string();
+            Box::pin(async move { Some(at) })
+        }
+    }
+
+    // Each pull is a row in the project's history: why and by whom, and the
+    // commit it moved the checkout from and to.
+    #[tokio::test]
+    async fn a_pull_is_kept_in_the_history_with_its_commits() {
+        let health = SyncHealthRegistry::new();
+        let git = MovingGit {
+            at: std::sync::Mutex::new("aaa"),
+        };
+        sync_project(
+            &git,
+            &MockSecrets::new(),
+            &StubVenv::default(),
+            &health,
+            "prj-a",
+            &project(),
+            &std::path::PathBuf::from("unused"),
+            RunOrigin {
+                trigger: RunTrigger::Manual,
+                by: Some("key-ops".into()),
+            },
+        )
+        .await
+        .expect("the stub succeeds");
+
+        let history = health.history("prj-a");
+        assert_eq!(history.len(), 1);
+        let run = &history[0];
+        assert_eq!(run.trigger, RunTrigger::Manual);
+        assert_eq!(run.by.as_deref(), Some("key-ops"));
+        assert_eq!(run.revision_before.as_deref(), Some("aaa"));
+        assert_eq!(run.revision.as_deref(), Some("bbb"));
+        assert_eq!(run.error, None);
+        assert!(run.started_at > 0);
     }
 
     // The unreachable remote used to hang this future forever — and boot, the
@@ -233,6 +330,7 @@ mod tests {
             "prj-a",
             &project,
             &std::path::PathBuf::from("unused"),
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect_err("the hung remote must time out");
@@ -267,6 +365,7 @@ mod tests {
             "prj-a",
             &project,
             &std::path::PathBuf::from("unused"),
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect_err("the credential does not resolve");
@@ -294,6 +393,7 @@ mod tests {
             "prj-a",
             &project(),
             &std::path::PathBuf::from("unused"),
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect("git succeeds");
@@ -328,6 +428,7 @@ mod tests {
             "prj-a",
             &project,
             &std::path::PathBuf::from("unused"),
+            RunOrigin::of(RunTrigger::Scheduled),
         )
         .await
         .expect_err("the venv step fails");

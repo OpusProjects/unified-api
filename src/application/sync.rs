@@ -9,7 +9,7 @@ use crate::domain::cache_entry::{CacheEntry, RetainedHost};
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::enricher::Enricher;
 use crate::domain::source::{AdvertisedScopeRegistry, ConnectorType, Source};
-use crate::domain::sync_health::SyncHealthRegistry;
+use crate::domain::sync_health::{RunRecord, RunTrigger, SyncHealthRegistry};
 use crate::domain::sync_mode::SyncMode;
 use crate::ports::cache::CachePort;
 use crate::ports::connector::{ConnectorOutput, ConnectorPort};
@@ -82,6 +82,9 @@ pub struct SyncRequest {
     // a script's own logs can join the same trace as the access log. None =
     // unstated (tests, internal callers) — the key is simply absent.
     pub trigger: Option<String>,
+    // Who asked, for a manual sync (the API key's name, or the signed-in
+    // user): what the source's history says beside "Manual".
+    pub by: Option<String>,
 }
 
 impl SyncRequest {
@@ -92,6 +95,7 @@ impl SyncRequest {
             refresh_origin: false,
             refresh_depth: 0,
             trigger: None,
+            by: None,
         }
     }
 
@@ -101,11 +105,17 @@ impl SyncRequest {
             refresh_origin: true,
             refresh_depth,
             trigger: None,
+            by: None,
         }
     }
 
     pub fn with_trigger(mut self, trigger: impl Into<String>) -> Self {
         self.trigger = Some(trigger.into());
+        self
+    }
+
+    pub fn by(mut self, who: impl Into<String>) -> Self {
+        self.by = Some(who.into());
         self
     }
 }
@@ -290,6 +300,8 @@ pub async fn sync_source(
     // enrichment below is part of the same causal chain, so its scripts see
     // the same trigger the connector did.
     let trigger = request.trigger.clone();
+    let by = request.by.clone();
+    let started_at = crate::domain::unix_now();
     let outcome = run_sync(
         cache, connector, secrets, scopes, source_id, source, request,
     )
@@ -329,6 +341,21 @@ pub async fn sync_source(
         None => health.record_success(source_id),
         Some(error) => health.record_failure(source_id, error),
     }
+    health.record_run(
+        source_id,
+        RunRecord {
+            started_at,
+            duration_ms: outcome.duration_ms as u64,
+            trigger: run_trigger(trigger.as_deref()),
+            by,
+            scope: Some(outcome.scope.clone()),
+            error: outcome.error.clone(),
+            hosts: outcome.success().then_some(outcome.total_hosts),
+            groups: outcome.success().then_some(outcome.total_groups),
+            revision_before: None,
+            revision: None,
+        },
+    );
 
     // One counter per outcome and a duration histogram, labeled by source.
     // The metrics facade works like tracing: recording here is fine for the
@@ -375,6 +402,8 @@ async fn run_sync(
         refresh_origin,
         refresh_depth,
         trigger,
+        // The history's, recorded by sync_source: the script is not told.
+        by: _,
     } = request;
     let scope_label = scope.label();
 
@@ -542,6 +571,17 @@ async fn run_sync(
             }
         }
         Err(e) => SyncOutcome::failed(scope_label, duration_ms, e.message),
+    }
+}
+
+// What started a sync, from the trigger it travels with: the timer
+// ("scheduled"), an on-demand read ("refresh"), or a request's id, which
+// only a person or a pipeline calling the API sends.
+fn run_trigger(trigger: Option<&str>) -> RunTrigger {
+    match trigger {
+        Some("scheduled") => RunTrigger::Scheduled,
+        Some("refresh") => RunTrigger::Refresh,
+        _ => RunTrigger::Manual,
     }
 }
 
@@ -1428,6 +1468,52 @@ mod concurrency_tests {
             None,
         )
         .await
+    }
+
+    // Each sync is a row in the source's history: why and by whom, what it
+    // covered, and how many hosts it brought.
+    #[tokio::test]
+    async fn a_sync_is_kept_in_the_history() {
+        let cache = MemoryCache::new();
+        let health = SyncHealthRegistry::new();
+        sync_source(
+            &cache,
+            &GroupOnlyConnector,
+            &MockSecrets::new(),
+            &health,
+            &AdvertisedScopeRegistry::new(),
+            &SyncCoordinator::new(),
+            "src",
+            &source(),
+            SyncRequest::new(SyncScope::Full)
+                .with_trigger("req-7")
+                .by("key-ops"),
+            None,
+        )
+        .await;
+        sync_source(
+            &cache,
+            &GroupOnlyConnector,
+            &MockSecrets::new(),
+            &health,
+            &AdvertisedScopeRegistry::new(),
+            &SyncCoordinator::new(),
+            "src",
+            &source(),
+            SyncRequest::new(SyncScope::Hosts(vec!["a".to_string()])).with_trigger("scheduled"),
+            None,
+        )
+        .await;
+
+        let history = health.history("src");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].trigger, RunTrigger::Scheduled, "newest first");
+        assert_eq!(history[0].scope.as_deref(), Some("host:a"));
+        assert_eq!(history[1].trigger, RunTrigger::Manual);
+        assert_eq!(history[1].by.as_deref(), Some("key-ops"));
+        assert_eq!(history[1].scope.as_deref(), Some("full"));
+        assert_eq!(history[1].hosts, Some(2));
+        assert_eq!(history[1].error, None);
     }
 
     // A full sync is the whole inventory: `b`, named only in its group, is a

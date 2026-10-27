@@ -315,6 +315,9 @@ async fn scheduled_project_pull(
         project_id,
         project,
         projects_dir,
+        crate::application::projects::RunOrigin::of(
+            crate::domain::sync_health::RunTrigger::Scheduled,
+        ),
     )
     .await
     {
@@ -543,6 +546,9 @@ fn clone_missing_checkouts(state: Arc<AppState>) -> Vec<tokio::task::JoinHandle<
                 &project_id,
                 &project,
                 &state.projects_dir,
+                crate::application::projects::RunOrigin::of(
+                    crate::domain::sync_health::RunTrigger::Startup,
+                ),
             )
             .await
             {

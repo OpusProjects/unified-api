@@ -362,6 +362,9 @@ async fn main() {
                             &project_id,
                             &project,
                             &projects_dir,
+                            unified_api::application::projects::RunOrigin::of(
+                                unified_api::domain::sync_health::RunTrigger::Startup,
+                            ),
                         )
                         .await
                         {

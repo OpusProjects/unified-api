@@ -51,7 +51,7 @@ resolved (a runner validating YAML has no reason to hold the deployment's env
 vars, so missing credentials are **not** an error here).
 
 ```bash
-CONFIG_DIR=./config unified-api --check-config
+unified-api --check-config ./config        # or CONFIG_DIR=./config unified-api --check-config
 # configuration OK (./config): 4 sources, 3 connectors, 1 views, 2 credentials, ...   → exit 0
 # configuration INVALID (./config): sources/a.yaml: source 'src-a': unknown field `ttl_second` ...   → exit 1
 ```

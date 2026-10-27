@@ -34,13 +34,23 @@ pub struct Credential {
     #[serde(default)]
     pub vault_path: Option<String>,
 
-    // Env vars prefix — ex: "SECTION9" → reads SECTION9_USERNAME, SECTION9_PASSWORD
+    // Our field name → the full name of the environment variable holding it.
+    // ex: {"username": "SECTION9_USERNAME"} → reads SECTION9_USERNAME and
+    // delivers it as `username`. The full name rather than a prefix, so a
+    // search for the variable finds the credential that reads it.
+    #[serde(default)]
+    pub env_vars: HashMap<String, String>,
+
+    // DEPRECATED, still read: the older env form, a prefix joined to each
+    // secret_keys value — "SECTION9" + {"username": "USERNAME"} reads
+    // SECTION9_USERNAME. `deprecation` says what env_vars to write instead.
     pub env_prefix: Option<String>,
 
     // Path to a JSON file with secrets — ex: "/run/secrets/section9-api.json"
     pub secret_file: Option<String>,
 
-    // Mapping: our name → field name in env var or JSON
+    // Mapping: our name → field name in the store: the Vault secret, the JSON
+    // file, or (deprecated) the suffix after env_prefix.
     // ex: {"username": "USERNAME", "password": "PASSWORD"}
     #[serde(default)]
     pub secret_keys: HashMap<String, String>,
@@ -70,7 +80,7 @@ impl Credential {
     pub fn backend(&self) -> &'static str {
         if self.vault_path.is_some() {
             "vault"
-        } else if self.env_prefix.is_some() {
+        } else if !self.env_vars.is_empty() || self.env_prefix.is_some() {
             "env"
         } else if self.secret_file.is_some() {
             "file"
@@ -79,20 +89,79 @@ impl Credential {
         }
     }
 
-    // The environment variables an env-backed credential reads, sorted:
-    // PREFIX_FIELD for each secret key, spelled exactly as the env resolver
-    // spells them. Empty for any other backend.
-    pub fn env_vars(&self) -> Vec<String> {
-        let (Some(prefix), None) = (&self.env_prefix, &self.vault_path) else {
+    // The environment variables an env-backed credential reads, sorted and
+    // spelled exactly as the env resolver reads them. Empty for any other
+    // backend.
+    pub fn env_var_names(&self) -> Vec<String> {
+        if self.vault_path.is_some() {
+            return Vec::new();
+        }
+        let mut vars: Vec<String> = if !self.env_vars.is_empty() {
+            self.env_vars.values().cloned().collect()
+        } else if let Some(prefix) = &self.env_prefix {
+            self.secret_keys
+                .values()
+                .map(|suffix| format!("{}_{}", prefix, suffix))
+                .collect()
+        } else {
             return Vec::new();
         };
-        let mut vars: Vec<String> = self
-            .secret_keys
-            .values()
-            .map(|suffix| format!("{}_{}", prefix, suffix))
-            .collect();
         vars.sort();
         vars
+    }
+
+    // The secret fields it delivers (not its file_keys), sorted.
+    pub fn fields(&self) -> Vec<String> {
+        let names = if self.vault_path.is_none() && !self.env_vars.is_empty() {
+            self.env_vars.keys()
+        } else {
+            self.secret_keys.keys()
+        };
+        let mut fields: Vec<String> = names.cloned().collect();
+        fields.sort();
+        fields
+    }
+
+    // What the item says that cannot mean anything: two env forms at once, or
+    // secret_keys with nowhere to read them from.
+    pub fn errors(&self, id: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if !self.env_vars.is_empty() && self.env_prefix.is_some() {
+            errors.push(format!(
+                "Credential '{id}' sets both env_vars and env_prefix — keep env_vars, \
+                 which names each variable in full"
+            ));
+        }
+        if !self.env_vars.is_empty()
+            && !self.secret_keys.is_empty()
+            && self.vault_path.is_none()
+            && self.secret_file.is_none()
+        {
+            errors.push(format!(
+                "Credential '{id}' sets secret_keys beside env_vars — env_vars already \
+                 maps each field to its variable; remove secret_keys"
+            ));
+        }
+        errors
+    }
+
+    // The deprecated env form, and the env_vars that replace it, written out.
+    pub fn deprecation(&self, id: &str) -> Option<String> {
+        let prefix = self.env_prefix.as_ref()?;
+        if self.vault_path.is_some() || !self.env_vars.is_empty() {
+            return None;
+        }
+        let mut pairs: Vec<String> = self
+            .secret_keys
+            .iter()
+            .map(|(field, suffix)| format!("{field}: {prefix}_{suffix}"))
+            .collect();
+        pairs.sort();
+        Some(format!(
+            "credential '{id}': env_prefix + secret_keys is deprecated and will be refused \
+             in a later release; write env_vars: {{{}}}",
+            pairs.join(", ")
+        ))
     }
 }
 
@@ -110,7 +179,35 @@ mod tests {
             "name: x\ntype: username_password\nenv_prefix: D42\nsecret_keys:\n  username: USER\n  password: PASS\n",
         );
         assert_eq!(c.backend(), "env");
-        assert_eq!(c.env_vars(), vec!["D42_PASS", "D42_USER"]);
+        assert_eq!(c.env_var_names(), vec!["D42_PASS", "D42_USER"]);
+        assert_eq!(
+            c.deprecation("cred-d42").unwrap(),
+            "credential 'cred-d42': env_prefix + secret_keys is deprecated and will be \
+             refused in a later release; write env_vars: {password: D42_PASS, username: D42_USER}"
+        );
+    }
+
+    #[test]
+    fn env_vars_name_each_variable_in_full() {
+        let c = credential(
+            "name: x\ntype: username_password\nenv_vars:\n  username: D42_USER\n  password: D42_PASS\n",
+        );
+        assert_eq!(c.backend(), "env");
+        assert_eq!(c.env_var_names(), vec!["D42_PASS", "D42_USER"]);
+        assert_eq!(c.fields(), vec!["password", "username"]);
+        assert!(c.deprecation("cred-d42").is_none());
+        assert!(c.errors("cred-d42").is_empty());
+    }
+
+    #[test]
+    fn two_env_forms_at_once_are_refused() {
+        let c = credential(
+            "name: x\ntype: token\nenv_vars:\n  token: GH_TOKEN\nenv_prefix: GH\nsecret_keys:\n  token: TOKEN\n",
+        );
+        let errors = c.errors("cred-gh");
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].contains("both env_vars and env_prefix"));
+        assert!(errors[1].contains("secret_keys beside env_vars"));
     }
 
     #[test]
@@ -119,6 +216,6 @@ mod tests {
             "name: x\ntype: token\nvault_path: pcd/github\nenv_prefix: GH\nsecret_keys:\n  token: TOKEN\n",
         );
         assert_eq!(c.backend(), "vault");
-        assert!(c.env_vars().is_empty());
+        assert!(c.env_var_names().is_empty());
     }
 }

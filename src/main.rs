@@ -80,6 +80,9 @@ async fn main() {
                 for line in &upgraded {
                     println!("startup converts: {line}");
                 }
+                for line in cfg.deprecations() {
+                    println!("deprecated: {line}");
+                }
                 println!(
                     "configuration OK ({}): {} sources, {} connectors, {} hosts, {} groups, \
                      {} views, {} credentials, {} enrichers, {} endpoints, {} projects",
@@ -224,6 +227,9 @@ async fn main() {
         api_keys = api_keys.len(),
         "Configuration loaded"
     );
+    for note in cfg.deprecations() {
+        warn!("{note}");
+    }
 
     // The chain, built by the library so that a configuration reload rebuilds
     // exactly the same one from the new credentials.

@@ -241,7 +241,8 @@ central is compromised it cannot read the rest of datacenter B's inventory.
 api_keys:
   - name: key-central
     description: "central (datacenter A)"
-    env: "UNIFIED_API_KEY_CENTRAL"
+    env_vars:
+      key: "UNIFIED_API_KEY_CENTRAL"
     role: "restricted"
     sources: ["src-ssh-facts"]
     endpoints: []
@@ -302,14 +303,13 @@ sources:
 ```yaml
 # credentials/cred-edge-dc2.yaml — the edge's API key, read from
 # UNIFIED_API_EDGE_DC2_KEY. The remote connector looks for a credential named
-# `token`, which is what secret_keys maps here.
+# `token`, which is what env_vars maps here.
 credentials:
   - name: cred-edge-dc2
     description: "Datacenter B edge API key"
     type: "token"
-    env_prefix: "UNIFIED_API_EDGE_DC2"
-    secret_keys:
-      token: "KEY"
+    env_vars:
+      token: "UNIFIED_API_EDGE_DC2_KEY"
 ```
 
 ### The secret contract

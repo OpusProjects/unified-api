@@ -128,7 +128,7 @@ variables. None are mandatory — the defaults are safe for local development.
 
 Credentials are resolved from additional env vars whose names come from the
 `credentials` items — see [configuration](configuration.md) for the
-`env_prefix`/`secret_keys` pattern.
+`env_vars` pattern.
 
 ---
 

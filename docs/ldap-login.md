@@ -48,7 +48,7 @@ credentials:
   - name: cred-ldap
     description: "LDAP service account"
     type: username_password
-    vault_path: unified-api/ldap      # or env_prefix / secret_file
+    vault_path: unified-api/ldap      # or env_vars / secret_file
 ```
 
 Its `username` is the **bind DN** (`CN=svc-unified,OU=Service,DC=example,DC=com`)

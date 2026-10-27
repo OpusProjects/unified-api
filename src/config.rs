@@ -42,6 +42,23 @@ pub struct AppConfig {
     pub api_keys: HashMap<String, ApiKeyDef>,
 }
 
+impl AppConfig {
+    // Forms this version still reads but a later one will refuse, each with
+    // what to write instead: logged at startup and printed by
+    // --check-config, so a configuration repository hears about it before
+    // the release that stops accepting them.
+    pub fn deprecations(&self) -> Vec<String> {
+        let mut notes: Vec<String> = self
+            .credentials
+            .iter()
+            .filter_map(|(id, c)| c.deprecation(id))
+            .chain(self.api_keys.iter().filter_map(|(id, k)| k.deprecation(id)))
+            .collect();
+        notes.sort();
+        notes
+    }
+}
+
 // HTTP server configuration — config.yaml
 //
 // `deny_unknown_fields`, here and on every other struct that parses a config
@@ -561,6 +578,14 @@ impl AppConfig {
             errors.push(format!(
                 "server.url '{url}' must be an http:// or https:// address"
             ));
+        }
+
+        // A credential's or an API key's own shape: where its secret is read.
+        for (id, credential) in &self.credentials {
+            errors.extend(credential.errors(id));
+        }
+        for (id, key) in &self.api_keys {
+            errors.extend(key.errors(id));
         }
 
         // Enrichers must reference existing sources
@@ -2604,6 +2629,55 @@ mod tests {
             .err()
             .expect("expected validation error")
             .to_string()
+    }
+
+    // An API key names its variable as a credential does: env_vars, `key`.
+    #[test]
+    fn an_api_key_names_its_variable_under_env_vars_key() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("keys.yaml"),
+            concat!(
+                "api_keys:\n",
+                "  - name: key-new\n    env_vars:\n      key: KEY_NEW\n    role: admin\n",
+                "  - name: key-old\n    env: KEY_OLD\n    role: admin\n",
+            ),
+        )
+        .unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("both forms load");
+        assert_eq!(cfg.api_keys["key-new"].env_var(), "KEY_NEW");
+        assert_eq!(cfg.api_keys["key-old"].env_var(), "KEY_OLD");
+        assert_eq!(
+            cfg.deprecations(),
+            vec![
+                "API key 'key-old': env is deprecated and will be refused in a later release; \
+                 write env_vars: {key: KEY_OLD}"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_api_key_with_another_field_or_two_variables_is_refused() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("keys.yaml"),
+            concat!(
+                "api_keys:\n",
+                "  - name: key-typo\n    env_vars:\n      kye: K\n",
+                "  - name: key-both\n    env: K\n    env_vars:\n      key: K\n",
+            ),
+        )
+        .unwrap();
+        let err = load_err(&dir);
+        assert!(
+            err.contains("env_vars.kye is not a field of an API key"),
+            "{err}"
+        );
+        assert!(
+            err.contains("API key 'key-typo' names no variable"),
+            "{err}"
+        );
+        assert!(err.contains("sets both env_vars.key and env"), "{err}");
     }
 
     // A host's and a group's TTLs live in their own items and land on the

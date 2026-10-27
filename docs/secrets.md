@@ -24,7 +24,7 @@ all-or-nothing.
 
 | Backend | Declared by | Delivery |
 |---|---|---|
-| Environment variables | `env_prefix` + `secret_keys` | `SECTION9_USERNAME` etc., injected by the platform (k8s Secret via `envFrom`, `.env`, ESO) |
+| Environment variables | `env_vars` (field → the full variable name) | `SECTION9_USERNAME` etc., injected by the platform (k8s Secret via `envFrom`, `.env`, ESO) |
 | JSON file | `secret_file` + `secret_keys` | A mounted file of values, re-read per resolution |
 | Vault (KV v2) | `vault_path` (+ the `secrets.vault:` block) | Read over HTTPS at resolution time |
 
@@ -41,24 +41,35 @@ is worse than an error.
 
 1. `vault_path` set → the value comes from Vault (env/file settings on the
    same credential are not consulted).
-2. Otherwise `env_prefix` → environment variables, or `secret_file` → the
+2. Otherwise `env_vars` → environment variables, or `secret_file` → the
    JSON file.
 3. `file_keys` entries are appended as `<key>_path` values in every case.
 
-`secret_keys` maps our names to the backend's names — env-var suffixes, JSON
-fields, or Vault secret fields, one mapping syntax for all three.
+`env_vars` maps our names to full variable names: `{username: D42_USERNAME}`.
+`secret_keys` maps our names to the fields of a store — the JSON file's or the
+Vault secret's. The older `env_prefix` + `secret_keys` env form
+(`D42` + `{username: USERNAME}`) still works but is deprecated: startup and
+`--check-config` print the `env_vars` to write, and a later release refuses it.
 
 ---
 
 ## What scripts receive
 
-A connector sees only the credentials its source declares, each field as
-`CREDENTIAL_<KEY>` — and nothing else: the child environment is scrubbed, so
-no script can read the API keys or another source's values.
+A connector sees only the credentials its source declares — and nothing else:
+the child environment is scrubbed, so no script can read the API keys or
+another source's values. Each field arrives under its credential, as
+`CREDENTIAL_<ID>_<KEY>` (`cred-vcenter-aa1`'s `username` →
+`CREDENTIAL_VCENTER_AA1_USERNAME`: the name upper-cased, a leading `cred-`
+dropped, anything else not a letter or digit as `_`), and also as
+`CREDENTIAL_<KEY>` when no other of the source's credentials has that field.
+A source with one credential per site reads each site's under its id; two
+`username`s are never silently reduced to one. A field already named after its
+credential (`avamar_aa1_url` on `cred-avamar-aa1`) is not prefixed twice, so
+configurations written that way by hand deliver exactly what they did.
 
-`{"username": "USERNAME"}` under `env_prefix: "D42"` reads `D42_USERNAME` and
-delivers `CREDENTIAL_USERNAME`; a `file_keys` entry `ssh_key: /run/secrets/id_rsa`
-delivers `CREDENTIAL_SSH_KEY_PATH`. The SSH connector and git checkouts
+`env_vars: {username: D42_USERNAME}` on `cred-d42` reads `D42_USERNAME` and
+delivers `CREDENTIAL_D42_USERNAME` and `CREDENTIAL_USERNAME`; a `file_keys`
+entry `ssh_key: /run/secrets/id_rsa` delivers `CREDENTIAL_SSH_KEY_PATH`. The SSH connector and git checkouts
 consume the same shapes (`username`, `ssh_key_path`, `token`) — git auth in
 particular never puts a secret on a command line. See
 [connectors](connectors.md) for the full script environment.

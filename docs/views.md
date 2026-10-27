@@ -149,7 +149,8 @@ view is the contract, the members are internal topology.
 api_keys:
   - name: key-forms
     description: "AnsibleForms"
-    env: "UNIFIED_API_KEY_FORMS"
+    env_vars:
+      key: "UNIFIED_API_KEY_FORMS"
     sources: ["vw-facts-all"]        # not the members
 ```
 

@@ -78,7 +78,8 @@ the worked example above). The only federation-specific piece is a
 api_keys:
   - name: key-central
     description: "Central aggregator"
-    env: "UNIFIED_API_KEY_CENTRAL"
+    env_vars:
+      key: "UNIFIED_API_KEY_CENTRAL"
     # restricted (default role): the central can read THIS source and nothing else
     sources: ["src-fleet"]
 ```
@@ -98,9 +99,8 @@ credentials:
   - name: cred-edge-dc1
     description: "Edge datacenter A API key"
     type: "token"
-    env_prefix: "EDGE_DC1"
-    secret_keys:
-      token: "TOKEN"          # reads env EDGE_DC1_TOKEN
+    env_vars:
+      token: "EDGE_DC1_TOKEN"  # reads env EDGE_DC1_TOKEN
 ```
 
 ```yaml

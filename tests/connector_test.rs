@@ -319,16 +319,12 @@ async fn ansible_format_output_is_converted_to_dataset() {
 // refused instead, saying what to print.
 #[tokio::test]
 async fn the_old_hostvars_groups_shape_is_refused() {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("old.sh");
-    std::fs::write(
+    write_executable(
         &script,
         "#!/bin/sh\necho '{\"hostvars\": {\"h1.example\": {}}, \"groups\": {}}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let err = ProcessConnector::new()
         .execute(
@@ -376,18 +372,14 @@ async fn execute_script_with_unparseable_output() {
 // the marker cannot appear.
 #[tokio::test]
 async fn a_venv_on_the_config_wins_the_interpreter_lookup() {
-    use std::os::unix::fs::PermissionsExt;
-
     let venv = tempfile::tempdir().unwrap();
     let bin = venv.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
     let fake_python = bin.join("python3");
-    std::fs::write(
+    write_executable(
         &fake_python,
         "#!/bin/sh\necho '{\"_meta\": {\"hostvars\": {\"ran-in-venv.example\": {}}}}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake_python, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let mut config = HashMap::new();
     config.insert(
@@ -412,5 +404,30 @@ async fn a_venv_on_the_config_wins_the_interpreter_lookup() {
         result.dataset.hostvars.contains_key("ran-in-venv.example"),
         "the venv's interpreter must win PATH: got {:?}",
         result.dataset.hostvars.keys().collect::<Vec<_>>()
+    );
+}
+
+// Writes an executable script through a short-lived `sh`, so the write handle
+// only ever exists in that process. Written from here, a child another test
+// forks at that moment inherits the handle until it execs, and executing the
+// script then fails with "text file busy" (ETXTBSY) — a flake, one run in
+// thirty, that has nothing to do with what the test checks.
+fn write_executable(path: &std::path::Path, content: &str) {
+    use std::io::Write;
+    let mut sh = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("cat > \"$0\" && chmod 755 \"$0\"")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh writes the script");
+    sh.stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(content.as_bytes())
+        .expect("the script reaches sh");
+    assert!(
+        sh.wait().expect("sh exits").success(),
+        "sh could not write {path:?}"
     );
 }

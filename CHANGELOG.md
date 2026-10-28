@@ -27,6 +27,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Starting connector, enricher and output scripts retries briefly on "text file busy" (ETXTBSY) instead of failing the run: a script still open for writing elsewhere, such as one a project pull is rewriting, or a file another thread's child briefly held, now runs once the writer lets go.
 - Two pulls of one project (a Pull landing on a scheduled one, or a reload's clone) no longer run in the same checkout at once: the second waits for the first.
 - An on-demand refresh that outlasted its budget now counts in the source's `sync_health` (`last_error`, `consecutive_failures`) like one that failed; it left no trace before.
 

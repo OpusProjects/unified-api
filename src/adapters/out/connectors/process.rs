@@ -79,13 +79,19 @@ impl ConnectorPort for ProcessConnector {
                 cmd.env(format!("CREDENTIAL_{}", key.to_uppercase()), value);
             }
 
-            // We execute and capture stdout + stderr
-            // .output() waits for the process to finish and captures everything
-            let output = cmd.output().await.map_err(|e| ConnectorError {
+            // We execute and capture stdout + stderr: what .output() does
+            // (stdin empty, both streams piped, wait for the exit), through
+            // the spawn that rides out a "text file busy".
+            cmd.stdin(std::process::Stdio::null());
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            let failed = |e: std::io::Error| ConnectorError {
                 message: format!("Failed to execute script '{}': {}", script_path, e),
                 stderr: String::new(),
                 exit_code: None,
-            })?;
+            };
+            let child = process_env::spawn(&mut cmd).await.map_err(failed)?;
+            let output = child.wait_with_output().await.map_err(failed)?;
 
             // We capture stderr (for logging/errors)
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();

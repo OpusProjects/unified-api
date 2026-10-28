@@ -73,9 +73,11 @@ impl OutputPort for ProcessOutput {
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
 
-            let mut child = cmd.spawn().map_err(|e| OutputError {
-                message: format!("Failed to execute output script '{}': {}", script_path, e),
-            })?;
+            let mut child = process_env::spawn(&mut cmd)
+                .await
+                .map_err(|e| OutputError {
+                    message: format!("Failed to execute output script '{}': {}", script_path, e),
+                })?;
 
             // Written on a task of its own so the child's stdout and stderr are
             // drained WHILE we write. Writing it all first deadlocks as soon as

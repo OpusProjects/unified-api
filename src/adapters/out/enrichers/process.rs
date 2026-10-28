@@ -69,9 +69,11 @@ impl EnricherPort for ProcessEnricher {
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
 
-            let mut child = cmd.spawn().map_err(|e| EnricherError {
-                message: format!("Failed to execute enricher '{}': {}", script_path, e),
-            })?;
+            let mut child = process_env::spawn(&mut cmd)
+                .await
+                .map_err(|e| EnricherError {
+                    message: format!("Failed to execute enricher '{}': {}", script_path, e),
+                })?;
 
             // Hand the dataset over on a task of its own, so the child's stdout
             // and stderr are drained WHILE we write rather than after.

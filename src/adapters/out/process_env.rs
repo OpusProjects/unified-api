@@ -1,5 +1,30 @@
 use tokio::process::Command;
 
+// ETXTBSY: "text file busy", exec of a file still open for writing.
+const TEXT_FILE_BUSY: i32 = 26;
+
+// Spawns `cmd`, retrying briefly while the script is "text file busy".
+//
+// Executing a file that some process still holds open for writing fails with
+// ETXTBSY, and the writer need not be anyone writing the script: when one
+// thread writes a file and another forks a child at that moment, the child
+// holds a copy of the write descriptor until it execs. A project pull
+// rewriting a script just as a sync starts it hits the same window. It lasts
+// microseconds, and a failed exec ran nothing, so trying again is safe — a
+// handful of times, then the error is reported as before.
+pub async fn spawn(cmd: &mut Command) -> std::io::Result<tokio::process::Child> {
+    let mut attempt = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.raw_os_error() == Some(TEXT_FILE_BUSY) && attempt < 5 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 // Everything a spawned script keeps from the service's own environment.
 //
 // The process adapters used to hand children the FULL parent environment,

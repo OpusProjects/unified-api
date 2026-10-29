@@ -90,7 +90,10 @@ Errors are never cached — a transient backend blip is retried on the next
 resolution instead of being remembered for the TTL.
 
 The deprecated `secrets.cache_ttl_seconds` in `config.yaml`, while set, still
-caches every credential for that long, as it did.
+caches every credential for that long, as it did — and replaces each Vault's
+own cache rather than stacking on it, so a rotation still takes at most that
+long. The deprecated `secrets.vault`, without it, keeps the 60-second cache
+0.36 gave it by default.
 
 ---
 

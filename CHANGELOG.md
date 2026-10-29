@@ -17,7 +17,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Breaking (scripts reading a field two credentials share):** `CREDENTIAL_<FIELD>` is delivered only when exactly one of the source's credentials has that field, instead of one credential silently overwriting the other; read `CREDENTIAL_<ID>_<FIELD>`.
+- **Breaking (scripts reading a field two credentials share, and ssh or remote sources with several credentials):** `CREDENTIAL_<FIELD>` is delivered only when exactly one of the source's credentials has that field, instead of one credential silently overwriting the other; read `CREDENTIAL_<ID>_<FIELD>`. A source on the built-in `ssh` or `remote` connector may list only one credential (they log in with one, by its bare fields), two credentials one source would deliver under one id (`cred-vc-aa1` and `cred_vc_aa1`) are refused, and `env_vars` beside a `vault_path` or `secret_file` is refused instead of one side being silently ignored.
 - Env and file credentials are read on every resolution instead of being reused for 60 seconds: a rotated mounted file is seen on the next sync. Only a Vault caches, for its own `cache_ttl_seconds`; `GET /api/v1/settings` answers `secrets.cache_ttl_seconds` as null unless `config.yaml` still sets it.
 
 ### Deprecated
@@ -32,6 +32,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A refresh that ran past its budget while an enricher re-applied after the gather is no longer recorded as failed: the sync is recorded as soon as its data lands, before the enrichment.
+- A configuration still on the deprecated `secrets.vault` keeps its 60-second cache when `secrets.cache_ttl_seconds` is absent, as 0.36 did by default, instead of reading Vault on every resolution; set, that outer cache replaces each Vault's own instead of stacking on it.
+- A field already named after its credential is recognised in any case (`AVAMAR_AA1_URL` on `cred-avamar-aa1`), and a credential listed twice on a source keeps its bare names.
+- `--migrate-config` exits with an error naming 0.36 instead of starting the server; a reload logs the same deprecation notices startup does; a Vault credential with `timeout_seconds: 0` is refused.
 - Starting connector, enricher and output scripts retries briefly on "text file busy" (ETXTBSY) instead of failing the run: a script still open for writing elsewhere, such as one a project pull is rewriting, or a file another thread's child briefly held, now runs once the writer lets go.
 - Two pulls of one project (a Pull landing on a scheduled one, or a reload's clone) no longer run in the same checkout at once: the second waits for the first.
 - An on-demand refresh that outlasted its budget now counts in the source's `sync_health` (`last_error`, `consecutive_failures`) like one that failed; it left no trace before.

@@ -183,6 +183,11 @@ pub fn apply(state: &AppState, cfg: &AppConfig) -> ReloadReport {
         sources_changed = report.sources.total(),
         "Configuration reloaded"
     );
+    // The same notices startup logs: a configuration pushed and reloaded in
+    // a deprecated form would otherwise be told only at the next restart.
+    for note in cfg.deprecations() {
+        tracing::warn!("{note}");
+    }
 
     report
 }

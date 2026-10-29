@@ -829,6 +829,54 @@ impl AppConfig {
                     errors.push(vault_as_login(&format!("Source '{id}'"), cred_id));
                 }
             }
+            // Two credentials delivered under one id would overwrite each
+            // other's CREDENTIAL_<ID>_<FIELD> values, silently.
+            let mut by_id: HashMap<String, Vec<&String>> = HashMap::new();
+            for cred_id in &source.credential_ids {
+                by_id
+                    .entry(crate::domain::credential::delivery_id(cred_id))
+                    .or_default()
+                    .push(cred_id);
+            }
+            let mut clashes: Vec<(String, Vec<&String>)> = by_id
+                .into_iter()
+                .filter(|(_, ids)| ids.iter().collect::<HashSet<_>>().len() > 1)
+                .collect();
+            clashes.sort();
+            for (delivered, ids) in clashes {
+                errors.push(format!(
+                    "Source '{id}' uses credentials {} that are all delivered as \
+                     CREDENTIAL_{}_* — rename one",
+                    ids.iter()
+                        .map(|c| format!("'{c}'"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    delivered.to_uppercase()
+                ));
+            }
+            // The built-in ssh and remote connectors read one login's bare
+            // fields (username and the key, the token). A second credential
+            // sharing a field takes its bare name away, and they would
+            // silently log in as root or send no token.
+            let distinct: HashSet<&String> = source.credential_ids.iter().collect();
+            if distinct.len() > 1
+                && matches!(
+                    source.connector_type,
+                    crate::domain::source::ConnectorType::Ssh
+                        | crate::domain::source::ConnectorType::Remote
+                )
+            {
+                errors.push(format!(
+                    "Source '{id}' lists {} credentials, but its {} connector logs in with \
+                     one — keep one",
+                    distinct.len(),
+                    if source.connector_type == crate::domain::source::ConnectorType::Ssh {
+                        "ssh"
+                    } else {
+                        "remote"
+                    }
+                ));
+            }
         }
 
         // Projects must exist — the checkout of that project is where a
@@ -2597,6 +2645,34 @@ mod tests {
         let err = load_err(&dir);
         assert!(
             err.contains("Host 'web01' references unknown source 'src-gone'"),
+            "{err}"
+        );
+    }
+
+    // Two credentials one source would deliver under one id, and a second
+    // credential on a connector that logs in with one, are refused.
+    #[test]
+    fn a_source_s_credentials_never_collide() {
+        let dir = dir_with_one_source();
+        fs::write(
+            dir.path().join("cred.yaml"),
+            "credentials:\n  - name: cred-vc-aa1\n    type: token\n    env_vars:\n      token: A\n  - name: cred_vc_aa1\n    type: token\n    env_vars:\n      token: B\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("sources.yaml"),
+            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\n    credentials: [cred-vc-aa1, cred_vc_aa1]\n  - name: src-edge\n    connector: remote\n    ttl_seconds: 60\n    credentials: [cred-vc-aa1, cred_vc_aa1]\n    config:\n      url: https://edge.example\n      source: src-x\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
+        )
+        .unwrap();
+        let err = load_err(&dir);
+        assert!(
+            err.contains("that are all delivered as CREDENTIAL_VC_AA1_*"),
+            "{err}"
+        );
+        assert!(
+            err.contains(
+                "Source 'src-edge' lists 2 credentials, but its remote connector logs in with one"
+            ),
             "{err}"
         );
     }

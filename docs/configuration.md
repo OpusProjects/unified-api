@@ -489,7 +489,16 @@ are passed through as `<key>_path` values. A credential that fails to resolve
 The older env form, `env_prefix` + `secret_keys` (`SECTION9` + `{username:
 USERNAME}` reads `SECTION9_USERNAME`), is still read but **deprecated**: startup
 and `--check-config` print the `env_vars` to write instead, and a later release
-refuses it. Setting both forms on one credential is refused.
+refuses it. Setting both forms on one credential is refused, and so is
+`env_vars` beside a `vault_path` or a `secret_file`: a credential reads from
+one place.
+
+Two rules keep the variables a script receives unambiguous (see
+[connectors](connectors.md)): a source's credentials must not be delivered
+under one id (`cred-vc-aa1` and `cred_vc_aa1` both become
+`CREDENTIAL_VC_AA1_*`), and a source on the built-in `ssh` or `remote`
+connector lists one credential — those connectors log in with one, reading its
+bare `username` and key, or `token`.
 
 A Vault is a credential too, of `type: vault`, as AWX models a HashiCorp
 Vault lookup: the credentials that read from it name it with `vault:` and
@@ -544,7 +553,9 @@ The `secrets:` block in `config.yaml` (`cache_ttl_seconds`, and a single
 `vault:` with `token_env`) still loads but is **deprecated**: startup and
 `--check-config` say what to write instead, and a later release refuses it.
 While it is set, its `cache_ttl_seconds` still caches every credential, as it
-did, and a `vault_path` with no `vault:` reads from its `vault:`.
+did (in place of each Vault's own cache, never on top of it), and a
+`vault_path` with no `vault:` reads from its `vault:`, cached for 60 seconds
+when `cache_ttl_seconds` is absent, as 0.36 did by default.
 
 ---
 

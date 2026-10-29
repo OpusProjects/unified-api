@@ -6,6 +6,16 @@ use unified_api::adapters::out::git::cli::CliGit;
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // Gone in 0.37: a pipeline step still calling it must fail, not start a
+    // server that binds a port and never exits.
+    if args.iter().any(|arg| arg == "--migrate-config") {
+        eprintln!(
+            "--migrate-config was removed in 0.37: convert a 0.34 directory with \
+             unified-api 0.36's --migrate-config, then upgrade"
+        );
+        std::process::exit(1);
+    }
+
     // Validate-only mode for CI on config repositories: load and validate the
     // configuration exactly as startup would, report, and exit — nothing
     // binds, no scheduler starts, and no secrets are resolved (a CI runner

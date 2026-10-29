@@ -31,17 +31,32 @@ use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 // would be two chances for the reloaded one to differ from the booted one.
 pub fn build_chain(cfg: &AppConfig) -> Arc<dyn SecretsPort> {
     let credentials = &cfg.credentials;
+    // The deprecated outer cache, when set, covers every credential, Vaults
+    // included: a Vault's own cache under it would only add its TTL to the
+    // time a rotation takes.
+    let outer = cfg.secrets_config.cache_ttl_seconds.filter(|ttl| *ttl > 0);
     let vaults = credentials
         .iter()
         .filter(|(_, c)| c.credential_type == CredentialType::Vault)
-        .map(|(id, c)| (id.clone(), vault_client(c, credentials)))
+        .map(|(id, c)| (id.clone(), vault_client(c, credentials, outer.is_none())))
         .collect();
+    // The deprecated config.yaml Vault keeps the 60s cache 0.36 gave it by
+    // default (secrets.cache_ttl_seconds defaulted to 60 and covered it):
+    // without it, a configuration that has not moved yet turns every sync into
+    // a Vault request. An explicit cache_ttl_seconds is the outer cache below.
     let legacy = cfg.secrets_config.vault.as_ref().map(|config| {
-        Arc::new(vault::VaultSecrets::new(
+        let client = Box::new(vault::VaultSecrets::new(
             config.clone(),
             credentials.clone(),
             Box::new(env::EnvSecrets::new(credentials.clone())),
-        )) as Arc<dyn SecretsPort>
+        ));
+        match cfg.secrets_config.cache_ttl_seconds {
+            None => Arc::new(cache::CachedSecrets::new(
+                client,
+                std::time::Duration::from_secs(60),
+            )) as Arc<dyn SecretsPort>,
+            Some(_) => Arc::from(client as Box<dyn SecretsPort>),
+        }
     });
     let routed = Routed {
         credentials: credentials.clone(),
@@ -49,8 +64,8 @@ pub fn build_chain(cfg: &AppConfig) -> Arc<dyn SecretsPort> {
         vaults,
         legacy,
     };
-    match cfg.secrets_config.cache_ttl_seconds {
-        None | Some(0) => Arc::new(routed),
+    match outer {
+        None => Arc::new(routed),
         Some(ttl) => Arc::new(cache::CachedSecrets::new(
             Box::new(routed),
             std::time::Duration::from_secs(ttl),
@@ -58,10 +73,12 @@ pub fn build_chain(cfg: &AppConfig) -> Arc<dyn SecretsPort> {
     }
 }
 
-// One `type: vault` credential as a client, behind its own cache.
+// One `type: vault` credential as a client, behind its own cache (unless an
+// outer one covers it).
 fn vault_client(
     vault: &Credential,
     credentials: &HashMap<String, Credential>,
+    own_cache: bool,
 ) -> Arc<dyn SecretsPort> {
     let config = vault::VaultConfig {
         address: vault.address.clone().unwrap_or_default(),
@@ -80,6 +97,7 @@ fn vault_client(
         Box::new(env::EnvSecrets::new(credentials.clone())),
     ));
     match vault.cache_ttl_seconds.unwrap_or(60) {
+        _ if !own_cache => Arc::from(client as Box<dyn SecretsPort>),
         0 => Arc::from(client as Box<dyn SecretsPort>),
         ttl => Arc::new(cache::CachedSecrets::new(
             client,
@@ -158,5 +176,55 @@ mod tests {
         assert_eq!(chain.resolve("cred-a").await.unwrap()["token"], "one");
         unsafe { std::env::set_var("UNIFIED_API_TEST_FRESH_TOKEN", "two") };
         assert_eq!(chain.resolve("cred-a").await.unwrap()["token"], "two");
+    }
+
+    // A configuration still on the deprecated config.yaml Vault, with no
+    // cache_ttl_seconds, keeps the 60s cache 0.36 gave it by default: two
+    // resolutions, one read from Vault.
+    #[tokio::test]
+    async fn the_deprecated_vault_keeps_its_default_cache() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&reads);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                counted.fetch_add(1, Ordering::SeqCst);
+                let body = r#"{"data":{"data":{"token":"t"}}}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.yaml"),
+            format!(
+                "server:\n  host: \"127.0.0.1\"\n  port: 9090\nsecrets:\n  vault:\n    address: {address}\n    token_env: UNIFIED_API_TEST_LEGACY_VAULT_TOKEN\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("cred.yaml"),
+            "credentials:\n  - name: cred-a\n    type: token\n    vault_path: team/a\n",
+        )
+        .unwrap();
+        // SAFETY: a variable no other test reads.
+        unsafe { std::env::set_var("UNIFIED_API_TEST_LEGACY_VAULT_TOKEN", "x") };
+        let cfg = crate::config::load_config(dir.path().to_str().unwrap()).unwrap();
+        let chain = build_chain(&cfg);
+
+        assert_eq!(chain.resolve("cred-a").await.unwrap()["token"], "t");
+        assert_eq!(chain.resolve("cred-a").await.unwrap()["token"], "t");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 }

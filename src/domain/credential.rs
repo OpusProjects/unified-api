@@ -218,6 +218,12 @@ impl Credential {
                     ));
                 }
             }
+            if self.timeout_seconds == Some(0) {
+                errors.push(format!(
+                    "Credential '{id}': timeout_seconds 0 would fail every request to this \
+                     Vault — give it a bound in seconds (default 10)"
+                ));
+            }
             if self.jwt_path.is_some() && self.kubernetes_role.is_none() {
                 errors.push(format!(
                     "Credential '{id}' sets jwt_path without kubernetes_role — it is only \
@@ -245,15 +251,23 @@ impl Credential {
                  which names each variable in full"
             ));
         }
-        if !self.env_vars.is_empty()
-            && !self.secret_keys.is_empty()
-            && self.vault_path.is_none()
-            && self.secret_file.is_none()
-        {
-            errors.push(format!(
-                "Credential '{id}' sets secret_keys beside env_vars — env_vars already \
-                 maps each field to its variable; remove secret_keys"
-            ));
+        // One credential reads from one place. env_vars beside a vault_path
+        // or a secret_file used to load, and one side was silently never
+        // read (Vault wins over env_vars; env_vars over the file).
+        if !self.env_vars.is_empty() {
+            for (key, set) in [
+                ("vault_path", self.vault_path.is_some()),
+                ("secret_file", self.secret_file.is_some()),
+                ("secret_keys", !self.secret_keys.is_empty()),
+            ] {
+                if set {
+                    errors.push(format!(
+                        "Credential '{id}' sets {key} beside env_vars — a credential reads \
+                         from one place: env_vars names each variable, so keep it or {key}, \
+                         not both"
+                    ));
+                }
+            }
         }
         errors
     }
@@ -283,6 +297,27 @@ impl Credential {
             pairs.join(", ")
         ))
     }
+}
+
+// A credential's name as the part of a variable name its fields are also
+// delivered under (CREDENTIAL_<ID>_<FIELD>): lower case, a leading `cred-` or
+// `cred_` (the naming convention every example uses) dropped, and anything
+// that cannot appear in an environment variable name written as `_`.
+// `cred-vcenter-aa1` → `vcenter_aa1`. Also what config validation compares,
+// so two credentials of one source can never be delivered under one id.
+pub fn delivery_id(credential_id: &str) -> String {
+    let id = variable_part(credential_id);
+    id.strip_prefix("cred_").map(str::to_string).unwrap_or(id)
+}
+
+// Any name as it reads inside a variable name: lower case, anything outside
+// [a-z0-9] as `_`. A field is compared with a delivery id in this form, so
+// `AVAMAR_AA1_URL` and `avamar_aa1_url` are the same field.
+pub fn variable_part(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
 #[cfg(test)]
@@ -317,6 +352,40 @@ mod tests {
         assert_eq!(c.fields(), vec!["password", "username"]);
         assert!(c.deprecation("cred-d42").is_none());
         assert!(c.errors("cred-d42").is_empty());
+    }
+
+    // One credential reads from one place: env_vars beside a file or a Vault
+    // path used to load with one side silently never read.
+    #[test]
+    fn env_vars_beside_a_file_or_a_vault_path_are_refused() {
+        let c = credential(
+            "name: x\ntype: token\nenv_vars:\n  token: T\nsecret_file: /run/x.json\nvault_path: a/b\n",
+        );
+        let errors = c.errors("cred-x");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("sets vault_path beside env_vars")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("sets secret_file beside env_vars")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_vault_with_a_zero_timeout_is_refused() {
+        let c = credential(
+            "name: v\ntype: vault\naddress: https://v\nenv_vars:\n  token: T\ntimeout_seconds: 0\n",
+        );
+        assert!(
+            c.errors("cred-v")
+                .iter()
+                .any(|e| e.contains("timeout_seconds 0"))
+        );
     }
 
     #[test]

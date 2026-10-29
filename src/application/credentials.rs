@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::domain::credential::Credential;
+use crate::domain::credential::{Credential, delivery_id, variable_part};
 use crate::domain::ldap::LdapConfig;
 use crate::domain::project::GitProject;
 use crate::domain::source::Source;
@@ -8,7 +8,7 @@ use crate::ports::secrets::{SecretsError, SecretsPort};
 
 // Resolves a list of credential_ids against the SecretsPort and combines
 // all key-value pairs into a single HashMap, each field under two names:
-// - `<id>_<field>` always (see `id_prefix`): `cred-vcenter-aa1`'s username is
+// - `<id>_<field>` always (see `domain::credential::delivery_id`): `cred-vcenter-aa1`'s username is
 //   `vcenter_aa1_username`, CREDENTIAL_VCENTER_AA1_USERNAME to a script, so a
 //   source with one credential per site can tell them apart.
 // - `<field>` only when no other of these credentials has that field. It used
@@ -30,7 +30,10 @@ pub async fn resolve_credentials(
     credential_ids: &[String],
 ) -> Result<HashMap<String, String>, SecretsError> {
     let mut resolved = Vec::with_capacity(credential_ids.len());
-    for credential_id in credential_ids {
+    let mut seen = std::collections::HashSet::new();
+    // A credential listed twice is one credential: counted twice, its every
+    // field would look shared and lose its bare name.
+    for credential_id in credential_ids.iter().filter(|id| seen.insert(id.as_str())) {
         match secrets.resolve(credential_id).await {
             Ok(fields) => resolved.push((credential_id, fields)),
             Err(e) => {
@@ -51,14 +54,14 @@ pub async fn resolve_credentials(
 
     let mut all_credentials = HashMap::new();
     for (credential_id, fields) in &resolved {
-        let prefix = format!("{}_", id_prefix(credential_id));
+        let prefix = format!("{}_", delivery_id(credential_id));
         for (field, value) in fields {
             // A field already named after its credential (`avamar_aa1_url` on
             // cred-avamar-aa1, the hand-made form that predates this) is
             // not prefixed twice: scripts that discover sites by scanning
             // CREDENTIAL_AVAMAR_<SITE>_URL would otherwise find a second,
             // phantom site AA1_AVAMAR_AA1 and poll the same grid twice.
-            let under_id = if field.starts_with(&prefix) {
+            let under_id = if variable_part(field).starts_with(&prefix) {
                 field.clone()
             } else {
                 format!("{prefix}{field}")
@@ -70,21 +73,6 @@ pub async fn resolve_credentials(
         }
     }
     Ok(all_credentials)
-}
-
-// A credential id as a variable-name prefix: lower case, a leading `cred-`
-// (the naming convention every example uses) dropped, and anything that
-// cannot appear in an environment variable name written as `_`.
-// `cred-vcenter-aa1` → `vcenter_aa1`.
-fn id_prefix(credential_id: &str) -> String {
-    let id = credential_id.to_lowercase();
-    let id = id
-        .strip_prefix("cred-")
-        .or_else(|| id.strip_prefix("cred_"))
-        .unwrap_or(&id);
-    id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
 }
 
 // What names a credential in its configuration: the sources that pass it
@@ -210,9 +198,30 @@ mod tests {
 
     #[test]
     fn an_id_becomes_a_variable_prefix() {
-        assert_eq!(id_prefix("cred-vcenter-aa1"), "vcenter_aa1");
-        assert_eq!(id_prefix("cred_ucs.a6"), "ucs_a6");
-        assert_eq!(id_prefix("Edge-PQ-DC4"), "edge_pq_dc4");
+        assert_eq!(delivery_id("cred-vcenter-aa1"), "vcenter_aa1");
+        assert_eq!(delivery_id("cred_ucs.a6"), "ucs_a6");
+        assert_eq!(delivery_id("Edge-PQ-DC4"), "edge_pq_dc4");
+    }
+
+    // However the hand-made field is written, it is not prefixed again.
+    #[tokio::test]
+    async fn the_no_double_prefix_rule_ignores_case() {
+        let secrets =
+            MockSecrets::new().with("cred-avamar-aa1", [("AVAMAR_AA1_URL", "https://aa1")]);
+        let resolved = resolve_credentials(&secrets, &ids(&["cred-avamar-aa1"]))
+            .await
+            .unwrap();
+        let names: Vec<&String> = resolved.keys().collect();
+        assert_eq!(names, ["AVAMAR_AA1_URL"]);
+    }
+
+    #[tokio::test]
+    async fn a_credential_listed_twice_keeps_its_bare_names() {
+        let secrets = MockSecrets::new().with("cred-gh", [("token", "t")]);
+        let resolved = resolve_credentials(&secrets, &ids(&["cred-gh", "cred-gh"]))
+            .await
+            .unwrap();
+        assert_eq!(resolved["token"], "t");
     }
 
     #[test]

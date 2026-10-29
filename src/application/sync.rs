@@ -326,6 +326,33 @@ pub async fn sync_source(
     // handler cannot drift: every sync in the process goes through this
     // function. Until now a failed scheduled sync left nothing behind but a log
     // line, so a stale dataset could not be told apart from a slow one.
+    // Recorded as soon as the gather has landed, BEFORE the enrichment below:
+    // a caller that gives up while an enricher runs (an on-demand refresh past
+    // its budget) must find this sync recorded as what it was, not as a
+    // failure the data in the cache contradicts.
+    match &outcome.error {
+        None => health.record_success(source_id),
+        Some(error) => health.record_failure(source_id, error),
+    }
+    health.record_run(
+        source_id,
+        RunRecord {
+            started_at,
+            // The gather and the cache write — the same number as the sync
+            // response's `sync_duration_ms` and the duration histogram — not
+            // the enrichment re-applied above, which records its own runs.
+            duration_ms: outcome.duration_ms as u64,
+            trigger: run_trigger,
+            by,
+            scope: Some(outcome.scope.clone()),
+            error: outcome.error.clone(),
+            hosts: outcome.success().then_some(outcome.total_hosts),
+            groups: outcome.success().then_some(outcome.total_groups),
+            revision_before: None,
+            revision: None,
+        },
+    );
+
     // A sync replaces what it wrote, so whatever an enricher had added to
     // those hosts went with it. Re-apply here, at the one place every sync in
     // the process passes through, so no caller can forget — the same reason
@@ -351,29 +378,6 @@ pub async fn sync_source(
             );
         }
     }
-
-    match &outcome.error {
-        None => health.record_success(source_id),
-        Some(error) => health.record_failure(source_id, error),
-    }
-    health.record_run(
-        source_id,
-        RunRecord {
-            started_at,
-            // The gather and the cache write — the same number as the sync
-            // response's `sync_duration_ms` and the duration histogram — not
-            // the enrichment re-applied above, which records its own runs.
-            duration_ms: outcome.duration_ms as u64,
-            trigger: run_trigger,
-            by,
-            scope: Some(outcome.scope.clone()),
-            error: outcome.error.clone(),
-            hosts: outcome.success().then_some(outcome.total_hosts),
-            groups: outcome.success().then_some(outcome.total_groups),
-            revision_before: None,
-            revision: None,
-        },
-    );
 
     // One counter per outcome and a duration histogram, labeled by source.
     // The metrics facade works like tracing: recording here is fine for the

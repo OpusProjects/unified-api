@@ -163,10 +163,12 @@ construction (the bound socket, router layers, the snapshot task) =
 restart-only, and named in `config::RestartOnlySettings`. The refresh
 limits sit in between: the coordinator holds a live semaphore and budget, and
 a reload pushes new values onto it (`RefreshCoordinator::resize`).
-Secrets resolved via `SecretsPort`: env vars / JSON files by default, native
-Vault (KV v2, token or Kubernetes auth) per credential via `vault_path` +
-`secrets.vault:`, all behind a short resolution cache
-(`secrets.cache_ttl_seconds` — also the rotation latency).
+Secrets resolved via `SecretsPort`: env vars / JSON files (read fresh on every
+use), or native Vault (KV v2, token or Kubernetes auth) for a credential with
+`vault:` + `vault_path`, where the Vault is itself a `type: vault` credential
+behind its own short cache (`cache_ttl_seconds` — also the rotation latency).
+`build_chain` routes each credential; the deprecated `secrets:` block in
+config.yaml still works.
 
 ## Runtime behavior worth knowing
 

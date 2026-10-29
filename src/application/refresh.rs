@@ -307,28 +307,38 @@ pub async fn refresh_hosts(
         }
         Err(_elapsed) => {
             let error = format!("refresh did not finish within {}s", budget.as_secs());
-            // The timeout dropped sync_source before it reached its own
-            // record_failure / record_run, so without these the attempt left
-            // no trace in the source's health or history — exactly the run an
-            // operator looking at a slow source most needs to see. Whatever
-            // the gather was doing when dropped (waiting on the per-source
-            // lock, or the connector, which is killed with it) did not land.
-            health.record_failure(source_id, &error);
-            health.record_run(
-                source_id,
-                RunRecord {
-                    started_at,
-                    duration_ms: clock.elapsed().as_millis() as u64,
-                    trigger: RunTrigger::Refresh,
-                    by: None,
-                    scope: Some(scope_label),
-                    error: Some(error.clone()),
-                    hosts: None,
-                    groups: None,
-                    revision_before: None,
-                    revision: None,
-                },
-            );
+            // sync_source records its run as soon as the gather lands, before
+            // re-applying enrichment. Dropped after that point (an enricher
+            // ran past the budget), the data DID land and the run is already
+            // recorded as what it was: nothing to add. Dropped before it
+            // (waiting on the per-source lock, or the connector, which is
+            // killed with it), nothing landed and nothing was recorded —
+            // without these the attempt left no trace in the source's health
+            // or history, exactly the run an operator looking at a slow source
+            // most needs to see.
+            let landed = health.history(source_id).first().is_some_and(|run| {
+                run.started_at >= started_at
+                    && run.trigger == RunTrigger::Refresh
+                    && run.scope.as_deref() == Some(scope_label.as_str())
+            });
+            if !landed {
+                health.record_failure(source_id, &error);
+                health.record_run(
+                    source_id,
+                    RunRecord {
+                        started_at,
+                        duration_ms: clock.elapsed().as_millis() as u64,
+                        trigger: RunTrigger::Refresh,
+                        by: None,
+                        scope: Some(scope_label),
+                        error: Some(error.clone()),
+                        hosts: None,
+                        groups: None,
+                        revision_before: None,
+                        revision: None,
+                    },
+                );
+            }
             warn!(
                 source = %source_id,
                 hosts = ?still_stale,

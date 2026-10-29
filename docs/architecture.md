@@ -9,6 +9,7 @@ in process memory (DashMap) and configuration comes from YAML files.
 - [Request flows](#request-flows)
 - [Concurrency model](#concurrency-model)
 - [Async trait objects](#async-trait-objects)
+- [Shared with unified-gitops](#shared-with-unified-gitops)
 
 ---
 
@@ -43,7 +44,7 @@ The shape in one picture: adapters on the outside, the application core in the m
 
 | Layer | Path | Contents | May depend on |
 |---|---|---|---|
-| Domain | `src/domain/` | Pure types + logic (`Dataset`, `CacheEntry` TTL/merge logic, config-shaped types) | `std`, `serde` only |
+| Domain | `src/domain/` | Pure types + logic (`Dataset`, `CacheEntry` TTL/merge logic, config-shaped types) | `std`, `serde`, and the types shared through [unified-auth](https://github.com/OpusProjects/unified-auth) |
 | Application | `src/application/` | The use cases: `sync_source`, `run_enricher`, `resolve_credentials` | domain, ports |
 | Ports | `src/ports/` | Trait interfaces the use cases need | domain |
 | Adapters | `src/adapters/` | Everything that touches the outside world, both directions | application, ports, domain |
@@ -111,3 +112,21 @@ lock: the enricher takes a read snapshot, runs the script, then merges atomicall
 Ports need `dyn`-compatible async methods, so they return `Pin<Box<dyn Future + Send>>`
 (see the comment in `ports/connector.rs`, and the `SecretsFuture` alias in
 `ports/secrets.rs`). Adapters clone their inputs into the `async move` block.
+
+---
+
+## Shared with unified-gitops
+
+Credential resolution and LDAP sign-in are not this repository's code: they come from
+[unified-auth](https://github.com/OpusProjects/unified-auth), pinned by tag in `Cargo.toml`.
+
+| Crate | What it provides | Re-exported here as |
+|---|---|---|
+| `unified-secrets` | `Credential`, `SecretsPort`, the env and Vault adapters, the cache, `build_chain` | `domain::credential`, `ports::secrets`, `adapters::out::secrets` |
+| `unified-auth` | `DirectoryPort`, `LdapDirectory`, `LdapConfig<R>`, the login use case and throttle | `ports::directory`, `adapters::out::directory`, `application::login` |
+
+The re-exports keep the layers readable: a port is still listed under `ports/`, an adapter under
+`adapters/out/`. What stays here is this service's own: the load-time checks on a credential
+(`CredentialRules`), the access rule type (sources and endpoints) and what it grants (`grant_for`).
+A fix to the shared code is made in unified-auth and reaches this service with a new tag.
+

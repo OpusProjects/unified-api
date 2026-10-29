@@ -3703,13 +3703,10 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "http-body-util",
- "ldap3",
  "metrics",
  "metrics-exporter-prometheus",
  "reqwest",
  "russh",
- "rustls",
- "rustls-pki-types",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -3722,8 +3719,36 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "unified-auth",
+ "unified-secrets",
  "utoipa",
  "utoipa-swagger-ui",
+]
+
+[[package]]
+name = "unified-auth"
+version = "0.1.0"
+source = "git+https://github.com/OpusProjects/unified-auth?tag=v0.1.0#d199a186716faf2caf3a4023f10debbbfee665e5"
+dependencies = [
+ "ldap3",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "tokio",
+ "tracing",
+ "unified-secrets",
+]
+
+[[package]]
+name = "unified-secrets"
+version = "0.1.0"
+source = "git+https://github.com/OpusProjects/unified-auth?tag=v0.1.0#d199a186716faf2caf3a4023f10debbbfee665e5"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

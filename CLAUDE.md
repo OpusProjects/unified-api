@@ -126,8 +126,9 @@ tests/                        # Integration tests (*.rs), with sample scripts mi
         ├── enrichers/        #   sample enricher scripts
         └── output/           #   sample output transformer scripts
 .cargo/audit.toml             # cargo-audit ignore list (documented advisories)
-.github/scripts/              # helpers the workflow runs (check-changelog.sh)
-CHANGELOG.md                  # Keep a Changelog; move Unreleased entries on release
+release-please-config.json    # release-please: version files, changelog sections
+.release-please-manifest.json # the last released version
+CHANGELOG.md                  # written by release-please from the squashed PR titles
 ```
 
 ## Architecture
@@ -301,101 +302,42 @@ config.yaml still works.
 
 ## Releasing a new version
 
-`main` is protected: it takes no direct pushes and no force pushes, and every
-change needs a PR whose `test`, `audit`, `deny` and `build-image` checks pass.
-That includes the release commit itself — there is no admin bypass.
+Releases are cut by release-please (`.github/workflows/release.yml`), as
+`github-actions[bot]`; the full process is in `docs/releasing.md`. Never bump
+the version, edit a released CHANGELOG section, push a tag or create a GitHub
+Release by hand.
 
-### 1. Choose the number
-
-Semantic Versioning, and the project is pre-1.0:
-
-- **PATCH** (`0.6.1`) — bug fixes only. Nothing added.
-- **MINOR** (`0.7.0`) — anything added (a route, a config key, a response
-  field), *and* anything breaking, since 0.x puts breaking changes in MINOR.
-- New functionality is never a PATCH, however small the diff.
-
-Mark breaking entries in the CHANGELOG as
-`**Breaking (who it affects):**` so a reader can see the risk without a diff.
-
-### 2. Bump, on a branch
-
-```bash
-git checkout main && git pull --ff-only
-git checkout -b release/x.y.z          # the release/ prefix matters, see below
-```
-
-The branch **must** be named `release/*`. CI fails any other PR that edits an
-already-released CHANGELOG section, and cutting a version is precisely that
-edit — renaming `## [Unreleased]` to `## [x.y.z]`. The prefix is how the check
-knows to stand aside.
-
-Five edits, all required:
-
-1. `Cargo.toml` — `version = "x.y.z"` (source of truth; the OpenAPI spec
-   version comes from `CARGO_PKG_VERSION`)
-2. `Cargo.lock` — `[[package]] name = "unified-api" version = "x.y.z"`
-3. `CHANGELOG.md` — rename `## [Unreleased]` to `## [x.y.z] - YYYY-MM-DD` and
-   leave a fresh empty `## [Unreleased]` above it
-4. `CHANGELOG.md` link refs at the bottom — repoint `[Unreleased]` at
-   `vx.y.z...HEAD` and add `[x.y.z]: …/compare/v<previous>...vx.y.z`
-5. `config/projects/prj-connectors-infra.yaml` — `branch: "vx.y.z"`, so the
-   bundled sample scripts are the ones that release's binary reads
-
-### 3. Check before pushing
-
-```bash
-cargo build                        # must compile as the new version
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-git diff --stat Cargo.lock         # exactly 1 line — no dependency drift
-```
-
-Then dry-run the release notes with the same `awk` the workflow uses, because
-a malformed heading silently degrades them to "See CHANGELOG.md for details":
-
-```bash
-awk -v s="## [x.y.z]" 'substr($0,1,length(s))==s{f=1;next} f && substr($0,1,4)=="## ["{exit} f' CHANGELOG.md
-```
-
-### 4. PR, merge, then tag
-
-```bash
-git commit -am "Release x.y.z"     # no type prefix; releases are the exception
-git push -u origin release/x.y.z
-gh pr create --base main --title "Release x.y.z"
-# wait for test + audit + build-image
-gh pr merge --squash --delete-branch --subject "Release x.y.z"
-
-git checkout main && git pull --ff-only   # MUST pull: squashing made a new commit
-git tag vx.y.z && git push origin vx.y.z
-```
-
-**Tag the squashed commit on `main`, not the branch commit.** Squash-merging
-creates a different commit, so tagging before pulling points the tag at
-something that is not on `main`. Tags are not covered by branch protection, so
-the tag push itself needs no PR.
-
-### What CI does with the tag
-
-`.github/workflows/build.yaml` (workflow name "unified-api CI"):
-
-- publishes `ghcr.io/opusprojects/unified-api` as `x.y.z`, `<sha>` and `latest`
-- creates the GitHub Release with notes extracted from the CHANGELOG section
-
-**Only tags publish.** PRs and pushes to `main` build the image and discard it,
-so `latest` always means the newest release rather than the tip of `main`.
-
-Do not create GitHub releases by hand — the workflow does it from the tag, and
-a manual one is authored by a person rather than `github-actions[bot]`, which
-is visible forever in the API and cannot be corrected without deleting and
-recreating the release (losing its original date).
+- **A PR's squashed title is its CHANGELOG line and decides the version.**
+  `feat:` → MINOR, `fix:`/`perf:` → PATCH, `!` or a `BREAKING CHANGE:` footer →
+  MINOR while pre-1.0 (`bump-minor-pre-major`). `refactor`, `docs`, `test`,
+  `build`, `ci`, `chore` are hidden and release nothing on their own. So write
+  titles for a release-notes reader: what changes for them, not
+  `fix: review findings`.
+- **New functionality is never a `fix:`**, however small the diff.
+- After each merge into `main`, release-please updates the one open PR
+  `chore: release vX.Y.Z` on `release-please--branches--main`. It bumps
+  `Cargo.toml`, `Cargo.lock`, the `branch:` tag in
+  `config/projects/prj-connectors-infra.yaml` (the line marked
+  `x-release-please-version`) and `.release-please-manifest.json`, and writes
+  the CHANGELOG section. Wording can be edited on that branch just before
+  merging; a wrong title already merged is fixed with `BEGIN_COMMIT_OVERRIDE`
+  in that PR's description.
+- Its checks: a push made with `GITHUB_TOKEN` starts no workflow, so
+  `release.yml` dispatches `build.yaml` on the release branch
+  (`workflow_dispatch`). If they are missing:
+  `gh workflow run build.yaml --ref release-please--branches--main`.
+- **Merging the release PR is the release:** squash-merge it once green, and
+  `release.yml` creates the tag `vX.Y.Z`, the GitHub Release (notes = the
+  CHANGELOG section) and publishes `ghcr.io/opusprojects/unified-api` as
+  `X.Y.Z`, `<sha>` and `latest`. Only releases publish; `build.yaml` builds
+  the image on PRs and pushes and throws it away.
+- `UI_REF` in `docker/Dockerfile` (the bundled unified-ui) is not bumped by
+  release-please: move it in a `build:` PR before the release that ships it.
 
 ## Conventions
 
-- **Only `## [Unreleased]` is editable in CHANGELOG.md.** Released sections
-  record what shipped. `.github/scripts/check-changelog.sh` runs in CI on every PR and
-  fails if they change — the mistake is otherwise silent, because rebasing
-  across a release makes git apply your entry into the newly released section
-  without a conflict. If that happens, move the entry back up to Unreleased.
+- **CHANGELOG.md is written by release-please.** Do not add entries in feature
+  PRs; the PR title is the entry.
 - Private by default, `pub` only what needs to be exposed
 - Comments only when the WHY is non-obvious
 - **All code comments must be written in English** — no exceptions, including

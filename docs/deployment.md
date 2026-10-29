@@ -15,9 +15,9 @@ and what changes when the target is Kubernetes, ArgoCD or a CI pipeline.
 
 ## Container image
 
-CI publishes `ghcr.io/opusprojects/unified-api` on every push to `main` (tagged
-`latest` and with the commit SHA) and on every `vX.Y.Z` git tag (tagged `X.Y.Z`).
-Production deployments should pin a version tag; `latest` always means the newest release (only tags publish images), never the tip of `main`. The image is a two-stage build (`docker/Dockerfile`: Rust builder →
+Each release publishes `ghcr.io/opusprojects/unified-api` tagged `X.Y.Z`, with
+the commit SHA, and `latest` (see [releasing.md](releasing.md)).
+Production deployments should pin a version tag; `latest` always means the newest release (only releases publish images), never the tip of `main`. The image is a two-stage build (`docker/Dockerfile`: Rust builder →
 `debian:trixie-slim`), runs as a non-root `unified` user, declares a
 `HEALTHCHECK` (via python3) hitting `/healthz`, and bakes in the repo's
 `config/` and the sample scripts under `tests/` as defaults. For connector

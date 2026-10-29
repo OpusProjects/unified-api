@@ -4,8 +4,6 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
 ## [0.37.0] - 2026-10-29
 
 ### Added
@@ -2238,7 +2236,6 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.37.0...HEAD
 [0.37.0]: https://github.com/OpusProjects/unified-api/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/OpusProjects/unified-api/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/OpusProjects/unified-api/compare/v0.34.0...v0.35.0

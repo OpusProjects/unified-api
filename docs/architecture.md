@@ -117,14 +117,15 @@ Ports need `dyn`-compatible async methods, so they return `Pin<Box<dyn Future + 
 
 ## Shared with unified-gitops
 
-Credential resolution, LDAP sign-in, API keys and browser sessions are not this repository's code: they come from
-[auth](https://github.com/OpusProjects/auth), pinned by tag in `Cargo.toml`.
+Credential resolution, LDAP sign-in, API keys, browser sessions and git checkouts are not this repository's code:
+they come from [auth](https://github.com/OpusProjects/auth) and [git](https://github.com/OpusProjects/git), pinned by tag in `Cargo.toml`.
 
 | Crate | What it provides | Re-exported here as |
 |---|---|---|
 | `unified-secrets` | `Credential`, `SecretsPort`, the env and Vault adapters, the cache, `build_chain` | `domain::credential`, `ports::secrets`, `adapters::out::secrets` |
 | `unified-auth` | `DirectoryPort`, `LdapDirectory`, `LdapConfig<R>`, the login use case and throttle | `ports::directory`, `adapters::out::directory`, `application::login` |
 | `unified-auth` (`http`) | API key registry and middleware, session store, CSRF, the browser-form layer | `adapters::in::http::auth`, `adapters::in::http::session` |
+| `unified-git` | `GitPort`, `CliGit` (clone and pull through the git binary, credentials off the command line) | `ports::git`, `adapters::out::git::cli` |
 
 The re-exports keep the layers readable: a port is still listed under `ports/`, an adapter under
 `adapters/out/`. What stays here is this service's own: the load-time checks on a credential

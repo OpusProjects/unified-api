@@ -117,8 +117,8 @@ fn default_branch() -> String {
 
 impl GitProject {
     // The part of the project git needs: where to pull from, and which branch.
-    pub fn remote(&self) -> unified_git::Remote {
-        unified_git::Remote {
+    pub fn remote(&self) -> git_rs::Remote {
+        git_rs::Remote {
             url: self.git_url.clone(),
             branch: self.branch.clone(),
         }

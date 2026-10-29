@@ -1,10 +1,10 @@
 // Secrets adapters (driven): resolve credentials. They live in
-// unified-secrets, shared with unified-gitops: `env` reads from env vars /
+// secrets-rs, shared with unified-gitops: `env` reads from env vars /
 // JSON files; `vault` reads KV v2 secrets over HTTP; `cache` wraps a Vault
 // with a short resolution TTL; `reloadable` is the swappable chain; `mock` is
 // the test double used as the AppBuilder default. Re-exported under their old
 // paths, so the rest of the service names them as before.
-pub use unified_secrets::{cache, env, mock, reloadable, vault};
+pub use secrets_rs::{cache, env, mock, reloadable, vault};
 
 use std::sync::Arc;
 
@@ -13,10 +13,10 @@ use crate::ports::secrets::SecretsPort;
 
 // The chain for this service's configuration: its credentials, and the
 // deprecated `secrets:` block of config.yaml. The routing itself — which
-// credential reads from env, a file or which Vault — is unified-secrets'
+// credential reads from env, a file or which Vault — is secrets-rs'
 // build_chain, the one place it is decided for both services.
 pub fn build_chain(cfg: &AppConfig) -> Arc<dyn SecretsPort> {
-    unified_secrets::build_chain(&cfg.credentials, &cfg.secrets_config)
+    secrets_rs::build_chain(&cfg.credentials, &cfg.secrets_config)
 }
 
 #[cfg(test)]

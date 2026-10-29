@@ -20,10 +20,15 @@ gh pr create --base main
 
 ### Commit / PR message style
 
+Commit and PR titles follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+release-please reads them to pick the next version and to write the CHANGELOG.
+
 - Title: `<type>: short imperative summary`, lowercase after the colon —
   `feat: add SSH connector with parallel execution`, `fix: lost updates in
   cache`. Types in use: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
   `build`, `chore`.
+- A breaking change adds `!` after the type (`feat!: ...`) or a
+  `BREAKING CHANGE:` footer in the body.
 - The squashed title is the CHANGELOG line and decides the next version, so
   write it for someone reading the release notes: what changes for them. See
   [docs/releasing.md](docs/releasing.md).

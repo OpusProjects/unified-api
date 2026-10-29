@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-29
+
 ### Added
 
 - A source's and a project's last runs: `history` on `GET /api/v1/sources/{id}` (its syncs) and on each project in `GET /api/v1/projects` (its pulls), newest first, up to 50 each, in memory since the process started. Each says when it started, how long it took, why (`scheduled`, `manual`, `refresh`, `startup`) and, for a manual run, who (the API key's name or the signed-in user, to admin keys only), and how it ended; a sync what it covered and the hosts and groups it brought, a pull the commit it moved the checkout from and to. A downstream unified-api's on-demand refresh of a federated source reads `refresh` on the origin (its remote connector sends `X-Unified-API-Refresh: 1` with the re-gather), and a refresh that outlasted its budget is a row with its error. See `docs/api.md`.
@@ -17,6 +19,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The image ships unified-ui 0.6.0 (`UI_REF`, was 0.5.0): a History panel on a source's and a project's page, an Order menu on every list, cron schedules in words, counts with thousands separators, linked items as tables on each page, Overview cards that hold their place while they load, a Secrets card on Configuration with one row per Vault, and project cards that always show their Credentials (None for a public repository).
 - **Breaking (scripts reading a field two credentials share, and ssh or remote sources with several credentials):** `CREDENTIAL_<FIELD>` is delivered only when exactly one of the source's credentials has that field, instead of one credential silently overwriting the other; read `CREDENTIAL_<ID>_<FIELD>`. A source on the built-in `ssh` or `remote` connector may list only one credential (they log in with one, by its bare fields), two credentials one source would deliver under one id (`cred-vc-aa1` and `cred_vc_aa1`) are refused, and `env_vars` beside a `vault_path` or `secret_file` is refused instead of one side being silently ignored.
 - Env and file credentials are read on every resolution instead of being reused for 60 seconds: a rotated mounted file is seen on the next sync. Only a Vault caches, for its own `cache_ttl_seconds`; `GET /api/v1/settings` answers `secrets.cache_ttl_seconds` as null unless `config.yaml` still sets it.
 
@@ -2235,7 +2238,8 @@ First tagged release.
 - Docker image (multi-stage, non-root) published to GHCR; CI gates on
   rustfmt, clippy and the test suite; Dependabot for workflow actions
 
-[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/OpusProjects/unified-api/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/OpusProjects/unified-api/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/OpusProjects/unified-api/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/OpusProjects/unified-api/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/OpusProjects/unified-api/compare/v0.33.0...v0.34.0

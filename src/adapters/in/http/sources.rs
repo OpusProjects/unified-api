@@ -314,6 +314,10 @@ impl From<SyncHealth> for SyncHealthInfo {
 pub struct RunInfo {
     /// When it started, unix seconds
     pub started_at: u64,
+    /// Seconds since it started, measured on this instance when the answer
+    /// was built: what a client counts a live age from, so its own clock
+    /// being off does not move it (as `sync_health`'s ages)
+    pub age_seconds: u64,
     /// How long it took. A sync's is the gather and the cache write (the
     /// sync response's `sync_duration_ms`), not the enrichment after it
     pub duration_ms: u64,
@@ -347,6 +351,7 @@ impl RunInfo {
     // `who`: whether this caller may see who asked (admin keys).
     pub fn from_run(run: crate::domain::sync_health::RunRecord, who: bool) -> Self {
         Self {
+            age_seconds: crate::domain::unix_now().saturating_sub(run.started_at),
             started_at: run.started_at,
             duration_ms: run.duration_ms,
             trigger: run.trigger.name(),

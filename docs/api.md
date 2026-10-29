@@ -245,8 +245,12 @@ restart starts them over, as it does the health):
 - `trigger`: `scheduled` (the timer), `manual` (Sync, Pull, the API),
   `refresh` (an on-demand read with `?refresh=true`, here or on a downstream
   unified-api federating this source) or `startup` (a clone of a missing
-  checkout, at boot or on a reload). Set by unified-api, never by the caller:
-  an `x-request-id` reaches the script, not the history.
+  checkout, at boot or on a reload). Set by unified-api from how the run was
+  started: an `x-request-id` reaches the script, not the history. `refresh`
+  for a `POST /sync` comes from the `X-Unified-API-Refresh` header a
+  downstream instance's remote connector sends with `refresh_origin=true`;
+  any key allowed to sync could send it too, and its `by` still names that
+  key.
 - `by`: who asked, the API key's name or the signed-in user, for a manual run
   and for a downstream instance's refresh (its key); shown to admin keys only.
 - A sync has `scope` (`full`, `host:a,b`, `group:x`), and `hosts` and

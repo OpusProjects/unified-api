@@ -44,31 +44,60 @@ pub async fn resolve_credentials(
         }
     }
 
-    // How many of these credentials have each field.
-    let mut holders: HashMap<&str, usize> = HashMap::new();
+    // How many of these credentials have each field, compared as the
+    // variable name it becomes (`TOKEN` and `token` are one CREDENTIAL_TOKEN).
+    let mut holders: HashMap<String, usize> = HashMap::new();
     for (_, fields) in &resolved {
         for field in fields.keys() {
-            *holders.entry(field.as_str()).or_default() += 1;
+            *holders.entry(variable_part(field)).or_default() += 1;
         }
     }
 
+    // Every name delivered, keyed by the variable it becomes, with where it
+    // came from: two different values never land on one variable. That is
+    // an error naming both, not a silent last-one-wins.
     let mut all_credentials = HashMap::new();
+    let mut origin: HashMap<String, (String, String)> = HashMap::new();
+    let mut deliver = |name: String, value: &String, credential_id: &str, field: &str| {
+        let variable = variable_part(&name);
+        match origin.get(&variable) {
+            Some((other, other_field)) if other != credential_id || other_field != field => {
+                return Err(SecretsError {
+                    message: format!(
+                        "credentials '{other}' (field '{other_field}') and '{credential_id}' \
+                         (field '{field}') would both reach the connector as CREDENTIAL_{} — \
+                         rename one of the fields",
+                        variable.to_uppercase()
+                    ),
+                });
+            }
+            _ => {}
+        }
+        origin.insert(variable, (credential_id.to_string(), field.to_string()));
+        all_credentials.insert(name, value.clone());
+        Ok(())
+    };
     for (credential_id, fields) in &resolved {
         let prefix = format!("{}_", delivery_id(credential_id));
         for (field, value) in fields {
-            // A field already named after its credential (`avamar_aa1_url` on
-            // cred-avamar-aa1, the hand-made form that predates this) is
+            let variable = variable_part(field);
+            let unshared = holders[&variable] == 1;
+            // A field already named after its credential (`avamar_aa1_url`
+            // on cred-avamar-aa1, the hand-made form that predates this) is
             // not prefixed twice: scripts that discover sites by scanning
             // CREDENTIAL_AVAMAR_<SITE>_URL would otherwise find a second,
-            // phantom site AA1_AVAMAR_AA1 and poll the same grid twice.
-            let under_id = if variable_part(field).starts_with(&prefix) {
-                field.clone()
-            } else {
-                format!("{prefix}{field}")
-            };
-            all_credentials.insert(under_id, value.clone());
-            if holders[field.as_str()] == 1 {
-                all_credentials.insert(field.clone(), value.clone());
+            // phantom site AA1_AVAMAR_AA1. Only an unshared field with
+            // something after the prefix: `ssh_key_path` on cred-ssh, shared
+            // with another credential, is a field like any other.
+            let hand_made =
+                unshared && variable.len() > prefix.len() && variable.starts_with(&prefix);
+            if hand_made {
+                deliver(field.clone(), value, credential_id, field)?;
+                continue;
+            }
+            deliver(format!("{prefix}{field}"), value, credential_id, field)?;
+            if unshared {
+                deliver(field.clone(), value, credential_id, field)?;
             }
         }
     }
@@ -213,6 +242,46 @@ mod tests {
             .unwrap();
         let names: Vec<&String> = resolved.keys().collect();
         assert_eq!(names, ["AVAMAR_AA1_URL"]);
+    }
+
+    // A shared field is a field like any other, even when its name happens
+    // to start with the credential's id: never handed out bare.
+    #[tokio::test]
+    async fn a_shared_field_starting_with_its_id_is_still_prefixed() {
+        let secrets = MockSecrets::new()
+            .with("cred-ssh", [("ssh_key_path", "/a")])
+            .with("cred-ssh-dc4", [("ssh_key_path", "/b")]);
+        let resolved = resolve_credentials(&secrets, &ids(&["cred-ssh", "cred-ssh-dc4"]))
+            .await
+            .unwrap();
+        assert!(!resolved.contains_key("ssh_key_path"));
+        assert_eq!(resolved["ssh_ssh_key_path"], "/a");
+        assert_eq!(resolved["ssh_dc4_ssh_key_path"], "/b");
+    }
+
+    // Two values that would reach one variable fail the resolution, naming
+    // both, instead of one silently winning.
+    #[tokio::test]
+    async fn two_values_on_one_variable_are_an_error() {
+        let secrets = MockSecrets::new()
+            .with("cred-avamar", [("aa1_url", "old")])
+            .with("cred-avamar-aa1", [("url", "new")]);
+        let err = resolve_credentials(&secrets, &ids(&["cred-avamar", "cred-avamar-aa1"]))
+            .await
+            .unwrap_err();
+        assert!(
+            err.message.contains("CREDENTIAL_AVAMAR_AA1_URL"),
+            "{}",
+            err.message
+        );
+
+        let secrets = MockSecrets::new()
+            .with("cred-a", [("TOKEN", "1")])
+            .with("cred-b", [("token", "2")]);
+        let resolved = resolve_credentials(&secrets, &ids(&["cred-a", "cred-b"]))
+            .await
+            .unwrap();
+        assert!(!resolved.contains_key("token") && !resolved.contains_key("TOKEN"));
     }
 
     #[tokio::test]

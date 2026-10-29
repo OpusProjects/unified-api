@@ -59,13 +59,17 @@ A connector sees only the credentials its source declares — and nothing else:
 the child environment is scrubbed, so no script can read the API keys or
 another source's values. Each field arrives under its credential, as
 `CREDENTIAL_<ID>_<KEY>` (`cred-vcenter-aa1`'s `username` →
-`CREDENTIAL_VCENTER_AA1_USERNAME`: the name upper-cased, a leading `cred-`
-dropped, anything else not a letter or digit as `_`), and also as
-`CREDENTIAL_<KEY>` when no other of the source's credentials has that field.
+`CREDENTIAL_VCENTER_AA1_USERNAME`: the name upper-cased, a leading `cred-` or
+`cred_` dropped, anything else not a letter or digit as `_`), and also as
+`CREDENTIAL_<KEY>` when no other of the source's credentials has that field
+(compared as the variable it becomes: `TOKEN` and `token` are one field).
 A source with one credential per site reads each site's under its id; two
-`username`s are never silently reduced to one. A field already named after its
-credential (`avamar_aa1_url` on `cred-avamar-aa1`) is not prefixed twice, so
-configurations written that way by hand deliver exactly what they did.
+`username`s are never silently reduced to one. A field no other credential
+has and already named after its own (`avamar_aa1_url` on `cred-avamar-aa1`)
+is not prefixed twice, so configurations written that way by hand deliver
+exactly what they did. If two values would still reach one variable
+(`cred-avamar`'s `aa1_url` and `cred-avamar-aa1`'s `url`), the sync fails
+naming both, rather than one silently winning.
 
 `env_vars: {username: D42_USERNAME}` on `cred-d42` reads `D42_USERNAME` and
 delivers `CREDENTIAL_D42_USERNAME` and `CREDENTIAL_USERNAME`; a `file_keys`

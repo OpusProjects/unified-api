@@ -44,7 +44,7 @@ The shape in one picture: adapters on the outside, the application core in the m
 
 | Layer | Path | Contents | May depend on |
 |---|---|---|---|
-| Domain | `src/domain/` | Pure types + logic (`Dataset`, `CacheEntry` TTL/merge logic, config-shaped types) | `std`, `serde`, and the types shared through [unified-auth](https://github.com/OpusProjects/unified-auth) |
+| Domain | `src/domain/` | Pure types + logic (`Dataset`, `CacheEntry` TTL/merge logic, config-shaped types) | `std`, `serde`, and the types shared through [auth](https://github.com/OpusProjects/auth) |
 | Application | `src/application/` | The use cases: `sync_source`, `run_enricher`, `resolve_credentials` | domain, ports |
 | Ports | `src/ports/` | Trait interfaces the use cases need | domain |
 | Adapters | `src/adapters/` | Everything that touches the outside world, both directions | application, ports, domain |
@@ -118,7 +118,7 @@ Ports need `dyn`-compatible async methods, so they return `Pin<Box<dyn Future + 
 ## Shared with unified-gitops
 
 Credential resolution, LDAP sign-in, API keys and browser sessions are not this repository's code: they come from
-[unified-auth](https://github.com/OpusProjects/unified-auth), pinned by tag in `Cargo.toml`.
+[auth](https://github.com/OpusProjects/auth), pinned by tag in `Cargo.toml`.
 
 | Crate | What it provides | Re-exported here as |
 |---|---|---|
@@ -130,5 +130,5 @@ The re-exports keep the layers readable: a port is still listed under `ports/`, 
 `adapters/out/`. What stays here is this service's own: the load-time checks on a credential
 (`CredentialRules`), the access rule type (sources and endpoints) and what it grants (`grant_for`), `Permissions`, how
 api_keys.yaml becomes keys, the session cookie's name, and the login and Users pages.
-A fix to the shared code is made in unified-auth and reaches this service with a new tag.
+A fix to the shared code is made in the auth repository and reaches this service with a new tag.
 

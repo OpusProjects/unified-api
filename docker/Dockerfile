@@ -1,10 +1,10 @@
-# Stage 1: the web UI. unified-ui is its own repository with its own
+# Stage 1: the web UI. The ui repository is its own project with its own
 # versions; each unified-api release pins the one it ships (UI_REF), so an
 # image always serves the UI it was tested with.
 FROM node:22-alpine AS ui
 ARG UI_REF=v0.6.0
 RUN apk add --no-cache git \
-    && git clone --depth 1 --branch "$UI_REF" https://github.com/OpusProjects/unified-ui.git /ui
+    && git clone --depth 1 --branch "$UI_REF" https://github.com/OpusProjects/ui.git /ui
 WORKDIR /ui
 RUN npm ci --no-audit --no-fund && npm run build
 

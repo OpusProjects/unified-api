@@ -52,8 +52,9 @@ pub struct PerSource {
     pub ttl_seconds: u64,
 }
 
-// Fold host and group items into the sources they name: each source ends up
-// with the per-host and per-group TTLs that concern it, which is all the
+// Fold host and group items into the sources they name, beside what each
+// source's own ttl_overrides says: each source ends up with the per-host and
+// per-group TTLs that concern it, which is all the
 // refresh gate and the freshness reports read. Runs at load, after the
 // sources are resolved, as a source's connector is folded in: nothing at
 // sync or read time looks at an item.
@@ -85,11 +86,21 @@ pub fn fold_into_sources(
                 continue;
             };
             let overrides = &mut source.ttl_overrides;
-            let map = if kind == "Host" {
-                &mut overrides.hosts
+            let (map, key) = if kind == "Host" {
+                (&mut overrides.hosts, "hosts")
             } else {
-                &mut overrides.groups
+                (&mut overrides.groups, "groups")
             };
+            // Both places for one host on one source: which value counts
+            // would depend on the reader knowing a precedence rule, so say
+            // so instead of picking one.
+            if map.contains_key(id) {
+                errors.push(format!(
+                    "{kind} '{id}' sets a TTL for source '{source_id}', whose \
+                     ttl_overrides.{key} already sets one for it — keep one of the two"
+                ));
+                continue;
+            }
             map.insert(id.clone(), settings.ttl_seconds);
         }
     }
@@ -174,5 +185,45 @@ mod tests {
         assert_eq!(errors.len(), 2);
         assert!(errors[0].contains("Group 'production' names view 'vw-all'"));
         assert!(errors[1].contains("Host 'web01' references unknown source 'src-gone'"));
+    }
+}
+
+#[cfg(test)]
+mod beside_the_source {
+    use super::*;
+
+    // A source's own ttl_overrides and an item for another host coexist; the
+    // same host in both is refused, naming both.
+    #[test]
+    fn a_source_s_own_overrides_and_items_coexist_but_never_overlap() {
+        let source: Source = serde_json::from_value(serde_json::json!({
+            "name": "S",
+            "script_path": "x.py",
+            "ttl_seconds": 14400,
+            "ttl_overrides": { "hosts": { "web01": 60 } },
+        }))
+        .unwrap();
+        let mut sources = HashMap::from([("src-a".to_string(), source)]);
+        let item = |ttl| HostDef {
+            name: "h".into(),
+            sources: HashMap::from([("src-a".to_string(), PerSource { ttl_seconds: ttl })]),
+        };
+        let hosts = HashMap::from([
+            ("web02".to_string(), item(30)),
+            ("web01".to_string(), item(30)),
+        ]);
+
+        let errors = fold_into_sources(&hosts, &HashMap::new(), &mut sources, &[]);
+
+        assert_eq!(sources["src-a"].ttl_overrides.hosts["web02"], 30);
+        assert_eq!(
+            sources["src-a"].ttl_overrides.hosts["web01"], 60,
+            "the source's stays"
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("ttl_overrides.hosts already sets one"),
+            "{errors:?}"
+        );
     }
 }

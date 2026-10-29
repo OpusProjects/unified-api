@@ -86,6 +86,7 @@ const ORDER: [(&str, &[&str]); 10] = [
             "schedule",
             "sync_interval_seconds",
             "ttl_seconds",
+            "ttl_overrides",
             "allow_on_demand_refresh",
             "host_sync_updates_group_vars",
             "hosts_from_source",
@@ -308,12 +309,8 @@ pub fn plan(dir: &Path) -> Result<Option<MigrationPlan>, String> {
     // Sources: split each into the source and its connector.
     let sources = sections.remove("sources").unwrap_or_default();
     let (sources, connectors) = extract_connectors(sources, &mut plan)?;
-    // A source's ttl_overrides: one host or group item each, naming it.
-    let (sources, hosts, groups) = extract_ttl_overrides(sources, &mut plan)?;
     sections.insert("sources", sources);
     sections.insert("connectors", connectors);
-    sections.insert("hosts", hosts);
-    sections.insert("groups", groups);
 
     for (section, items) in &sections {
         for (id, body) in items {
@@ -422,63 +419,6 @@ struct ConnectorKey {
     // What the connector is named after: the 0.34 script_path, which for
     // ssh was the label (gather_facts) or the command.
     hint: String,
-}
-
-// 0.34's per-source `ttl_overrides: {hosts: {h: n}, groups: {g: n}}`, as
-// host and group items (see domain::host): one item per host or group,
-// collecting every source that set one for it, so two sources overriding
-// the same host give one hosts/<host>.yaml naming both.
-fn extract_ttl_overrides(
-    sources: Items,
-    plan: &mut MigrationPlan,
-) -> Result<(Items, Items, Items), String> {
-    let mut out = Items::new();
-    let mut hosts = Items::new();
-    let mut groups = Items::new();
-    for (id, mut body) in sources {
-        let Some(overrides) = body.remove("ttl_overrides") else {
-            out.insert(id, body);
-            continue;
-        };
-        let Value::Object(overrides) = overrides else {
-            return Err(format!(
-                "sources.yaml: '{id}': ttl_overrides is not a mapping"
-            ));
-        };
-        for (kind, items) in [("hosts", &mut hosts), ("groups", &mut groups)] {
-            let Some(Value::Object(by_name)) = overrides.get(kind) else {
-                continue;
-            };
-            for (name, ttl) in by_name {
-                let Some(ttl) = as_u64(ttl) else {
-                    return Err(format!(
-                        "sources.yaml: '{id}': ttl_overrides.{kind}.{name} is not a number"
-                    ));
-                };
-                if !is_safe_id(name) {
-                    return Err(format!(
-                        "sources.yaml: '{id}': ttl_overrides.{kind} names '{name}', which \
-                         cannot be an item name — names may only use letters, digits, '-', \
-                         '_' and '.'"
-                    ));
-                }
-                let item = items.entry(name.clone()).or_default();
-                let per_source = item
-                    .entry("sources")
-                    .or_insert_with(|| Value::Object(Map::new()));
-                if let Value::Object(per_source) = per_source {
-                    let mut settings = Map::new();
-                    settings.insert("ttl_seconds".to_string(), Value::from(ttl));
-                    per_source.insert(id.clone(), Value::Object(settings));
-                }
-            }
-        }
-        plan.notes.push(format!(
-            "source '{id}': ttl_overrides moved to host and group items"
-        ));
-        out.insert(id, body);
-    }
-    Ok((out, hosts, groups))
 }
 
 fn extract_connectors(sources: Items, plan: &mut MigrationPlan) -> Result<(Items, Items), String> {
@@ -1294,10 +1234,9 @@ mod tests {
         assert!(plan.files["projects/prj-inv.yaml"].contains("credential: \"cred-gh\""));
     }
 
-    // 0.34's ttl_overrides become host and group items; two sources
-    // overriding one host give one item naming both.
+    // 0.34's ttl_overrides stay on the source, which still reads them.
     #[test]
-    fn ttl_overrides_become_host_and_group_items() {
+    fn ttl_overrides_stay_on_the_source() {
         let dir = dir_with(&[
             ("projects.yaml", PROJECTS),
             ("credentials.yaml", CREDENTIALS),
@@ -1306,23 +1245,17 @@ mod tests {
                 concat!(
                     "src-a:\n  name: \"A\"\n  project_id: prj-inv\n  script_path: a.py\n",
                     "  ttl_seconds: 60\n  ttl_overrides:\n    hosts:\n      web01: 30\n",
-                    "    groups:\n      production: 900\n",
-                    "src-b:\n  name: \"B\"\n  project_id: prj-inv\n  script_path: b.py\n",
-                    "  ttl_seconds: 60\n  ttl_overrides:\n    hosts:\n      web01: 45\n",
                 ),
             ),
         ]);
         let plan = plan(dir.path()).unwrap().expect("legacy");
-        assert_eq!(
-            plan.files["hosts/web01.yaml"],
-            "---\nhosts:\n  - name: web01\n    sources:\n      src-a:\n        ttl_seconds: 30\n      \
-             src-b:\n        ttl_seconds: 45\n"
+        assert!(
+            plan.files["sources/src-a.yaml"]
+                .contains("ttl_overrides:\n      hosts:\n        web01: 30\n"),
+            "{}",
+            plan.files["sources/src-a.yaml"]
         );
-        assert_eq!(
-            plan.files["groups/production.yaml"],
-            "---\ngroups:\n  - name: production\n    sources:\n      src-a:\n        ttl_seconds: 900\n"
-        );
-        assert!(!plan.files["sources/src-a.yaml"].contains("ttl_overrides"));
+        assert!(!plan.files.keys().any(|f| f.starts_with("hosts/")));
     }
 
     #[test]

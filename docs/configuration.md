@@ -232,7 +232,8 @@ sources:
 | `timeout_seconds` | Overrides the connector's `timeout_seconds` for this source only — the bigger tenant of the same system. Absent = the connector's (default 300). A timed-out sync fails with a clear error instead of hanging its scheduler task or HTTP request |
 | `host_sync_updates_group_vars` | Whether a host-scoped sync also takes the vars of the groups it places those hosts in, and only those groups. Off by default: a granular call answers about a host, not about what a group means for its other members |
 | `sync_mode` | How a **full** sync lands in the cache: `replace` swaps the dataset, `merge` patches it |
-| `ttl_seconds` | See [caching](caching.md) for the freshness model. A host or a group that needs another TTL on this source says so in its own item: see [hosts and groups](#hosts-and-groups). `ttl_overrides` on a source is refused, naming the new form |
+| `ttl_seconds` | See [caching](caching.md) for the freshness model |
+| `ttl_overrides` | Optional per-host and per-group TTLs on this source: `{hosts: {<host>: <seconds>}, groups: {<group>: <seconds>}}`. The same can be said from the host's or the group's side, in a [host or group item](#hosts-and-groups) |
 | `allow_on_demand_refresh` | Whether `GET /dataset?host=X&refresh=true` may gather the named hosts. Off by default: a read that can cause SSH into a datacenter is a capability. Turning it on makes `ttl_seconds` load bearing — it becomes the threshold at which a read pays for a gather — so review it first. See [on-demand refresh](on-demand-refresh.md) |
 | `schedule` | Cron cadence instead of an interval: standard 5-field cron, optional leading seconds field, evaluated in **UTC**. Validated at startup; mutually exclusive with a non-zero `sync_interval_seconds`. Cron sources get no startup jitter (their times are deliberate) but back off on failure like interval sources, by letting occurrences pass |
 | `hosts_from_source` | SSH sources only: dynamic host list from another source's cached dataset (`source` + optional `match_pattern.groups`/`hosts` + `connect_via`); mutually exclusive with `config.hosts` — see [connectors](connectors.md#dynamic-host-lists-hosts_from_source) |
@@ -275,6 +276,11 @@ groups:
   exist is refused, and a view's id is refused naming the member to use
   instead (a view keeps no copy of its own). A host or group no source has today
   is not an error: hosts come and go with the systems the sources read.
+- **Beside a source's own `ttl_overrides`.** Both work, and both land in the same
+  place. Write it where it reads best: on the source when it is about that
+  source's hosts, in an item when it is about one host across several sources.
+  The same host or group set for the same source in both places is refused,
+  naming both, so no precedence rule has to be known.
 - **Folded in at load**, as a source's connector is: a reload applies a changed
   item, and reports it as a change to the sources it names.
 

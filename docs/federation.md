@@ -121,8 +121,8 @@ sources:
 
 `config.url` and `config.source` are both required. Before 0.35 the edge's
 source id rode in `script_path`, and a remote source had to name a stub project
-it never used; the built-in connector needs neither (a 0.34 central is converted
-that way on upgrade — see [configuration](configuration.md#upgrading-from-034)).
+it never used; the built-in connector needs neither (a 0.34 central is refused:
+convert it with unified-api 0.36's `--migrate-config` before upgrading).
 
 ```yaml
 # central: endpoints/ep-global.yaml — one merged world view for consumers

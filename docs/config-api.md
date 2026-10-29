@@ -84,11 +84,11 @@ in `GET /api/v1/config` can ever list: every other file is an item file that is
 there or not.
 
 A file still in the **0.34 layout** (items keyed by id, as `sources.yaml` used to
-be) is refused like any other unknown top-level key, with a hint naming
-`unified-api --migrate-config` — a pipeline that has not converted its
-repository yet gets a one-line fix rather than a typo hunt. The startup
-migration (see [configuration → upgrading](configuration.md#upgrading-from-034))
-converts a directory on disk; it does not convert what is pushed.
+be) is refused like any other unknown top-level key, with a hint saying this
+version does not read it and naming unified-api 0.36's `--migrate-config` — a
+pipeline that has not converted its repository yet gets a one-line fix rather
+than a typo hunt. Startup refuses a directory on disk in that layout the same
+way: nothing converts it, pushed or not.
 
 ---
 
@@ -320,12 +320,6 @@ process and then lost the next time the container starts from its image.
 
 An instance whose directory is read-only will refuse writes with a `500`
 naming the filesystem error; leave `config_api.enabled` off there.
-
-One exception: a read-only directory still in the 0.34 layout is converted at
-startup into a private temporary copy, and that copy is what the process runs —
-so writes *succeed*, land in the copy, and are gone at the next restart (which
-converts the read-only files again). Convert the source of the files first; see
-[configuration → upgrading](configuration.md#a-read-only-directory).
 
 ---
 

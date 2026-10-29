@@ -22,7 +22,6 @@ error found. The same validation runs standalone with `unified-api --check-confi
 - [endpoints](#endpoints)
 - [projects](#projects)
 - [api_keys](#api_keys)
-- [Upgrading from 0.34](#upgrading-from-034)
 - [Environment variables](#environment-variables)
 
 Configuration is read at startup, and can also be **written and reloaded over
@@ -83,9 +82,9 @@ The rules, and why they are what they are:
   holding `sources:` is read as a source. Folders exist for people — by team, by
   estate, by datacenter — and may nest as deep as they like, or not exist at all.
   Tying meaning to a folder would make moving a file a semantic change.
-- **One item per file is the convention**, `<section>/<name>.yaml`, and the one the
-  [upgrade](#upgrading-from-034) writes. It is not a rule: a file may hold several
-  items, of several types. A review of "add a tenant" is then one new file, not a
+- **One item per file is the convention**, `<section>/<name>.yaml`, and the one
+  this documentation uses. It is not a rule: a file may hold several items, of
+  several types. A review of "add a tenant" is then one new file, not a
   hunk in the middle of a 2,000-line map.
 - **`name` is the identity**, as in AWX: what other items reference, what URLs
   (`/api/v1/sources/{id}`) and cache keys use. Letters, digits, `-`, `_` and `.`,
@@ -100,9 +99,9 @@ The rules, and why they are what they are:
   `credentials`, an enricher its `target`, `source` and `project`, an endpoint its
   `sources` and `project`, a project its `credential`.
 - **Hidden files and folders are skipped** (editor swap files, `.git`, the config
-  API's staging folders, the upgrade's backup). **Symlinks are followed**: a
-  Kubernetes ConfigMap mount is nothing but links into a hidden `..data` folder,
-  and skipping them would load an empty configuration.
+  API's staging folders). **Symlinks are followed**: a Kubernetes ConfigMap
+  mount is nothing but links into a hidden `..data` folder, and skipping them
+  would load an empty configuration.
 - **A path may only use letters, digits, `-`, `_` and `.`** in each segment, none
   starting with a dot, ending in `.yaml` or `.yml` — the same rule the
   [config API](config-api.md) applies to what it is asked to write, so a file the
@@ -115,7 +114,7 @@ files names all three:
 | Mistake | Error |
 |---|---|
 | An unknown top-level key | `sources/a.yaml: unknown key 'sourcse' (expected one of: sources, views, ...)` |
-| A 0.34 file pushed as-is | the same, ending `— this is the 0.34 layout (items keyed by id); convert it with unified-api --migrate-config <dir>` |
+| A 0.34 file | the same, ending `— this is the 0.34 layout (items keyed by id), which this version does not read: write it as items, or convert it with unified-api 0.36's --migrate-config` |
 | An unknown key inside an item | ``sources/a.yaml: source 'src-a': unknown field `ttl_second`, expected one of ...`` |
 | An item without `name` | `sources/a.yaml: sources item 2 needs a 'name', its identity` |
 | A name defined twice | `sources/b.yaml: source 'src-a' is already defined in sources/a.yaml` |
@@ -128,6 +127,13 @@ arrives as `"20"`, `version: 1.10` as `"1.10"`, `account: 0x1F` as `"0x1F"`), si
 they become environment variables and script settings. Every other text field
 reads an unquoted scalar the same way: `script_args: ["--days", 7]` is
 `["--days", "7"]`.
+
+A configuration in an older layout is refused, never converted: the 0.34
+layout (eight fixed files, each a map keyed by id), a 0.35-form ssh connector
+(see [connectors](connectors.md#ssh-connectors-type-ssh)) and
+`output_format: native` each fail the load with a message saying what to write
+instead. A 0.34 directory can still be converted to item files with unified-api
+0.36's `--migrate-config`, run on it before upgrading past 0.36.
 
 ---
 
@@ -730,243 +736,6 @@ unknown source/endpoint ids also fail startup; a `sources:` entry may name a
 [view](views.md), which grants the view without granting its members. No
 `api_keys` items and no `UNIFIED_API_KEY` = open API (with a loud warning). See
 [API → Authentication](api.md#authentication) for the exact route semantics.
-
----
-
-## Upgrading from 0.34
-
-Until 0.35 the directory was eight fixed files — `config.yaml` plus
-`credentials.yaml`, `projects.yaml`, `sources.yaml`, `views.yaml`,
-`enrichers.yaml`, `endpoints.yaml` and `api_keys.yaml` — each a map keyed by id,
-and every source carried its own script. **0.35 converts that layout itself**,
-so a pod upgraded in place starts instead of refusing its own volume.
-
-### At startup
-
-A `CONFIG_DIR` whose root still holds one of those legacy file names, with a map
-of maps at its top level, is migrated in place **once**, before loading:
-
-1. **Plan, in memory.** Every item becomes `<section>/<name>.yaml`: the map key
-   becomes `name`, the old `name` becomes `description`, the reference keys
-   lose their `_id`. Values are written as they were: `1.10`, `0x1F` and
-   `True` stay exactly that, never rewritten as the number they look like.
-2. **Extract connectors.** Sources sharing the same type, project, script,
-   `script_args` and `host_args` share one connector, named
-   after the script (its folder when the file is generic — `d42/inventory.py`
-   becomes `d42`), `ssh-<command>` for ssh. A name already taken (by another
-   connector, or by a built-in: a script in a `remote/` folder) gets the lowest
-   free `-2`, `-3`, ... suffix instead. The
-   timeout most of its sources used becomes the connector's; a source that
-   differed keeps its own as an override. ssh sources lose the `project_id` they
-   were required to set and never used; a remote source's `script_path` moves to
-   `config.source`, a static source's to `path`.
-3. **Validate.** The plan is written into a hidden staging folder beside the
-   real files and loaded exactly as startup would load it.
-4. **Commit.** The old files move to `.legacy-config-<UTC timestamp>/` (hidden,
-   so the loader skips it) and the new ones are renamed into place.
-
-Every step is logged at WARN — which files, which connector came from which
-sources, what was dropped — because an operator should find out from the log,
-not from a diff weeks later. A conversion that would not load **refuses to
-start, having changed nothing**: the old files stay where they were, and the
-error says why.
-
-Comments in the old files are not carried over: they are not data, and a YAML
-reader does not see them. They are still in the backup, next to the new files,
-for whoever wants to move them across.
-
-**Commit the new layout wherever the directory comes from.** A pipeline that
-pushes the old files back over a migrated directory is pushing a layout this
-version no longer reads, and the config API will say so (with a hint naming
-`--migrate-config`).
-
-### A read-only directory
-
-A ConfigMap or a `:ro` bind mount cannot be converted in place. The conversion
-is then written into a **private temporary copy**, which is what the process
-loads, with a loud warning. Nothing is lost by that — the source of truth is
-wherever the read-only files come from — but every restart converts them again,
-and writes through the [config API](config-api.md) land in the copy. Convert
-the source with `--migrate-config` and redeploy. The copy is removed when the
-process stops; one left behind by a process that was killed is removed by the
-next start (a copy in use is locked, so instances sharing a temp folder never
-remove each other's).
-
-### In a configuration repository
-
-```bash
-unified-api --migrate-config ./config     # convert in place, print what it did, exit
-CONFIG_DIR=./config unified-api --check-config   # on a 0.34 directory: validate the
-                                                 # conversion, write nothing
-```
-
-`--migrate-config` runs the same code as startup, so a repository and a pod
-upgraded in place end up with the same files. See [CLI](cli.md#converting-a-034-directory---migrate-config).
-
-### Rolling back
-
-0.34 cannot read item files, so rolling back needs the old files back: move
-them from `.legacy-config-<timestamp>/` to the root. 0.34 reads only its eight
-file names, so the new folders are ignored rather than refused — but any change
-made since the upgrade lives only in them, and has to be carried back by hand.
-
-### Before and after
-
-A script source (two tenants of the same system become one connector):
-
-```yaml
-# 0.34 — sources.yaml
-src-d42-a:
-  name: "Device42 tenant A"
-  connector_type: "script"
-  project_id: "prj-inventory"
-  script_path: "dynamic/d42/inventory.py"
-  script_args: ["--list"]
-  output_format: "ansible"
-  credential_ids: ["cred-d42"]
-  sync_interval_seconds: 300
-  ttl_seconds: 3600
-  config:
-    tenant: "a"
-src-d42-b:
-  # ... the same, with tenant "b"
-```
-
-```yaml
-# 0.35 — connectors/d42.yaml
-connectors:
-  - name: d42
-    type: "script"
-    project: "prj-inventory"
-    path: "dynamic/d42/inventory.py"
-    script_args: ["--list"]
-
-# 0.35 — sources/src-d42-a.yaml (src-d42-b.yaml alike)
-sources:
-  - name: src-d42-a
-    description: "Device42 tenant A"
-    connector: "d42"
-    credentials: ["cred-d42"]
-    sync_interval_seconds: 300
-    ttl_seconds: 3600
-    config:
-      tenant: "a"
-```
-
-An ssh source (the unused `project_id` is dropped, and what its `gather_mode`
-meant moves to the connector: facts become files on the host):
-
-```yaml
-# 0.34
-src-ssh-dc1:
-  name: "Facts DC1"
-  connector_type: "ssh"
-  project_id: "prj-inventory"
-  script_path: "gather_facts"
-  credential_ids: ["cred-ssh"]
-  sync_interval_seconds: 86400
-  ttl_seconds: 3600
-  hosts_from_source:
-    source: "src-d42-a"
-  config:
-    gather_mode: "facts"
-```
-
-```yaml
-# converted — connectors/ssh-gather-facts.yaml
-connectors:
-  - name: ssh-gather-facts
-    type: "ssh"
-    location: "host"
-    path: "/etc/ansible/facts.d/*.fact"
-
-# converted — sources/src-ssh-dc1.yaml
-sources:
-  - name: src-ssh-dc1
-    description: "Facts DC1"
-    connector: "ssh-gather-facts"
-    credentials: ["cred-ssh"]
-    sync_interval_seconds: 86400
-    ttl_seconds: 3600
-    hosts_from_source:
-      source: "src-d42-a"
-```
-
-A source in `gather_mode: script` gets a connector whose `script` is its
-`script_path` with its `script_args` appended, as 0.35 ran them.
-
-A remote source (the remote source id moves into `config`):
-
-```yaml
-# 0.34
-src-edge-dc2:
-  name: "Datacenter 2"
-  connector_type: "remote"
-  project_id: "prj-unused"
-  script_path: "src-ssh"
-  credential_ids: ["cred-edge-dc2"]
-  sync_interval_seconds: 120
-  ttl_seconds: 600
-  config:
-    url: "https://unified-api-dc2.example.com"
-```
-
-```yaml
-# 0.35 — sources/src-edge-dc2.yaml
-sources:
-  - name: src-edge-dc2
-    description: "Datacenter 2"
-    connector: "remote"
-    credentials: ["cred-edge-dc2"]
-    sync_interval_seconds: 120
-    ttl_seconds: 600
-    config:
-      source: "src-ssh"
-      url: "https://unified-api-dc2.example.com"
-```
-
-A static inventory source (`script_path` becomes `path`, on the source):
-
-```yaml
-# 0.34
-src-linux:
-  name: "Linux static inventory"
-  connector_type: "static_inventory"
-  project_id: "prj-inventories"
-  script_path: "linux/inventory.yaml"
-  sync_interval_seconds: 300
-  ttl_seconds: 600
-```
-
-```yaml
-# 0.35 — sources/src-linux.yaml
-sources:
-  - name: src-linux
-    description: "Linux static inventory"
-    connector: "static_inventory"
-    project: "prj-inventories"
-    path: "linux/inventory.yaml"
-    sync_interval_seconds: 300
-    ttl_seconds: 600
-```
-
-The renamed reference keys, for anything converted by hand:
-
-| Item | 0.34 | 0.35 |
-|---|---|---|
-| source | `credential_ids` | `credentials` |
-| source | `connector_type`, `project_id`, `script_path`, `script_args`, `host_args`, `output_format` | `connector` (the rest moved to the connector item) |
-| project | `credential_id` | `credential` |
-| enricher | `target_id`, `source_id`, `project_id` | `target`, `source`, `project` |
-| endpoint | `source_ids`, `project_id` | `sources`, `project` |
-| every item | the map key / `name` | `name` / `description` |
-
-Unchanged: a view member's `source` and `owns.source`, `hosts_from_source.source`,
-an endpoint's `limit.by_hosts_from_inventory`, an API key's `sources` /
-`endpoints`, an enricher's and endpoint's `script_path`, and LDAP's
-`bind_credential` in `config.yaml`. The API is unchanged too: responses keep
-`source_id`, `name`, `target_id`, `source_ids` and the rest, so no consumer
-needs to change.
 
 ---
 

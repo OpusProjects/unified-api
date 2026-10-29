@@ -43,8 +43,6 @@ src/
 ├── lib.rs                    # Module tree + AppBuilder (composition root)
 ├── state.rs                  # AppState (ports as Arc<dyn Trait> + static config)
 ├── config.rs                 # Loader: config.yaml + item files at any depth (SECTIONS)
-├── config/
-│   └── migrate.rs            # one-time 0.34 → item-file conversion (startup, --migrate-config)
 ├── domain/                   # Core domain types (pure, no dependencies)
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # SourceDef (file) → Source (resolved with its connector), TtlOverrides
@@ -122,7 +120,6 @@ src/
 │                             #   build_chain() — the one place the chain is wired
 config/                       # Example config: config.yaml + item files (sources/, connectors/, ...)
 tests/                        # Integration tests (*.rs), with sample scripts mirroring src/adapters/out/:
-├── fixtures/legacy-0.34/     # a 0.34-layout directory the migration tests convert
 └── adapters/
     └── out/                  # sample scripts — stand-ins for the driven adapters
         ├── connectors/       #   sample source connectors (incl. slow.py for timeout tests)
@@ -152,9 +149,7 @@ Rust fields kept their old names via `#[serde(rename)]`, because the API still
 answers `target_id` etc. A source item (`SourceDef`) is resolved with its connector
 at load into the flat runtime `Source` that everything downstream reads — never
 read a connector at sync time. A new item type touches `SECTIONS`, the loader's
-`take` calls, `AppConfig`, and `config::migrate`'s key order. A 0.34 directory is
-converted at startup (`config::migrate`): staged, validated, backed up to
-`.legacy-config-*`, never half-written; a read-only one into a temp copy.
+`take` calls and `AppConfig`.
 Configuration from YAML files, parsed STRICTLY: every config struct carries
 `deny_unknown_fields`, so a typo'd key fails startup naming the key instead of
 silently applying the default (policy comment in `config.rs`). Free-form data

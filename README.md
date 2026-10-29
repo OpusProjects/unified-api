@@ -44,8 +44,8 @@ and every one of them sees the same inventory.
 | [API](docs/api.md) | All routes with authentication, status code semantics and curl examples |
 | [Architecture](docs/architecture.md) | The four layers, the dependency rule and the concurrency model |
 | [Browsable API](docs/browsable-api.md) | The API's own pages in a browser: login, sessions, navigation |
-| [CLI](docs/cli.md) | `--check-config`, `--migrate-config`, env vars, log tuning and common curl operations |
-| [Configuration](docs/configuration.md) | The item-file layout, every item field by field, upgrading from 0.34 |
+| [CLI](docs/cli.md) | `--check-config`, env vars, log tuning and common curl operations |
+| [Configuration](docs/configuration.md) | The item-file layout and every item field by field |
 | [Configuration API](docs/config-api.md) | Pushing the config directory over HTTP, validating it and reloading it live |
 | [Connectors](docs/connectors.md) | Connector items, the built-ins, and the script contracts for all three kinds |
 | [Deployment](docs/deployment.md) | Container image, worked config example, CI/CD, Kubernetes and ArgoCD |

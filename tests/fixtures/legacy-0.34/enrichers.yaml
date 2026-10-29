@@ -1,7 +1,0 @@
----
-enr-vmware-onto-d42:
-  name: "VMware facts onto the CMDB"
-  target_id: "src-d42-pq"
-  source_id: "src-vmware"
-  fields: ["vmware_guest_os"]
-  sync_interval_seconds: 7200

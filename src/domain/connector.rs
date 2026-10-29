@@ -43,7 +43,7 @@ pub struct Connector {
     // default with a project): a script on this instance, in `project`'s
     // checkout or on its disk, streamed to each host and run there. An ssh
     // connector with neither this, a project nor a script is in the 0.35
-    // form, which only startup still reads (config::upgrade_0_35_ssh).
+    // form, refused with what to write instead.
     #[serde(default)]
     pub location: Option<Location>,
 
@@ -331,12 +331,11 @@ impl Connector {
                     }
                     // Neither a location, a project nor a script: what 0.35
                     // wrote, a command or a label in path with each source's
-                    // gather_mode saying what it meant. Startup converts it
-                    // (config::upgrade_0_35_ssh); anywhere else it is refused
-                    // with what to write instead.
+                    // gather_mode saying what it meant. Refused with what to
+                    // write instead.
                     None => errors.push(format!(
                         "Connector '{id}' is in the 0.35 form (no location, project or \
-                         script), which only startup still converts. Write it as 0.36 \
+                         script), which this version does not read. Write it as 0.36 \
                          reads it: for Ansible facts, location: host with path: \
                          /etc/ansible/facts.d/*.fact; for a command, script: with the \
                          command and its arguments; for a script file, project: (or \

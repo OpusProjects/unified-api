@@ -22,7 +22,7 @@ look like a dataset slowly getting older. Only the second pair tells them apart.
 - [A sync times out](#a-sync-times-out)
 - [Hosts vanish from a group after a sync](#hosts-vanish-from-a-group-after-a-sync)
 - [Everything answers 401 or 403](#everything-answers-401-or-403)
-- [The pod will not start after an upgrade to 0.35](#the-pod-will-not-start-after-an-upgrade-to-035)
+- [The pod will not start after an upgrade](#the-pod-will-not-start-after-an-upgrade)
 - [A configuration push is refused or does not take effect](#a-configuration-push-is-refused-or-does-not-take-effect)
 - [Useful one-liners](#useful-one-liners)
 
@@ -223,19 +223,17 @@ so loudly, and every caller is treated as admin.
 
 ---
 
-## The pod will not start after an upgrade to 0.35
+## The pod will not start after an upgrade
 
-0.35 converts a 0.34 configuration directory at startup (see
-[configuration → upgrading](configuration.md#upgrading-from-034)). It refuses to
-start only when the converted configuration would not load — and then it has
-changed **nothing**: the old files are where they were.
+This version reads one configuration shape, and an older one is refused at
+startup, naming what to write instead — never converted. Each refusal is in the
+log (and in `--check-config`), every problem at once.
 
 | Log line | Cause and fix |
 |---|---|
-| `Refusing to start: the configuration is in the 0.34 layout and could not be migrated (nothing was changed): ...` | The rest of the line is the reason: usually a 0.34 configuration that was already invalid, or a target file that already exists (`... already exists — the migration will not overwrite it`). Fix it, or run `unified-api --migrate-config` on a copy to see the plan |
-| `... mixes id-keyed items (the 0.34 layout) with lists (0.35) — convert it by hand` | One legacy-named file was half edited into the new shape. Pick one layout for it |
-| `Configuration directory ... has been migrated` (WARN) | Not a failure: the conversion happened. Commit the new files wherever the directory comes from |
-| `... read-only: it was converted into a temporary copy` (WARN) | Not a failure either, but it repeats on every restart. Convert the ConfigMap's source with `--migrate-config` |
+| `unknown key '<id>' ... this is the 0.34 layout (items keyed by id), which this version does not read` | The directory is still in the 0.34 layout. Convert it with unified-api 0.36's `--migrate-config`, commit the item files, then upgrade |
+| `Connector '<id>' is in the 0.35 form (no location, project or script), which this version does not read` | An ssh connector written for 0.35. Rewrite it as the error says, and remove `gather_mode`/`fact_path` from its sources — see [connectors → from 0.35](connectors.md#ssh-connectors-type-ssh) |
+| `Connector '<id>' sets output_format: native, which 0.36 no longer reads` | Change the script to print Ansible inventory JSON ([below](#a-script-connector-fails-with-the-hostvars-groups-format)), then remove the key. (`output_format: ansible` is accepted and changes nothing.) |
 
 ---
 
@@ -249,15 +247,14 @@ transactional — a rejected push touched nothing.
 |---|---|
 | `403` naming `config_api.enabled` | The API is off (the default). Set `config_api.enabled: true` in the mounted `config.yaml` and restart — it cannot be enabled over the API itself, on purpose |
 | `400` with an `errors` list | The staged directory did not validate — the same list `--check-config` prints, every problem at once. Nothing was written; fix and re-push |
-| `400`: `Connector '<id>' is in the 0.35 form` (or a source's `config.gather_mode` refused) | The instance started on 0.35 ssh connectors and runs them converted in memory (`--check-config` says "startup converts"); a push must be in 0.36's shape. Rewrite the connector as the error says and remove `gather_mode`/`fact_path` from its sources, in the same push — see [connectors → from 0.35](connectors.md#ssh-connectors-type-ssh) |
-| `400`: `Connector '<id>' sets output_format: native` | 0.36 reads one output, Ansible inventory JSON. Startup drops `native` with a note and the connector's syncs fail; a push must not carry it. Change the script first ([below](#a-script-connector-fails-with-the-hostvars-groups-format)), then set `output_format: ansible` or remove the key. (`ansible` itself is accepted and changes nothing.) |
-| `400`: `unknown key '<id>' ... this is the 0.34 layout` | The pipeline pushed files still in the 0.34 layout (items keyed by id). The instance converted its own directory at startup; the repository was not. Run `unified-api --migrate-config` on the repository, commit, push again — see [configuration → upgrading](configuration.md#upgrading-from-034) |
+| `400`: `Connector '<id>' is in the 0.35 form` (or a source's `config.gather_mode` refused) | The pushed ssh connector is in 0.35's shape, which this version does not read. Rewrite the connector as the error says and remove `gather_mode`/`fact_path` from its sources, in the same push — see [connectors → from 0.35](connectors.md#ssh-connectors-type-ssh) |
+| `400`: `Connector '<id>' sets output_format: native` | 0.36 reads one output, Ansible inventory JSON, and refuses `native` by name. Change the script first ([below](#a-script-connector-fails-with-the-hostvars-groups-format)), then set `output_format: ansible` or remove the key. (`ansible` itself is accepted and changes nothing.) |
+| `400`: `unknown key '<id>' ... this is the 0.34 layout` | The pipeline pushed files still in the 0.34 layout (items keyed by id), which this version does not read. Convert the repository with unified-api 0.36's `--migrate-config`, commit, push again |
 | `404` naming the path rule | `{path}` is not one the loader would read: it must be relative, end in `.yaml`/`.yml`, and use only letters, digits, `-`, `_` and `.` in segments that do not start with a dot |
 | `412` | Your `If-Match` no longer matches: someone else wrote the file (or the directory) first. `GET` it again for a fresh `ETag`, merge, retry |
 | `409` about API keys | The change would leave the API with **no keys at all** (silent auth removal), or names a key env var that is not set on the instance. Both are refused before anything commits |
 | `413` | The push exceeds `server.max_body_bytes` (default 2 MiB) — a whole-directory `PUT` is one body. Raise the key; it applies on a reload |
 | `200`, but nothing changed | The write landed on disk and was never applied: no `?reload=true` on the write, and nobody called `POST /config/reload`. `GET /api/v1/config` shows `reload_pending: true` for exactly this state |
-| A push lands, and is gone after a restart | The directory is a temporary copy: a read-only `CONFIG_DIR` (a ConfigMap) still in the 0.34 layout is converted into one at every start, and that copy is what the API writes to. The startup log says so at WARN. Convert the source of the files and redeploy |
 | `restart_required` will not clear | The change touches a restart-only key (`server.port`, `cache.persistence`, …). It keeps being reported — by `GET /api/v1/config` and the `unified_api_config_restart_required` gauge — until a restart adopts it. That persistence is the design: restart the instance |
 
 The audit log records every write and reload (`action: config_write`,
@@ -278,9 +275,9 @@ Wrap what the script prints:
 print(json.dumps({"_meta": {"hostvars": inventory["hostvars"]}, **inventory["groups"]}))
 ```
 
-Startup tells you which connectors these are: `--check-config` lists each
-`output_format: native` under "startup converts". A script that relied on the
-default without saying so is only found by its first sync.
+A connector that still sets `output_format: native` is refused at startup and
+by `--check-config`, naming it. A script that relied on the default without
+saying so is only found by its first sync.
 
 Remove `output_format` from a connector only once every instance reading that
 configuration runs 0.36: 0.35 reads a connector without it as `native`, and an

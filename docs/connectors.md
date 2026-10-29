@@ -418,17 +418,15 @@ has `path` or `script`, never both. A command with arguments is a script of one
 line: `script: /usr/local/bin/disk-report --json`.
 
 **From 0.35** — 0.35 wrote the command (or a label such as `gather_facts`) in
-`path`, and each source's `config.gather_mode` said what it meant. 0.36 reads
-that form only at startup: an ssh connector with neither `location`, `project`
-nor `script` is converted in memory, with its sources, and each conversion is
-logged (and printed by `--check-config`, which still exits 0). Facts become
-`location: host` with `path: <fact_path>/*.fact` (a `$HOME` or relative
-`fact_path` as `~/`, which a host path may start with); a command becomes
-`script:`, its `script_args` appended to the line raw, as 0.35 appended them,
-and with no `#!` line it runs in the account's login shell, as in 0.35; `gather_mode` and
-`fact_path` go from the sources. The files are not touched, so the image can
-roll back, and the config API refuses the old form, naming what to write: move
-the files when convenient.
+`path`, and each source's `config.gather_mode` said what it meant. This
+version does not read that form: an ssh connector with neither `location`,
+`project` nor `script` is refused (at startup, by `--check-config` and by the
+config API) with `Connector '<id>' is in the 0.35 form`, naming what to write
+instead, and so is a source that still sets `gather_mode` or `fact_path`.
+Facts become `location: host` with `path: <fact_path>/*.fact` (a `$HOME` or
+relative `fact_path` as `~/`, which a host path may start with); a command
+becomes `script:`, its `script_args` appended to the line as 0.35 appended
+them (with no `#!` line it runs in the account's login shell, as in 0.35).
 
 ```yaml
 # 0.35: a label as the path, the mode on every source

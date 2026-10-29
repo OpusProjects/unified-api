@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::domain::api_key::{ApiKeyDef, ApiKeyRole};
 use crate::domain::connector::Connector;
-use crate::domain::credential::Credential;
+use crate::domain::credential::{Credential, CredentialRules};
 use crate::domain::endpoint::{BUILTIN_SETTINGS, OutputEndpoint, renamed_setting};
 use crate::domain::enricher::Enricher;
 use crate::domain::host::{GroupDef, HostDef};
@@ -217,31 +217,9 @@ fn default_persistence_interval() -> u64 {
     60
 }
 
-// Secrets behavior — config.yaml, `secrets:` section (optional)
-#[derive(Deserialize, Clone, PartialEq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct SecretsConfig {
-    // How long a resolved credential may be reused before the backend is asked
-    // again. Resolution runs on every sync of every source — free against env
-    // vars, a request storm against a networked backend. The TTL is also the
-    // rotation latency: a rotated secret is picked up within this many
-    // seconds. 0 disables the cache (every sync resolves fresh).
-    //
-    // DEPRECATED, like the whole block: a Vault is now a `type: vault`
-    // credential with its own cache_ttl_seconds, and env and file credentials
-    // are read fresh. Set here, it still wraps every credential in one cache,
-    // as before. Absent = no such cache.
-    #[serde(default)]
-    pub cache_ttl_seconds: Option<u64>,
-
-    // Native Vault resolution (KV v2). Credentials that carry `vault_path`
-    // read from this Vault; those without keep resolving from env/files, so
-    // adoption is per credential. Absent = no Vault, and any vault_path in
-    // credentials.yaml fails validation at startup. The struct lives with the
-    // adapter it configures (adapters/out/secrets/vault.rs).
-    #[serde(default)]
-    pub vault: Option<crate::adapters::out::secrets::vault::VaultConfig>,
-}
+// Secrets behavior — config.yaml, `secrets:` section (optional, deprecated).
+// The struct lives with the chain it configures, in unified-secrets.
+pub use unified_secrets::SecretsConfig;
 
 // Where git projects are cloned — config.yaml, `projects:` section (optional)
 #[derive(Deserialize)]

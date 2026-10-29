@@ -58,7 +58,8 @@ rules that matter when writing code:
    pattern silently loses concurrent writes.
 
 Dependency direction is `adapters → application → ports → domain`, never the reverse.
-`domain/` stays pure: `std` + `serde` only.
+`domain/` stays pure: `std` + `serde` only, plus the types it shares with unified-gitops from
+[unified-auth](https://github.com/OpusProjects/unified-auth) (`Credential`, `LdapConfig`).
 
 ## Code comments
 

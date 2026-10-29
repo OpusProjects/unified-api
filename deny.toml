@@ -41,3 +41,6 @@ multiple-versions = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# The one git source allowed: unified-auth, the secrets and sign-in crates
+# shared with unified-gitops, pinned by release tag in Cargo.toml.
+allow-git = ["https://github.com/OpusProjects/unified-auth"]

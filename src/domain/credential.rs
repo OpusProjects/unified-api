@@ -1,155 +1,23 @@
-use serde::Deserialize;
-use std::collections::HashMap;
+// Credential and CredentialType live in unified-secrets (the crate every
+// secrets adapter reads them from, shared with unified-gitops); this module
+// re-exports them so the rest of the service keeps naming
+// `crate::domain::credential::Credential`.
+pub use unified_secrets::credential::{Credential, CredentialType, delivery_id, variable_part};
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialType {
-    UsernamePassword,
-    Token,
-    SshKey,
-    // Not a login a script uses: the connection to a Vault that other
-    // credentials read from (they name it with `vault:`), as AWX models a
-    // HashiCorp Vault lookup as a credential of its own.
-    Vault,
+// What this service checks about a credential when it loads its
+// configuration, in its own words. A trait because Credential is a type from
+// another crate: Rust only lets a crate add inherent methods to its own types,
+// so the service's rules arrive as an extension trait instead — bring
+// `CredentialRules` into scope and `credential.errors(id)` works as before.
+pub trait CredentialRules {
+    fn fields(&self) -> Vec<String>;
+    fn errors(&self, id: &str) -> Vec<String>;
+    fn deprecation(&self, id: &str) -> Option<String>;
 }
 
-// Reference to a credential — comes from configuration YAML.
-// Does not store secrets, only knows WHERE to read them from the environment.
-// The infrastructure (ESO, docker secrets, .env) is responsible for injecting them.
-// Unknown keys are config typos: fail startup naming the key instead of
-// silently applying a default (the policy is explained once, in config.rs).
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Credential {
-    // The display label: the item's `description`, falling back to its
-    // identity (see config::take). The identity is the map key — what
-    // references, URLs and cache keys use.
-    pub name: String,
-
-    #[serde(rename = "type")]
-    pub credential_type: CredentialType,
-
-    // KV v2 path (under the Vault's `mount`) to read this credential from.
-    // When set, `secret_keys` maps our names to fields of that secret (empty
-    // = every field verbatim) and env_vars/env_prefix/secret_file are not
-    // consulted. `vault` names the `type: vault` credential to read it from
-    // (absent = the deprecated `secrets.vault:` block in config.yaml) —
-    // validated at startup, so a vault_path without a Vault fails the deploy
-    // rather than the first sync.
-    #[serde(default)]
-    pub vault_path: Option<String>,
-
-    #[serde(default)]
-    pub vault: Option<String>,
-
-    // A `type: vault` credential's own settings: where the Vault is and how
-    // to log in to it (a token in env_vars.token, or Kubernetes auth). Refused
-    // on any other type.
-    #[serde(default)]
-    pub address: Option<String>,
-
-    // The KV v2 mount the vault_path values live under (default "secret")
-    #[serde(default)]
-    pub mount: Option<String>,
-
-    // Kubernetes auth: the pod's service-account JWT (at jwt_path) is
-    // exchanged for a client token under this role, instead of env_vars.token.
-    #[serde(default)]
-    pub kubernetes_role: Option<String>,
-
-    #[serde(default)]
-    pub jwt_path: Option<String>,
-
-    // Bound on every request to this Vault (default 10)
-    #[serde(default)]
-    pub timeout_seconds: Option<u64>,
-
-    // How long a value read from this Vault is reused (default 60; 0 = read
-    // on every resolution) — also how long a rotation takes to be seen. Only
-    // a Vault has one: env vars cannot change under a running process, and a
-    // file is a cheap local read that should pick a rotation up at once.
-    #[serde(default)]
-    pub cache_ttl_seconds: Option<u64>,
-
-    // Our field name → the full name of the environment variable holding it.
-    // ex: {"username": "SECTION9_USERNAME"} → reads SECTION9_USERNAME and
-    // delivers it as `username`. The full name rather than a prefix, so a
-    // search for the variable finds the credential that reads it.
-    #[serde(default)]
-    pub env_vars: HashMap<String, String>,
-
-    // DEPRECATED, still read: the older env form, a prefix joined to each
-    // secret_keys value — "SECTION9" + {"username": "USERNAME"} reads
-    // SECTION9_USERNAME. `deprecation` says what env_vars to write instead.
-    pub env_prefix: Option<String>,
-
-    // Path to a JSON file with secrets — ex: "/run/secrets/section9-api.json"
-    pub secret_file: Option<String>,
-
-    // Mapping: our name → field name in the store: the Vault secret, the JSON
-    // file, or (deprecated) the suffix after env_prefix.
-    // ex: {"username": "USERNAME", "password": "PASSWORD"}
-    #[serde(default)]
-    pub secret_keys: HashMap<String, String>,
-
-    // Paths to files that the script consumes directly (SSH keys, certificates, etc.)
-    // ex: {"ssh_key": "/run/secrets/id_rsa"} → CREDENTIAL_SSH_KEY_PATH=/run/secrets/id_rsa
-    #[serde(default)]
-    pub file_keys: HashMap<String, String>,
-}
-
-impl CredentialType {
-    // As written after `type:` in credentials.yaml.
-    pub fn name(&self) -> &'static str {
-        match self {
-            CredentialType::UsernamePassword => "username_password",
-            CredentialType::Token => "token",
-            CredentialType::SshKey => "ssh_key",
-            CredentialType::Vault => "vault",
-        }
-    }
-}
-
-impl Credential {
-    // Where the secret values are read from, in the order the resolver
-    // chain decides it: a Vault path wins over everything, then env vars,
-    // then a JSON file. "files" is a credential made only of file_keys
-    // (paths handed to the script, an SSH key, a certificate).
-    pub fn backend(&self) -> &'static str {
-        if self.vault_path.is_some() || self.credential_type == CredentialType::Vault {
-            "vault"
-        } else if !self.env_vars.is_empty() || self.env_prefix.is_some() {
-            "env"
-        } else if self.secret_file.is_some() {
-            "file"
-        } else {
-            "files"
-        }
-    }
-
-    // The environment variables an env-backed credential reads, sorted and
-    // spelled exactly as the env resolver reads them. Empty for any other
-    // backend.
-    pub fn env_var_names(&self) -> Vec<String> {
-        if self.vault_path.is_some() {
-            return Vec::new();
-        }
-        let mut vars: Vec<String> = if !self.env_vars.is_empty() {
-            self.env_vars.values().cloned().collect()
-        } else if let Some(prefix) = &self.env_prefix {
-            self.secret_keys
-                .values()
-                .map(|suffix| format!("{}_{}", prefix, suffix))
-                .collect()
-        } else {
-            return Vec::new();
-        };
-        vars.sort();
-        vars
-    }
-
+impl CredentialRules for Credential {
     // The secret fields it delivers (not its file_keys), sorted.
-    pub fn fields(&self) -> Vec<String> {
+    fn fields(&self) -> Vec<String> {
         let names = if self.vault_path.is_none() && !self.env_vars.is_empty() {
             self.env_vars.keys()
         } else {
@@ -162,7 +30,7 @@ impl Credential {
 
     // What the item says that cannot mean anything: two env forms at once, or
     // secret_keys with nowhere to read them from.
-    pub fn errors(&self, id: &str) -> Vec<String> {
+    fn errors(&self, id: &str) -> Vec<String> {
         let mut errors = Vec::new();
         let connection = [
             ("address", self.address.is_some()),
@@ -292,7 +160,7 @@ impl Credential {
     }
 
     // The deprecated env form, and the env_vars that replace it, written out.
-    pub fn deprecation(&self, id: &str) -> Option<String> {
+    fn deprecation(&self, id: &str) -> Option<String> {
         if self.vault_path.is_some() && self.vault.is_none() {
             return Some(format!(
                 "credential '{id}': a vault_path without `vault:` reads from config.yaml's \
@@ -316,27 +184,6 @@ impl Credential {
             pairs.join(", ")
         ))
     }
-}
-
-// A credential's name as the part of a variable name its fields are also
-// delivered under (CREDENTIAL_<ID>_<FIELD>): lower case, a leading `cred-` or
-// `cred_` (the naming convention every example uses) dropped, and anything
-// that cannot appear in an environment variable name written as `_`.
-// `cred-vcenter-aa1` → `vcenter_aa1`. Also what config validation compares,
-// so two credentials of one source can never be delivered under one id.
-pub fn delivery_id(credential_id: &str) -> String {
-    let id = variable_part(credential_id);
-    id.strip_prefix("cred_").map(str::to_string).unwrap_or(id)
-}
-
-// Any name as it reads inside a variable name: lower case, anything outside
-// [a-z0-9] as `_`. A field is compared with a delivery id in this form, so
-// `AVAMAR_AA1_URL` and `avamar_aa1_url` are the same field.
-pub fn variable_part(name: &str) -> String {
-    name.to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
 }
 
 #[cfg(test)]

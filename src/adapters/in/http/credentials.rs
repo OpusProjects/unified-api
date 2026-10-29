@@ -8,7 +8,7 @@ use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
 use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
 use crate::application::credentials::{check, users_of};
-use crate::domain::credential::CredentialType;
+use crate::domain::credential::{CredentialRules, CredentialType};
 
 // The credentials configured on this instance, for the UI's Credentials
 // page: what each one is, where its secrets come from, whether they resolve

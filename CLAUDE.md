@@ -43,14 +43,14 @@ src/
 ├── lib.rs                    # Module tree + AppBuilder (composition root)
 ├── state.rs                  # AppState (ports as Arc<dyn Trait> + static config)
 ├── config.rs                 # Loader: config.yaml + item files at any depth (SECTIONS)
-├── domain/                   # Core domain types (pure, no dependencies)
+├── domain/                   # Core domain types (pure; std, serde, the shared unified-auth types)
 │   ├── dataset.rs            # Dataset, Group, HostVars
 │   ├── source.rs             # SourceDef (file) → Source (resolved with its connector), TtlOverrides
 │   ├── host.rs               # HostDef, GroupDef: per-host / per-group TTLs, folded into sources at load
 │   ├── connector.rs          # Connector item (how to talk to a system); built-ins remote/static_inventory
 │   ├── cache_entry.rs        # CacheEntry with TTL logic
 │   ├── sync_health.rs        # SyncHealth + registry (one per kind: sync/enrich/project/snapshot)
-│   ├── credential.rs         # Credential, CredentialType
+│   ├── credential.rs         # Credential, CredentialType (from unified-secrets) + CredentialRules
 │   ├── api_key.rs            # ApiKeyDef, ApiKeyRole (admin / restricted)
 │   ├── enricher.rs           # Enricher
 │   ├── sync_mode.rs          # SyncMode (replace/merge)
@@ -58,7 +58,7 @@ src/
 │   ├── project.rs            # GitProject
 │   ├── endpoint.rs           # OutputEndpoint
 │   ├── view.rs               # View, ViewMember, Ownership (read-only composite)
-│   ├── ldap.rs               # LdapConfig, AccessRule (LDAP sign-in)
+│   ├── ldap.rs               # AccessRule, Grant; LdapConfig = unified_auth::LdapConfig<AccessRule>
 │   └── topology.rs           # Topology, Peer, PeerSource (federation map)
 ├── application/              # Use cases (domain + ports only; shared by HTTP and scheduler)
 │   ├── config.rs             # reload: swap the RuntimeConfig, diff what changed
@@ -67,7 +67,7 @@ src/
 │   ├── projects.rs           # sync_project (git checkout up to date, bounded by timeout_seconds)
 │   ├── scripts.rs            # per-execution script path resolution into project checkouts
 │   ├── views.rs              # ViewSnapshot: owner resolution + merged reads
-│   ├── login.rs              # LDAP sign-in: directory lookup, access rules, throttle
+│   ├── login.rs              # LDAP sign-in: re-exports unified-auth's use case and throttle
 │   ├── topology.rs           # the federation map, asking peers recursively
 │   ├── host_search.rs        # find a host across sources and views from the cache
 │   └── credentials.rs        # resolve_credentials
@@ -112,12 +112,11 @@ src/
 │       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
 │       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
-│       ├── directory/        # ldap.rs: DirectoryPort → ldap3
+│       ├── directory/        # ldap.rs: re-exports unified-auth's LdapDirectory
 │       ├── peers/            # http.rs: PeerPort → reqwest (topology)
 │       ├── output/           # process.rs: OutputPort → tokio::process
-│       └── secrets/          # env.rs: SecretsPort → env/JSON files; mock.rs: test double;
-│                             #   vault.rs; cache.rs; reloadable.rs (swappable chain);
-│                             #   build_chain() — the one place the chain is wired
+│       └── secrets/          # re-exports unified-secrets' env, vault, cache, reloadable, mock;
+│                             #   build_chain(cfg) — the one place the chain is wired here
 config/                       # Example config: config.yaml + item files (sources/, connectors/, ...)
 tests/                        # Integration tests (*.rs), with sample scripts mirroring src/adapters/out/:
 └── adapters/
@@ -299,6 +298,26 @@ config.yaml still works.
   `source_not_cached` / `source_not_configured` so the wording stays identical
   across routes, and name `body = ErrorBody` in their `#[utoipa::path]`.
 - **OpenAPI version** comes from `CARGO_PKG_VERSION` — bump only `Cargo.toml`.
+
+## Shared code with unified-gitops
+
+Credential resolution and LDAP sign-in live in
+[unified-auth](https://github.com/OpusProjects/unified-auth), two crates pinned
+by tag in `Cargo.toml`: `unified-secrets` (Credential, SecretsPort, the env and
+Vault adapters, the cache, `build_chain`, `SecretsConfig`) and `unified-auth`
+(DirectoryPort, LdapDirectory, `LdapConfig<R>`, the login use case and
+throttle). The modules that held them here re-export them, so the rest of the
+service names them by their old paths. What stays here is what only this
+service has: `CredentialRules` (the load-time checks, in this service's words),
+the access rule type and its `grant_for`.
+
+- **Fix a bug in that code in unified-auth**, release it, then move both
+  services to the new tag in a `build:` PR (`cargo update -p unified-secrets
+  -p unified-auth`). Never patch a copy here.
+- To try a change before it is released, point both dependencies at a local
+  checkout with an uncommitted `[patch."https://github.com/OpusProjects/unified-auth"]`
+  section (see unified-auth's `docs/development.md`).
+- `deny.toml` allows exactly this git source.
 
 ## Releasing a new version
 

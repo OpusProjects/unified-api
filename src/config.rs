@@ -2755,20 +2755,25 @@ mod tests {
         );
     }
 
-    // ttl_overrides moved out of the source: refused, saying where to.
+    // A source's own ttl_overrides still work, beside host and group items.
     #[test]
-    fn a_source_with_ttl_overrides_is_refused_naming_the_new_form() {
+    fn a_source_keeps_its_own_ttl_overrides() {
         let dir = dir_with_one_source();
         fs::write(
             dir.path().join("sources.yaml"),
-            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\n    ttl_overrides:\n      hosts:\n        web01: 30\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
+            "sources:\n  - name: src-a\n    description: \"A\"\n    connector: c-src-a\n    ttl_seconds: 60\n    ttl_overrides:\n      hosts:\n        web01: 30\n      groups:\n        production: 900\nconnectors:\n  - name: c-src-a\n    project: \"prj-test\"\n    path: \"x.py\"\n",
         )
         .unwrap();
-        let err = load_err(&dir);
-        assert!(
-            err.contains("Source 'src-a' sets ttl_overrides, which moved to host and group items"),
-            "{err}"
-        );
+        fs::write(
+            dir.path().join("web02.yaml"),
+            "hosts:\n  - name: web02\n    sources:\n      src-a:\n        ttl_seconds: 45\n",
+        )
+        .unwrap();
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("both places load");
+        let overrides = &cfg.sources["src-a"].ttl_overrides;
+        assert_eq!(overrides.hosts["web01"], 30);
+        assert_eq!(overrides.hosts["web02"], 45);
+        assert_eq!(overrides.groups["production"], 900);
     }
 
     #[test]

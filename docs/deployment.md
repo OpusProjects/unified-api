@@ -145,7 +145,7 @@ projects:
   - name: prj-connectors
     description: "Connector scripts"
     git_url: "https://gitlab.example.com/infra/connectors.git"
-    credential: "cred-gitlab"         # private repo > token over https
+    credentials: ["cred-gitlab"]      # private repo > token over https
     sync_interval_seconds: 1800
 
 # projects/prj-inventories.yaml — manual / pipeline-driven: existing checkout
@@ -155,7 +155,7 @@ projects:
   - name: prj-inventories
     description: "Static inventories"
     git_url: "https://gitlab.example.com/infra/inventories.git"
-    credential: "cred-gitlab"
+    credentials: ["cred-gitlab"]
     sync_on_boot: false
 ```
 

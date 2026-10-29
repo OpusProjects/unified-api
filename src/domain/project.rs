@@ -19,10 +19,16 @@ pub struct GitProject {
     #[serde(default = "default_branch")]
     pub branch: String,
 
-    // Credential for private repos (GitHub token, SSH key, etc.) —
-    // `credential:` in the item file
-    #[serde(default, rename = "credential")]
-    pub credential_id: Option<String>,
+    // Credentials for a private repo (GitHub token, SSH key, etc.):
+    // `credentials:`, a list as on every other item, holding at most one —
+    // a clone authenticates with one. Absent or empty = a public repo.
+    #[serde(default)]
+    pub credentials: Vec<String>,
+
+    // DEPRECATED, still read: the singular `credential: <id>`. `deprecation`
+    // says what to write instead. Read through `credential_id`.
+    #[serde(default)]
+    pub credential: Option<String>,
 
     // Seconds between periodic re-pulls (0 or None = no periodic sync).
     // Same convention as sources and enrichers.
@@ -62,6 +68,41 @@ pub struct GitProject {
 
 fn default_true() -> bool {
     true
+}
+
+impl GitProject {
+    // The credential it clones and pulls with, whichever form names it. Load
+    // validation (`errors`) guarantees at most one does.
+    pub fn credential_id(&self) -> Option<&str> {
+        self.credentials
+            .first()
+            .or(self.credential.as_ref())
+            .map(String::as_str)
+    }
+
+    pub fn errors(&self, id: &str) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.credentials.len() > 1 {
+            errors.push(format!(
+                "Project '{id}' lists {} credentials — a clone authenticates with one",
+                self.credentials.len()
+            ));
+        }
+        if !self.credentials.is_empty() && self.credential.is_some() {
+            errors.push(format!(
+                "Project '{id}' sets both credentials and credential — keep credentials"
+            ));
+        }
+        errors
+    }
+
+    pub fn deprecation(&self, id: &str) -> Option<String> {
+        let credential = self.credential.as_ref()?;
+        Some(format!(
+            "project '{id}': credential is deprecated and will be refused in a later \
+             release; write credentials: [{credential}]"
+        ))
+    }
 }
 
 // Function that returns the default value for branch.

@@ -97,7 +97,9 @@ The rules, and why they are what they are:
   otherwise depend on the order files happen to be read in.
 - **References drop the `_id`:** a source names its `connector` and
   `credentials`, an enricher its `target`, `source` and `project`, an endpoint its
-  `sources` and `project`, a project its `credential`.
+  `sources` and `project`, a project its `credentials` (a list, as on a source,
+  holding at most one: a clone authenticates once; the singular `credential:`
+  still loads, deprecated).
 - **Hidden files and folders are skipped** (editor swap files, `.git`, the config
   API's staging folders). **Symlinks are followed**: a Kubernetes ConfigMap
   mount is nothing but links into a hidden `..data` folder, and skipping them
@@ -648,7 +650,7 @@ projects:
     description: "Infrastructure Connectors"
     git_url: "https://github.com/OpusProjects/connectors-infra.git"
     branch: "main"                  # default "main"
-    credential: "cred-github-token" # optional, for private repos
+    credentials: ["cred-github-token"] # optional, for private repos (one)
     sync_interval_seconds: 1800     # 0/absent = no periodic re-pull
     # schedule: "15 2 * * *"        # OR a cron cadence (UTC) — pick one
     timeout_seconds: 300            # abort a clone/pull that runs longer (default 300)

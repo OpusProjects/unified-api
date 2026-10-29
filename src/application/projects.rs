@@ -113,7 +113,7 @@ async fn run(
     project: &GitProject,
     projects_dir: &Path,
 ) -> Result<(), String> {
-    let credentials = match &project.credential_id {
+    let credentials = match project.credential_id() {
         Some(credential_id) => secrets
             .resolve(credential_id)
             .await

@@ -268,6 +268,25 @@ impl Credential {
                     ));
                 }
             }
+        } else {
+            // The same rule for the older forms: a Vault path wins over the
+            // env prefix, which wins over the file, and the loser was never
+            // read, silently.
+            let places: Vec<&str> = [
+                ("vault_path", self.vault_path.is_some()),
+                ("env_prefix", self.env_prefix.is_some()),
+                ("secret_file", self.secret_file.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(key, set)| set.then_some(key))
+            .collect();
+            if places.len() > 1 {
+                errors.push(format!(
+                    "Credential '{id}' reads from {} — a credential reads from one place: \
+                     keep one",
+                    places.join(" and ")
+                ));
+            }
         }
         errors
     }
@@ -372,6 +391,20 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.contains("sets secret_file beside env_vars")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn the_older_forms_read_from_one_place_too() {
+        let c = credential(
+            "name: x\ntype: token\nvault_path: a/b\nenv_prefix: GH\nsecret_file: /f.json\nsecret_keys:\n  token: TOKEN\n",
+        );
+        let errors = c.errors("cred-x");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("reads from vault_path and env_prefix and secret_file")),
             "{errors:?}"
         );
     }

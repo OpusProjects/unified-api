@@ -123,36 +123,6 @@ pub fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-// A 0.35 fact_path as a path on the hosts: 0.35 wrote it into the remote
-// command unquoted, so $HOME and a path relative to the home directory (where
-// an ssh command starts) worked; ~/ says both here.
-pub fn host_path_from_0_35(fact_path: &str) -> String {
-    let path = fact_path.trim().trim_end_matches('/');
-    if let Some(rest) = path
-        .strip_prefix("$HOME/")
-        .or(path.strip_prefix("${HOME}/"))
-    {
-        format!("~/{rest}")
-    } else if path == "$HOME" || path == "${HOME}" || path == "~" || path.is_empty() {
-        "~".to_string()
-    } else if path.starts_with('/') || path.starts_with("~/") {
-        path.to_string()
-    } else {
-        format!("~/{path}")
-    }
-}
-
-// 0.35 appended a command's arguments to it raw (`path arg1 arg2`), so the
-// shell split and expanded them; kept that way, they mean what they meant.
-pub fn command_from_0_35(command: &str, args: &[String]) -> String {
-    let mut line = command.to_string();
-    for arg in args {
-        line.push(' ');
-        line.push_str(arg);
-    }
-    line
-}
-
 // What a shell pattern is made of: a script here is one file, so a path
 // with one of these belongs on the hosts.
 fn is_pattern(path: &str) -> bool {
@@ -426,21 +396,9 @@ mod tests {
     }
 
     #[test]
-    fn a_0_35_fact_path_is_kept_where_it_pointed() {
-        assert_eq!(
-            host_path_from_0_35("/etc/ansible/facts.d/"),
-            "/etc/ansible/facts.d"
-        );
-        assert_eq!(host_path_from_0_35("$HOME/facts.d"), "~/facts.d");
-        assert_eq!(host_path_from_0_35("facts.d"), "~/facts.d");
-        assert_eq!(host_path_from_0_35("~/facts.d"), "~/facts.d");
-        // And it is a path the hosts may have.
+    fn a_home_relative_host_path_is_a_path_the_hosts_may_have() {
         let c = connector("name: f\ntype: ssh\nlocation: host\npath: \"~/facts.d/*.fact\"\n");
         assert!(c.errors("f").is_empty(), "{:?}", c.errors("f"));
-        assert_eq!(
-            command_from_0_35("report", &["--a b".into(), "2>/dev/null".into()]),
-            "report --a b 2>/dev/null"
-        );
     }
 
     #[test]

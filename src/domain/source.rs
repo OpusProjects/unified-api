@@ -653,14 +653,17 @@ impl Source {
     // One pass over the override list, not a scan of every group for every
     // host: doing it the other way made a full status quadratic on a large
     // source. When a host sits in several groups that each carry an override
-    // the winner is whichever is seen first, which is arbitrary but stable
-    // within a request.
+    // the shortest wins: the strictest freshness anyone asked for, and the
+    // same answer in every process (map order would pick one at random).
     pub fn group_ttl_by_host<'a>(&self, dataset: &'a Dataset) -> HashMap<&'a str, u64> {
         let mut by_host: HashMap<&str, u64> = HashMap::new();
         for (group_name, ttl) in &self.ttl_overrides.groups {
             if let Some(group) = dataset.groups.get(group_name) {
                 for hostname in &group.hosts {
-                    by_host.entry(hostname.as_str()).or_insert(*ttl);
+                    by_host
+                        .entry(hostname.as_str())
+                        .and_modify(|current| *current = (*current).min(*ttl))
+                        .or_insert(*ttl);
                 }
             }
         }

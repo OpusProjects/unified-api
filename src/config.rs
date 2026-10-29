@@ -589,6 +589,20 @@ impl AppConfig {
             ));
         }
 
+        // The deprecated config.yaml Vault: a 0 bound fails every request.
+        if self
+            .secrets_config
+            .vault
+            .as_ref()
+            .is_some_and(|v| v.timeout_seconds == 0)
+        {
+            errors.push(
+                "secrets.vault.timeout_seconds 0 would fail every request to that Vault — \
+                 give it a bound in seconds (default 10)"
+                    .to_string(),
+            );
+        }
+
         // A credential's or an API key's own shape: where its secret is read.
         for (id, credential) in &self.credentials {
             errors.extend(credential.errors(id));

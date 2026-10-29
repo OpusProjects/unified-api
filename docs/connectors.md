@@ -142,7 +142,7 @@ Without `script_args` the script is invoked bare, exactly as before.
 | Variable | Content |
 |---|---|
 | `SOURCE_CONFIG` | The source's `config` map as a JSON object. On scoped syncs it additionally carries `scope` (`host`/`group`) and `target`; every sync carries `trigger` — the HTTP request id for a manual sync, `scheduled` or `refresh` otherwise — so a script's own logs can join the request's trace. Projects with a virtualenv also see `python_venv_bin` |
-| `CREDENTIAL_<ID>_<KEY>` | Every resolved credential key, under its credential: `<ID>` is the credential's name upper-cased, a leading `cred-` dropped, anything else not a letter or digit as `_` — `cred-vcenter-aa1`'s `username` is `CREDENTIAL_VCENTER_AA1_USERNAME`. How a source with one credential per site tells them apart |
+| `CREDENTIAL_<ID>_<KEY>` | Every resolved credential key, under its credential: `<ID>` is the credential's name upper-cased, a leading `cred-` or `cred_` dropped, anything else not a letter or digit as `_` — `cred-vcenter-aa1`'s `username` is `CREDENTIAL_VCENTER_AA1_USERNAME`. How a source with one credential per site tells them apart |
 | `CREDENTIAL_<KEY>` | The same key without its credential — e.g. `CREDENTIAL_USERNAME`, `CREDENTIAL_SSH_KEY_PATH` — but only when no other of the source's credentials has that key: two credentials with a `username` give only the two `CREDENTIAL_<ID>_USERNAME` |
 
 These are the only variables the service sets, and the rest of the script's

@@ -31,14 +31,21 @@ use crate::ports::secrets::{SecretsError, SecretsFuture, SecretsPort};
 // would be two chances for the reloaded one to differ from the booted one.
 pub fn build_chain(cfg: &AppConfig) -> Arc<dyn SecretsPort> {
     let credentials = &cfg.credentials;
-    // The deprecated outer cache, when set, covers every credential, Vaults
-    // included: a Vault's own cache under it would only add its TTL to the
-    // time a rotation takes.
-    let outer = cfg.secrets_config.cache_ttl_seconds.filter(|ttl| *ttl > 0);
+    // The deprecated outer cache, while set, decides for every credential,
+    // Vaults included: a Vault's own cache under it would only add its TTL
+    // to the time a rotation takes, and an explicit 0 means no cache at all,
+    // as it did in 0.36.
+    let deprecated_ttl = cfg.secrets_config.cache_ttl_seconds;
+    let outer = deprecated_ttl.filter(|ttl| *ttl > 0);
     let vaults = credentials
         .iter()
         .filter(|(_, c)| c.credential_type == CredentialType::Vault)
-        .map(|(id, c)| (id.clone(), vault_client(c, credentials, outer.is_none())))
+        .map(|(id, c)| {
+            (
+                id.clone(),
+                vault_client(c, credentials, deprecated_ttl.is_none()),
+            )
+        })
         .collect();
     // The deprecated config.yaml Vault keeps the 60s cache 0.36 gave it by
     // default (secrets.cache_ttl_seconds defaulted to 60 and covered it):

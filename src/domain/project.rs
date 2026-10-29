@@ -82,10 +82,13 @@ impl GitProject {
 
     pub fn errors(&self, id: &str) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.credentials.len() > 1 {
+        // Distinct ones: a credential listed twice is one credential, as on
+        // a source.
+        let distinct: std::collections::HashSet<&String> = self.credentials.iter().collect();
+        if distinct.len() > 1 {
             errors.push(format!(
                 "Project '{id}' lists {} credentials — a clone authenticates with one",
-                self.credentials.len()
+                distinct.len()
             ));
         }
         if !self.credentials.is_empty() && self.credential.is_some() {

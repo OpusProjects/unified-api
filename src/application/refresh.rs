@@ -251,6 +251,7 @@ pub async fn refresh_hosts(
     // itself (below): the scope label, the start and the clock it measures.
     let scope_label = SyncScope::Hosts(still_stale.clone()).label();
     let started_at = crate::domain::unix_now();
+    let newest_before = health.history(source_id).first().cloned();
     let clock = std::time::Instant::now();
 
     // A budget of its own, independent of the source's `timeout_seconds`: that
@@ -316,8 +317,12 @@ pub async fn refresh_hosts(
             // without these the attempt left no trace in the source's health
             // or history, exactly the run an operator looking at a slow source
             // most needs to see.
+            // Landed = a newer run than the newest one before this refresh
+            // began, of this refresh's kind and scope. Compared with that
+            // record rather than by start time: whole seconds would also
+            // match an earlier refresh of the same hosts in the same second.
             let landed = health.history(source_id).first().is_some_and(|run| {
-                run.started_at >= started_at
+                Some(run) != newest_before.as_ref()
                     && run.trigger == RunTrigger::Refresh
                     && run.scope.as_deref() == Some(scope_label.as_str())
             });

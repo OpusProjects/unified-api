@@ -24,6 +24,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - A credential's `env_prefix` + `secret_keys` and an API key's `env: VAR` still load, with a notice at startup and from `--check-config` naming the `env_vars` to write in their place; a later release refuses them.
 - The `secrets:` block in `config.yaml` (`cache_ttl_seconds`, and `vault:` with `token_env`) still loads, with a notice saying to declare the Vault as a `type: vault` credential; while set, its cache still covers every credential and a `vault_path` with no `vault:` reads from it. A later release refuses it.
 
+### Removed
+
+- **Breaking (who upgrades from 0.34 or 0.35, or keeps their forms):** no configuration is converted any more. The 0.34 directory migration (at startup, into a temporary copy for a read-only directory, and `--migrate-config`) is removed, and so are the in-memory conversions of 0.35 ssh connectors and `output_format: native`. Every load, startup and `--check-config` included, reads only the current shape, and an old one is refused saying what to write: convert a 0.34 directory with unified-api 0.36's `--migrate-config` before upgrading.
+
 ### Fixed
 
 - Starting connector, enricher and output scripts retries briefly on "text file busy" (ETXTBSY) instead of failing the run: a script still open for writing elsewhere, such as one a project pull is rewriting, or a file another thread's child briefly held, now runs once the writer lets go.

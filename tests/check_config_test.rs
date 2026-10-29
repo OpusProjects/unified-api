@@ -114,21 +114,18 @@ fn a_directory_after_the_flag_is_the_one_checked() {
 }
 
 // The configuration the image ships with (docker/Dockerfile copies config/)
-// must start as it is, in this version's own shape: nothing converted.
+// must start as it is, in this version's own shape.
 #[test]
 fn the_bundled_config_is_valid_as_it_is() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config");
     let output = run_check(&dir);
     assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("startup converts"), "{stdout}");
 }
 
-// A directory an older version wrote is converted in memory, said, and still
-// OK: it starts. The same directory pushed to the config API is refused
-// (config_api_test), so a configuration repository is told to move.
+// A directory an older version wrote is not converted: it is refused, naming
+// what to write instead.
 #[test]
-fn a_0_35_ssh_directory_starts_and_says_what_it_converts() {
+fn a_0_35_ssh_directory_is_refused_saying_what_to_write() {
     let dir = tempfile::tempdir().unwrap();
     let write = |path: &str, body: &str| {
         let file = dir.path().join(path);
@@ -141,28 +138,15 @@ fn a_0_35_ssh_directory_starts_and_says_what_it_converts() {
     );
     write(
         "connectors/ssh.yaml",
-        "connectors:\n  - name: ssh-gather-facts\n    type: ssh\n    path: gather_facts\n  - name: ssh-report\n    type: ssh\n    path: /usr/local/bin/report\n    script_args: [\"--json\"]\n",
-    );
-    write(
-        "sources/ssh.yaml",
-        "sources:\n  - name: src-facts\n    connector: ssh-gather-facts\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n      gather_mode: facts\n  - name: src-report\n    connector: ssh-report\n    ttl_seconds: 60\n    config:\n      hosts: a.example.com\n      gather_mode: script\n",
+        "connectors:\n  - name: ssh-gather-facts\n    type: ssh\n    path: gather_facts\n",
     );
 
     let output = run_check(dir.path());
 
-    assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("'ssh-gather-facts' is in the 0.35 form: read as location: host, path: /etc/ansible/facts.d/*.fact"),
-        "{stdout}"
+        stderr.contains("'ssh-gather-facts' is in the 0.35 form"),
+        "{stderr}"
     );
-    assert!(
-        stdout.contains(
-            "'ssh-report' is in the 0.35 form: read as script: with its command and its arguments"
-        ),
-        "{stdout}"
-    );
-    // Nothing on disk changed.
-    let connectors = std::fs::read_to_string(dir.path().join("connectors/ssh.yaml")).unwrap();
-    assert!(connectors.contains("path: gather_facts"), "{connectors}");
 }

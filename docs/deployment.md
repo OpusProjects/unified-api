@@ -9,7 +9,6 @@ and what changes when the target is Kubernetes, ArgoCD or a CI pipeline.
 - [CI/CD pipeline](#cicd-pipeline)
 - [Kubernetes notes](#kubernetes-notes)
 - [GitOps with ArgoCD](#gitops-with-argocd)
-- [Upgrading from 0.34](#upgrading-from-034)
 - [Scheduling and observability](#scheduling-and-observability)
 
 ---
@@ -444,8 +443,7 @@ What changes when the deployment target is a cluster rather than a single host.
   flat (see [Kubernetes](#kubernetes) above) and its files are symlinks into a
   hidden `..data` folder — the loader follows the links and skips the hidden
   folder, so a mounted ConfigMap loads as-is. It is also read-only, which
-  matters for the [config API](config-api.md) and for an [upgrade from
-  0.34](#upgrading-from-034)
+  matters for the [config API](config-api.md)
 - **Secrets:** three ways in. Inject values as env vars matching each
   credential's `env_vars` (e.g. from a Secret via `envFrom`,
   populated by External Secrets Operator); mount files and reference them via
@@ -548,33 +546,6 @@ mounting the SSH private key at the path `file_keys` points to (mode `0400`).
 If you use ESO with ArgoCD auto-sync, add `ignoreDifferences` for the
 `conversionStrategy`/`decodingStrategy`/`metadataPolicy` defaults the operator
 writes back, or the app never reports Synced.
-
----
-
-## Upgrading from 0.34
-
-0.35 replaced the eight fixed configuration files with item files and moved each
-source's script onto a connector item (see [configuration → upgrading from
-0.34](configuration.md#upgrading-from-034) for the full mapping). What happens to
-a deployment depends on whether its configuration directory is writable:
-
-| Configuration delivered by | At the first 0.35 start | What to do |
-|---|---|---|
-| A writable directory (a PVC, a host bind mount, systemd) | Converted **in place**, once; the old files move to `.legacy-config-<UTC timestamp>/` | Commit the new files wherever the directory comes from, or the next push brings the old layout back |
-| A ConfigMap, or a `:ro` bind mount (as in the `docker run` above) | Converted into a **private temporary copy** and loaded from there, with a loud warning. **Every restart converts again**, and config API writes land in the copy | Convert the source: `unified-api --migrate-config ./config` in the configuration repository, commit, regenerate the ConfigMap |
-| A configuration pipeline pushing over the [config API](config-api.md) | The directory on disk converts as above; a push of old-layout files is then **refused**, naming `--migrate-config` | Convert the repository before upgrading the instances it pushes to |
-
-Either way the pod starts — refusing its own volume would brick an upgrade —
-unless the conversion itself would not load, in which case it refuses to start
-**having changed nothing**, and the log says why. Before rolling the image, run
-`--check-config` on the configuration repository with the new version: on a 0.34
-directory it validates the conversion without writing (see
-[CLI](cli.md#validating-configuration---check-config)).
-
-Rolling back to 0.34 needs the old files back: 0.34 cannot read item files. On a
-writable directory they are in the backup folder; on a ConfigMap, redeploy the
-0.34 one. The API itself did not change shape, so no consumer needs to change
-in either direction.
 
 ---
 

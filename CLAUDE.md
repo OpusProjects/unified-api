@@ -302,7 +302,7 @@ config.yaml still works.
 ## Shared code with unified-gitops
 
 Credential resolution, LDAP sign-in, API keys and browser sessions live in
-[unified-auth](https://github.com/OpusProjects/unified-auth), two crates pinned
+[auth](https://github.com/OpusProjects/auth), two crates pinned
 by tag in `Cargo.toml`: `unified-secrets` (Credential, SecretsPort, the env and
 Vault adapters, the cache, `build_chain`, `SecretsConfig`) and `unified-auth`
 (DirectoryPort, LdapDirectory, `LdapConfig<R>`, the login use case and
@@ -315,12 +315,12 @@ checks, in this service's words), the access rule type and its `grant_for`,
 `Permissions`, `resolve_api_keys`, the cookie name (`uapi_session`), the
 `ApiError` wording of a refusal, the login page and the Users page.
 
-- **Fix a bug in that code in unified-auth**, release it, then move both
+- **Fix a bug in that code in the auth repository**, release it, then move both
   services to the new tag in a `build:` PR (`cargo update -p unified-secrets
   -p unified-auth`). Never patch a copy here.
 - To try a change before it is released, point both dependencies at a local
-  checkout with an uncommitted `[patch."https://github.com/OpusProjects/unified-auth"]`
-  section (see unified-auth's `docs/development.md`).
+  checkout with an uncommitted `[patch."https://github.com/OpusProjects/auth"]`
+  section (see the auth repository's `docs/development.md`).
 - `deny.toml` allows exactly this git source.
 
 ## Releasing a new version
@@ -354,7 +354,7 @@ Release by hand.
   CHANGELOG section) and publishes `ghcr.io/opusprojects/unified-api` as
   `X.Y.Z`, `<sha>` and `latest`. Only releases publish; `build.yaml` builds
   the image on PRs and pushes and throws it away.
-- `UI_REF` in `docker/Dockerfile` (the bundled unified-ui) is not bumped by
+- `UI_REF` in `docker/Dockerfile` (the bundled ui) is not bumped by
   release-please: move it in a `build:` PR before the release that ships it.
 
 ## Conventions

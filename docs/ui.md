@@ -5,8 +5,8 @@ address in a browser, sign in, and see its sources, endpoints, projects,
 credentials, federation topology, metrics and configuration, with a host
 search across all of it.
 
-The UI is its own project, [unified-ui](https://github.com/OpusProjects/unified-ui),
-with its own versions. Each unified-api release builds the unified-ui version
+The UI is its own project, [ui](https://github.com/OpusProjects/ui),
+with its own versions. Each unified-api release builds the ui version
 it was tested with into its image (`UI_REF` in `docker/Dockerfile`), and serves
 the built files itself: no proxy in front, no second container.
 
@@ -63,6 +63,6 @@ menu.
 
 ## Running the UI from its own repository
 
-For working on the UI, unified-ui runs it on Vite against any unified-api
+For working on the UI, the ui repository runs it on Vite against any unified-api
 (`npm run dev`), and has a demo image with nginx in front of the API. Both are
 described in its README; neither is needed to use the UI.

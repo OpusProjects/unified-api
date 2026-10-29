@@ -1,7 +1,7 @@
 server:
   host: "0.0.0.0"
   port: 8182
-  # The web UI on this same address: the image ships a build of unified-ui at
+  # The web UI on this same address: the image ships a build of the ui repo at
   # /usr/share/unified-api/ui. Sign-in is the API's own login page (an API key,
   # or LDAP: docs/ldap-login.md); with no api_keys items the API is open and so
   # is the UI. Remove the block for an API without a UI. See docs/ui.md.

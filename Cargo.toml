@@ -41,10 +41,10 @@ serde_json = "1"
 serde-saphyr = "2"       # pure-Rust YAML reader (no unsafe-libyaml); we only ever read YAML
 # Credential resolution (env vars, JSON files, Vault) and LDAP sign-in, shared
 # with unified-gitops: one repository, two crates, released together, so both
-# lines always name the same tag. See unified-auth's docs/development.md for
+# lines always name the same tag. See the auth repository's docs/development.md for
 # building against a local checkout.
-unified-secrets = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.2.0" }
-unified-auth = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.2.0" }
+unified-secrets = { git = "https://github.com/OpusProjects/auth", tag = "v0.2.0" }
+unified-auth = { git = "https://github.com/OpusProjects/auth", tag = "v0.2.0" }
 tokio = { version = "1", features = ["full"] }
 # The CORS middleware wraps tower-http's CorsLayer around the rest of the
 # stack per request (Layer + oneshot from `util`), which is what makes the

@@ -75,7 +75,7 @@ src/
 │   ├── config_store.rs       # ConfigStorePort (read/validate/commit the config dir)
 │   ├── connector.rs          # ConnectorPort
 │   ├── enricher.rs           # EnricherPort
-│   ├── git.rs                # GitPort (project checkouts)
+│   ├── git.rs                # GitPort (project checkouts), re-exported from unified-git
 │   ├── output.rs             # OutputPort
 │   ├── secrets.rs            # SecretsPort
 │   ├── directory.rs          # DirectoryPort (LDAP)
@@ -111,7 +111,7 @@ src/
 │       │                     #   static_inventory.rs → Ansible YAML on disk;
 │       │                     #   remote.rs → another unified-api (federation)
 │       ├── enrichers/        # process.rs: EnricherPort → tokio::process
-│       ├── git/              # cli.rs: GitPort → git binary (clone/pull projects)
+│       ├── git/              # cli.rs: re-exports unified-git's CliGit (git binary)
 │       ├── directory/        # ldap.rs: re-exports unified-auth's LdapDirectory
 │       ├── peers/            # http.rs: PeerPort → reqwest (topology)
 │       ├── output/           # process.rs: OutputPort → tokio::process
@@ -321,7 +321,15 @@ checks, in this service's words), the access rule type and its `grant_for`,
 - To try a change before it is released, point both dependencies at a local
   checkout with an uncommitted `[patch."https://github.com/OpusProjects/auth"]`
   section (see the auth repository's `docs/development.md`).
-- `deny.toml` allows exactly this git source.
+- `deny.toml` allows exactly these git sources (auth and git).
+
+Git checkouts (clone, pull, the commit a checkout is at) come the same way from
+[git](https://github.com/OpusProjects/git)'s `unified-git` crate: `GitPort`,
+`Remote` and `CliGit`, re-exported from `ports::git` and `adapters::out::git::cli`.
+`GitProject::remote()` is what a project hands to git; when to pull, the
+per-checkout lock and sync health stay in `application/projects.rs`. Move to a
+new release with `cargo update -p unified-git` in a `build:` PR; try a change
+first with an uncommitted `[patch."https://github.com/OpusProjects/git"]`.
 
 ## Releasing a new version
 

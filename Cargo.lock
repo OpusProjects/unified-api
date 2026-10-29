@@ -3718,6 +3718,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unified-auth",
+ "unified-git",
  "unified-secrets",
  "utoipa",
  "utoipa-swagger-ui",
@@ -3739,6 +3740,16 @@ dependencies = [
  "tokio",
  "tracing",
  "unified-secrets",
+]
+
+[[package]]
+name = "unified-git"
+version = "0.1.0"
+source = "git+https://github.com/OpusProjects/git?tag=v0.1.0#8749584abdfddadae849505dd79e97764e2a1372"
+dependencies = [
+ "base64 0.23.1",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

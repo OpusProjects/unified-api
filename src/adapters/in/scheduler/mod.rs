@@ -1344,7 +1344,7 @@ mod tests {
         fn ensure(
             &self,
             _dir: &std::path::Path,
-            _project: &GitProject,
+            _remote: &unified_git::Remote,
             _credentials: &HashMap<String, String>,
         ) -> crate::ports::git::GitFuture<'_> {
             Box::pin(async { Ok(()) })

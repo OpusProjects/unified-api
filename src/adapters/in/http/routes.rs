@@ -134,11 +134,11 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
 
     let api_routes = api_routes
         .layer(middleware::from_fn(http::auth::require_api_key))
-        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))));
+        .layer(axum::Extension(ApiKeys::new(Arc::clone(&api_keys))));
 
     let api_routes = if ui.enabled {
         api_routes
-            .layer(axum::Extension(Sessions(Arc::clone(&sessions))))
+            .layer(axum::Extension(Sessions::new(Arc::clone(&sessions))))
             // Outside the key middleware: it lifts a browser form's CSRF token
             // and _method out of the body before auth needs them.
             .layer(middleware::from_fn(http::session::form_action))
@@ -161,8 +161,8 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
     // as it is everywhere else.
     let metrics_route = Router::new()
         .route("/metrics", get(http::metrics::metrics))
-        .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))))
-        .layer(axum::Extension(Sessions(Arc::clone(&sessions))));
+        .layer(axum::Extension(ApiKeys::new(Arc::clone(&api_keys))))
+        .layer(axum::Extension(Sessions::new(Arc::clone(&sessions))));
 
     // The built UI, when this instance serves one (server.ui.assets_dir, and
     // only with the browsable UI on: it signs in through the login page).
@@ -189,8 +189,8 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
                 get(http::login::login_form).post(http::login::login_submit),
             )
             .route("/api/v1/logout", post(http::login::logout))
-            .layer(axum::Extension(ApiKeys(Arc::clone(&api_keys))))
-            .layer(axum::Extension(Sessions(Arc::clone(&sessions))))
+            .layer(axum::Extension(ApiKeys::new(Arc::clone(&api_keys))))
+            .layer(axum::Extension(Sessions::new(Arc::clone(&sessions))))
             .layer(axum::Extension(http::login::SessionTtl(
                 std::time::Duration::from_secs(ui.session_ttl_seconds),
             )))

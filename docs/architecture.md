@@ -117,16 +117,18 @@ Ports need `dyn`-compatible async methods, so they return `Pin<Box<dyn Future + 
 
 ## Shared with unified-gitops
 
-Credential resolution and LDAP sign-in are not this repository's code: they come from
+Credential resolution, LDAP sign-in, API keys and browser sessions are not this repository's code: they come from
 [unified-auth](https://github.com/OpusProjects/unified-auth), pinned by tag in `Cargo.toml`.
 
 | Crate | What it provides | Re-exported here as |
 |---|---|---|
 | `unified-secrets` | `Credential`, `SecretsPort`, the env and Vault adapters, the cache, `build_chain` | `domain::credential`, `ports::secrets`, `adapters::out::secrets` |
 | `unified-auth` | `DirectoryPort`, `LdapDirectory`, `LdapConfig<R>`, the login use case and throttle | `ports::directory`, `adapters::out::directory`, `application::login` |
+| `unified-auth` (`http`) | API key registry and middleware, session store, CSRF, the browser-form layer | `adapters::in::http::auth`, `adapters::in::http::session` |
 
 The re-exports keep the layers readable: a port is still listed under `ports/`, an adapter under
 `adapters/out/`. What stays here is this service's own: the load-time checks on a credential
-(`CredentialRules`), the access rule type (sources and endpoints) and what it grants (`grant_for`).
+(`CredentialRules`), the access rule type (sources and endpoints) and what it grants (`grant_for`), `Permissions`, how
+api_keys.yaml becomes keys, the session cookie's name, and the login and Users pages.
 A fix to the shared code is made in unified-auth and reaches this service with a new tag.
 

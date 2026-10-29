@@ -24,7 +24,6 @@ it in-memory, and serves it via a fast REST API for consumers like AWX and Ansib
 - utoipa (OpenAPI/Swagger docs)
 - russh (native SSH connector)
 - metrics + metrics-exporter-prometheus (`/metrics`)
-- subtle (constant-time API key comparison)
 
 ## Build & run
 
@@ -100,9 +99,10 @@ src/
 │   │   │   ├── connectors.rs # GET connectors + their users and health (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
-│   │   │   ├── login.rs      # login page, sessions, logout
+│   │   │   ├── login.rs      # login page, sign-in and sign-out routes
 │   │   │   ├── ui_assets.rs  # the built web UI at "/" (server.ui.assets_dir)
-│   │   │   └── auth.rs       # API key middleware
+│   │   │   ├── session.rs    # session cookie name + unified-auth's store, form layer
+│   │   │   └── auth.rs       # Permissions, resolve_api_keys + unified-auth's middleware
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
 │       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
@@ -301,15 +301,19 @@ config.yaml still works.
 
 ## Shared code with unified-gitops
 
-Credential resolution and LDAP sign-in live in
+Credential resolution, LDAP sign-in, API keys and browser sessions live in
 [unified-auth](https://github.com/OpusProjects/unified-auth), two crates pinned
 by tag in `Cargo.toml`: `unified-secrets` (Credential, SecretsPort, the env and
 Vault adapters, the cache, `build_chain`, `SecretsConfig`) and `unified-auth`
 (DirectoryPort, LdapDirectory, `LdapConfig<R>`, the login use case and
-throttle). The modules that held them here re-export them, so the rest of the
-service names them by their old paths. What stays here is what only this
-service has: `CredentialRules` (the load-time checks, in this service's words),
-the access rule type and its `grant_for`.
+throttle; its `http` module: the API key registry and middleware, the session
+store, CSRF and the browser-form layer). The modules that held them here
+re-export them, the generic ones as type aliases over this service's
+`Permissions`, so the rest of the service names them by their old paths. What
+stays here is what only this service has: `CredentialRules` (the load-time
+checks, in this service's words), the access rule type and its `grant_for`,
+`Permissions`, `resolve_api_keys`, the cookie name (`uapi_session`), the
+`ApiError` wording of a refusal, the login page and the Users page.
 
 - **Fix a bug in that code in unified-auth**, release it, then move both
   services to the new tag in a `build:` PR (`cargo update -p unified-secrets

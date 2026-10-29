@@ -21,10 +21,6 @@ bytes = "1"              # cheaply cloneable byte buffer (shared, not copied)
 # git operation, so the SIMD engines' unsafe code buys nothing here.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 dashmap = "6"
-# Session and CSRF tokens for the browsable API's login, straight from the OS
-# random source. Already in the tree (rustls, russh and ahash all pull it), so
-# naming it here adds no code to the build.
-getrandom = "0.4"
 # Hashed known_hosts entries (|1|salt|hash) are HMAC-SHA1 of the hostname.
 # Both crates are already in the tree as russh dependencies — pinning the
 # same versions adds no new code to the build.
@@ -43,13 +39,12 @@ russh = "0.64.1"
 serde = { version = "1", features = ["derive", "rc"] }   # rc: Serialize/Deserialize for Arc<T>
 serde_json = "1"
 serde-saphyr = "2"       # pure-Rust YAML reader (no unsafe-libyaml); we only ever read YAML
-subtle = "2"
 # Credential resolution (env vars, JSON files, Vault) and LDAP sign-in, shared
 # with unified-gitops: one repository, two crates, released together, so both
 # lines always name the same tag. See unified-auth's docs/development.md for
 # building against a local checkout.
-unified-secrets = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.1.0" }
-unified-auth = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.1.0" }
+unified-secrets = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.2.0" }
+unified-auth = { git = "https://github.com/OpusProjects/unified-auth", tag = "v0.2.0" }
 tokio = { version = "1", features = ["full"] }
 # The CORS middleware wraps tower-http's CorsLayer around the rest of the
 # stack per request (Layer + oneshot from `util`), which is what makes the

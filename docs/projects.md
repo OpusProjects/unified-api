@@ -120,7 +120,9 @@ curl -s -H "x-api-key: $ADMIN_KEY" -X POST $BASE/api/v1/projects/prj-connectors/
 
 ## Private repositories
 
-A `credential` on the project authenticates the clone and every pull —
+The credential in the project's `credentials` (a list, as on every item, of at
+most one; the singular `credential:` still loads, deprecated) authenticates
+the clone and every pull —
 without ever putting the secret on a command line (argv is world-readable in
 `/proc` while git runs).
 

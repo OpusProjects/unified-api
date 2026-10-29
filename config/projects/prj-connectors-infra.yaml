@@ -10,7 +10,7 @@ projects:
     # This release's tag, not main: the sample scripts must print what this
     # binary reads, and main moves on (bumped with the version at release).
     branch: "v0.36.0"                   # a branch or a tag; default "main"
-    # credential: "cred-github-token"   # for private repos (token or ssh_key)
+    # credentials: ["cred-github-token"] # for private repos (token or ssh_key)
     sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = no periodic sync)
     # schedule: "15 2 * * *"            # cron (UTC) instead of the interval — pick one
     # sync_on_boot: false               # start from the existing checkout as-is;

@@ -13,6 +13,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - Credentials name their environment variables in full with `env_vars: {<field>: <VAR>}` (`env_vars: {username: D42_USERNAME}` reads `D42_USERNAME` as `username`), and API keys with `env_vars: {key: <VAR>}`; `env_vars` and `env_prefix` on one credential, `secret_keys` next to `env_vars` without a `vault_path` or `secret_file`, an API key `env_vars` field other than `key`, and an API key with both or neither of `env_vars.key` and `env` are refused at load (see `docs/secrets.md`).
 - Every credential field also reaches the connector under its credential's id, `CREDENTIAL_<ID>_<FIELD>` (the name upper-cased, without a leading `cred-`, anything outside `A-Z0-9` made `_`: `cred-vcenter-aa1`'s `username` is `CREDENTIAL_VCENTER_AA1_USERNAME`), so a source can use one credential per site with the same fields; a field already named after its credential (`avamar_aa1_url` on `cred-avamar-aa1`) is not prefixed again, so hand-prefixed configurations deliver exactly what they did.
 - A Vault is a credential of `type: vault` (`address`, `mount`, `env_vars: {token: <VAR>}` or `kubernetes_role`, `timeout_seconds`, `cache_ttl_seconds`), as AWX models a Vault lookup; a credential reads from it with `vault: <its name>` and `vault_path`, so several Vaults can coexist, each with its own login and cache. Naming a Vault credential as a source's, project's or LDAP bind's credential, a Vault field on another type, and a `vault:` that is not a Vault are refused at load; `GET /api/v1/credentials` adds `vault`, and for a Vault `used_by.credentials` (the credentials reading from it) and `vault_connection` (address, mount, login, timeout, cache) (see `docs/secrets.md`).
+- A project names its credential with `credentials:`, a list as on every other item (at most one: a clone authenticates once); a project listing more than one, or setting both forms, is refused.
 
 ### Changed
 
@@ -23,6 +24,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - A credential's `env_prefix` + `secret_keys` and an API key's `env: VAR` still load, with a notice at startup and from `--check-config` naming the `env_vars` to write in their place; a later release refuses them.
 - The `secrets:` block in `config.yaml` (`cache_ttl_seconds`, and `vault:` with `token_env`) still loads, with a notice saying to declare the Vault as a `type: vault` credential; while set, its cache still covers every credential and a `vault_path` with no `vault:` reads from it. A later release refuses it.
+- A project's singular `credential: <id>` still loads, with a notice naming the `credentials: [<id>]` to write; a later release refuses it.
 
 ### Removed
 

@@ -57,6 +57,7 @@ impl AppConfig {
             .iter()
             .filter_map(|(id, c)| c.deprecation(id))
             .chain(self.api_keys.iter().filter_map(|(id, k)| k.deprecation(id)))
+            .chain(self.projects.iter().filter_map(|(id, p)| p.deprecation(id)))
             .chain(block)
             .collect();
         notes.sort();
@@ -1047,7 +1048,8 @@ impl AppConfig {
 
         // Private projects must reference existing credentials
         for (id, project) in &self.projects {
-            if let Some(ref cred_id) = project.credential_id {
+            errors.extend(project.errors(id));
+            if let Some(cred_id) = project.credential_id() {
                 if !self.credentials.contains_key(cred_id) {
                     errors.push(format!(
                         "Project '{}' references unknown credential '{}'",
@@ -2595,6 +2597,52 @@ mod tests {
         let err = load_err(&dir);
         assert!(
             err.contains("Host 'web01' references unknown source 'src-gone'"),
+            "{err}"
+        );
+    }
+
+    // A project names its credential as every item does: credentials, a
+    // list. The singular form still loads, deprecated; more than one, or
+    // both forms, are refused.
+    #[test]
+    fn a_project_takes_credentials_like_every_item() {
+        let base = |extra: &str| {
+            let dir = dir_with_one_source();
+            fs::write(
+                dir.path().join("cred.yaml"),
+                "credentials:\n  - name: cred-gh\n    type: token\n    env_vars:\n      token: GH\n  - name: cred-two\n    type: token\n    env_vars:\n      token: TWO\n",
+            )
+            .unwrap();
+            fs::write(
+                dir.path().join("projects.yaml"),
+                format!("projects:\n  - name: prj-test\n    git_url: \"https://example.com/repo.git\"\n{extra}"),
+            )
+            .unwrap();
+            dir
+        };
+
+        let dir = base("    credentials:\n      - cred-gh\n");
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("loads");
+        assert_eq!(cfg.projects["prj-test"].credential_id(), Some("cred-gh"));
+        assert!(cfg.deprecations().is_empty(), "{:?}", cfg.deprecations());
+
+        let dir = base("    credential: cred-gh\n");
+        let cfg = load_config(dir.path().to_str().unwrap()).expect("the old form loads");
+        assert_eq!(cfg.projects["prj-test"].credential_id(), Some("cred-gh"));
+        assert_eq!(
+            cfg.deprecations(),
+            vec![
+                "project 'prj-test': credential is deprecated and will be refused in a later \
+                 release; write credentials: [cred-gh]"
+            ]
+        );
+
+        let dir =
+            base("    credentials:\n      - cred-gh\n      - cred-two\n    credential: cred-gh\n");
+        let err = load_err(&dir);
+        assert!(err.contains("lists 2 credentials"), "{err}");
+        assert!(
+            err.contains("sets both credentials and credential"),
             "{err}"
         );
     }

@@ -57,8 +57,11 @@ jobs:
         if: steps.rp.outputs.pr != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
+          # Read in the shell: an expression's fromJSON() is evaluated even when
+          # the step is skipped, and fails on the empty output of a run with no PR.
+          PR: ${{ steps.rp.outputs.pr }}
         run: |
+          BRANCH="$(jq -r .headBranchName <<<"$PR")"
           gh workflow run build.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
           echo "CI dispatched on $BRANCH"
 

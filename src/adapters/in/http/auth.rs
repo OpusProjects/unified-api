@@ -1,24 +1,29 @@
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
 
 use axum::extract::Request;
-use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
-use subtle::ConstantTimeEq;
+
+use crate::adapters::r#in::http::error::ApiError;
+use crate::adapters::r#in::http::session::COOKIE_NAME;
+
+// API keys, the middleware that checks them and the browser sessions behind
+// it come from unified-auth, shared with unified-gitops; what stays here is
+// what only this service has: what a key may touch (Permissions), how
+// api_keys.yaml becomes keys, and the error shape a refusal renders in.
+//
+// The shared types are generic over the permissions type. These aliases fix
+// it to ours, so the rest of the service names them as before.
+pub use unified_auth::http::{AuthMethod, BrowserIdentity, match_token, presented_token};
 
 // A configured key with its secret already resolved from the environment
 // (main.rs does the resolution at the boundary; nothing here touches env vars).
-#[derive(Clone)]
-pub struct ResolvedApiKey {
-    // The key's identity: its `name` in the api_keys item, what a peer is
-    // recorded under when it pushes the federation map.
-    pub id: String,
-    // Its label (`description`, falling back to the name): logs, Users page.
-    pub name: String,
-    pub secret: String,
-    pub permissions: Permissions,
-}
+// Its `id` is its `name` in the api_keys item — what a peer is recorded under
+// when it pushes the federation map; its `name` is the label.
+pub type ResolvedApiKey = unified_auth::http::ResolvedApiKey<Permissions>;
+pub type ApiKeyRegistry = unified_auth::http::ApiKeyRegistry<Permissions>;
+pub type ApiKeys = unified_auth::http::ApiKeys<Permissions>;
+pub type AuthContext = unified_auth::http::AuthContext<Permissions>;
 
 // What a caller is allowed to touch. Admin sees everything; Scoped only the
 // listed ids. HashSet instead of Vec: `contains` is O(1) and the lists are
@@ -30,6 +35,13 @@ pub enum Permissions {
         sources: HashSet<String>,
         endpoints: HashSet<String>,
     },
+}
+
+// What an instance with no API keys grants every caller.
+impl unified_auth::http::Permission for Permissions {
+    fn admin() -> Self {
+        Permissions::Admin
+    }
 }
 
 impl Permissions {
@@ -51,41 +63,6 @@ impl Permissions {
             Permissions::Admin => true,
             Permissions::Scoped { endpoints, .. } => endpoints.contains(id),
         }
-    }
-}
-
-// The keys in force right now, behind one pointer a reload can replace.
-//
-// The middleware reads this on every request rather than holding a list, so
-// rewriting api_keys.yaml takes effect on the next request — the one thing
-// that would otherwise still need a restart on a system whose whole point is
-// that a configuration push does not need one. A request already in flight
-// keeps the set it authenticated against.
-pub struct ApiKeyRegistry {
-    keys: RwLock<Arc<[ResolvedApiKey]>>,
-}
-
-impl ApiKeyRegistry {
-    pub fn new(keys: Vec<ResolvedApiKey>) -> Self {
-        Self {
-            keys: RwLock::new(keys.into()),
-        }
-    }
-
-    pub fn load(&self) -> Arc<[ResolvedApiKey]> {
-        Arc::clone(&self.keys.read().expect("api key registry lock"))
-    }
-
-    pub fn replace(&self, keys: Vec<ResolvedApiKey>) {
-        *self.keys.write().expect("api key registry lock") = keys.into();
-    }
-
-    pub fn len(&self) -> usize {
-        self.load().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.load().is_empty()
     }
 }
 
@@ -174,225 +151,15 @@ pub fn ldap_requires_keys(
     Ok(())
 }
 
-// A browser session's identity, published on the response for the HTML layer.
-#[derive(Clone)]
-pub struct BrowserIdentity {
-    pub key_name: String,
-    pub csrf: String,
-}
-
-// Who authenticated this request. The middleware inserts it into the request
-// extensions; handlers extract it with Extension<AuthContext> and enforce the
-// permissions for the specific id they operate on (the middleware cannot — it
-// would have to parse ids out of URLs, which breaks the moment a route moves).
-#[derive(Clone)]
-pub struct AuthContext {
-    // None when the API runs open (no keys configured)
-    pub key_name: Option<String>,
-    // The key's identity (its api_keys name), when a key was presented
-    // with the request; None open, or through a browser session.
-    pub key_id: Option<String>,
-    pub permissions: Permissions,
-    pub method: AuthMethod,
-}
-
-// How the caller proved who they are: what the Users page shows as "you",
-// and what decides which change revokes them.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AuthMethod {
-    // No keys configured: everyone is admin.
-    Open,
-    ApiKey,
-    Ldap,
-}
-
-// The registry, injected as a router Extension. The middleware clones the
-// Arc (a pointer copy) on every request and reads the current key list
-// through it, so a reload that replaces the list is picked up without
-// rebuilding the router.
-#[derive(Clone)]
-pub struct ApiKeys(pub Arc<ApiKeyRegistry>);
-
-// The credential a request offers, from either accepted header. Shared by the
-// middleware and the /metrics handler, which enforces auth itself (its route
-// is always public in the router so the flag can reload — see http::metrics).
-pub fn presented_token(headers: &axum::http::HeaderMap) -> Option<&str> {
-    headers
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-        })
-}
-
-// The browser session behind this request, if it has one and the store is
-// mounted. Returns the session's identity, never the session token.
-fn session_auth(request: &Request) -> Option<crate::adapters::r#in::http::session::Authenticated> {
-    use crate::adapters::r#in::http::session::{COOKIE_NAME, Sessions, cookie_value};
-
-    let sessions = request.extensions().get::<Sessions>()?;
-    let header = request
-        .headers()
-        .get(axum::http::header::COOKIE)?
-        .to_str()
-        .ok()?;
-    sessions.0.get(cookie_value(header, COOKIE_NAME)?)
-}
-
-// Constant-time comparison per key, and no early break: the scan always
-// visits every key so the response time does not reveal WHICH key matched,
-// only that one did.
-pub fn match_token<'k>(token: &str, keys: &'k [ResolvedApiKey]) -> Option<&'k ResolvedApiKey> {
-    let mut matched: Option<&ResolvedApiKey> = None;
-    for key in keys.iter() {
-        // ct_eq always compares all bytes (if lengths match) — a normal ==
-        // short-circuits on the first different byte and that time delta
-        // leaks info to guess the secret byte-by-byte.
-        if bool::from(token.as_bytes().ct_eq(key.secret.as_bytes())) {
-            matched = Some(key);
-        }
-    }
-    matched
-}
-
-// Errors as ApiError rather than a bare StatusCode: a middleware rejection
-// renders through the same IntoResponse as a handler's, so a 401 carries the
-// {"error": ...} body every other failure in the API carries.
-pub async fn require_api_key(
-    mut request: Request,
-    next: Next,
-) -> Result<Response, crate::adapters::r#in::http::error::ApiError> {
-    let keys = request
-        .extensions()
-        .get::<ApiKeys>()
-        .expect("ApiKeys extension missing")
-        .0
-        .load();
-
-    // No keys configured = open API (main.rs warns loudly about this).
-    // Everything is admin so handlers don't need a special "no auth" path.
-    if keys.is_empty() {
-        request.extensions_mut().insert(AuthContext {
-            key_name: None,
-            key_id: None,
-            permissions: Permissions::Admin,
-            method: AuthMethod::Open,
-        });
-        let mut response = next.run(request).await;
-        // The console works here too. There is no ambient credential on an
-        // open instance — nothing to forge, and nothing a CSRF token would
-        // protect — so the pages get an identity with an empty token and their
-        // action buttons render. Without this the browsable API silently lost
-        // Sync and Evict on exactly the setup people try it on first, with
-        // nothing on the page to say why.
-        response.extensions_mut().insert(BrowserIdentity {
-            key_name: "open (no API keys configured)".to_string(),
-            csrf: String::new(),
-        });
-        return Ok(response);
-    }
-
-    // A browser session, when no header was offered. Checked second on
-    // purpose: a request that carries an explicit key is a machine's, and it
-    // should authenticate as that key even from inside a browser that happens
-    // to hold a cookie.
-    if presented_token(request.headers()).is_none()
-        && let Some(auth) = session_auth(&request)
-    {
-        // CSRF, and only here. A cookie is an AMBIENT credential: the browser
-        // attaches it to any request any page can cause, so a page on the
-        // internet could otherwise make your browser POST a sync — or a
-        // DELETE — to this API and succeed. SameSite=Strict on the cookie
-        // blocks the cross-site navigation case, but that is one attribute
-        // standing between an admin session and a write, so the token is
-        // required as well.
-        //
-        // Header-authenticated requests skip this entirely: they carry nothing
-        // ambient, there is nothing to forge, and demanding a token from them
-        // would break every existing consumer on the next upgrade.
-        // "Safe method" by intent, not by verb. GET is exempt because a GET
-        // should not change anything — but this API has one that does:
-        // `/dataset?refresh=true` runs a connector script. A read that can SSH
-        // into a datacenter is a write for this purpose, and the ambient
-        // credential makes it reachable from a page that merely gets an
-        // operator to click a link.
-        let side_effecting_read = request
-            .uri()
-            .query()
-            .is_some_and(|q| q.split('&').any(|p| p == "refresh=true"));
-
-        if side_effecting_read || !matches!(*request.method(), Method::GET | Method::HEAD) {
-            let presented = request
-                .headers()
-                .get("x-csrf-token")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string)
-                .or_else(|| {
-                    request
-                        .extensions()
-                        .get::<crate::adapters::r#in::http::session::FormControls>()
-                        .and_then(|controls| controls.csrf.clone())
-                });
-
-            let ok = presented.is_some_and(|presented| {
-                crate::adapters::r#in::http::session::csrf_matches(&auth.csrf, &presented)
-            });
-
-            if !ok {
-                return Err(crate::adapters::r#in::http::error::ApiError::csrf_required());
-            }
-        }
-
-        tracing::Span::current().record("key_name", auth.key_name.as_str());
-        let identity = BrowserIdentity {
-            key_name: auth.key_name.clone(),
-            csrf: auth.csrf,
-        };
-        // On the request as well: `GET /auth` hands the token to a script
-        // (the UI), which has no HTML form to read it from.
-        request.extensions_mut().insert(identity.clone());
-        request.extensions_mut().insert(AuthContext {
-            key_name: Some(auth.key_name),
-            key_id: None,
-            permissions: auth.permissions,
-            method: match auth.kind {
-                crate::adapters::r#in::http::session::SessionKind::ApiKey => AuthMethod::ApiKey,
-                crate::adapters::r#in::http::session::SessionKind::Directory => AuthMethod::Ldap,
-            },
-        });
-        let mut response = next.run(request).await;
-        // On the RESPONSE, not the request: the HTML layer runs OUTSIDE this
-        // middleware, so by the time it can look, the request is gone. This is
-        // how the page knows whose session it is rendering for, and which CSRF
-        // token its action forms must carry.
-        response.extensions_mut().insert(identity);
-        return Ok(response);
-    }
-
-    let Some(token) = presented_token(request.headers()) else {
-        return Err(crate::adapters::r#in::http::error::ApiError::missing_api_key());
-    };
-
-    match match_token(token, &keys) {
-        Some(key) => {
-            // The trace layer declared this span field Empty; filling it here
-            // puts the authenticated key on the request's access-log line.
-            // (An open API and a public route leave it empty — absence means
-            // nobody authenticated, not somebody anonymous.)
-            tracing::Span::current().record("key_name", key.name.as_str());
-            request.extensions_mut().insert(AuthContext {
-                key_name: Some(key.name.clone()),
-                key_id: Some(key.id.clone()),
-                permissions: key.permissions.clone(),
-                method: AuthMethod::ApiKey,
-            });
-            Ok(next.run(request).await)
-        }
-        None => Err(crate::adapters::r#in::http::error::ApiError::invalid_api_key()),
-    }
+// Every request through the API, authenticated by unified-auth's middleware:
+// a key in a header, a browser session, or — with no keys configured — every
+// caller as admin. This wrapper passes it our session cookie and renders a
+// refusal as an ApiError, so a 401 carries the {"error": ...} body every other
+// failure in the API carries.
+pub async fn require_api_key(request: Request, next: Next) -> Result<Response, ApiError> {
+    unified_auth::http::require_api_key::<Permissions>(COOKIE_NAME, request, next)
+        .await
+        .map_err(ApiError::from)
 }
 
 #[cfg(test)]
@@ -435,6 +202,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::middleware;
     use axum::routing::get;
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     // The handler echoes who authenticated, so tests can assert the
@@ -456,9 +224,9 @@ mod tests {
         Router::new()
             .route("/protected", get(whoami))
             .layer(middleware::from_fn(require_api_key))
-            .layer(axum::Extension(ApiKeys(Arc::new(ApiKeyRegistry::new(
-                keys,
-            )))))
+            .layer(axum::Extension(ApiKeys::new(Arc::new(
+                ApiKeyRegistry::new(keys),
+            ))))
     }
 
     async fn body_string(resp: Response) -> String {
@@ -582,7 +350,7 @@ mod tests {
         let app = Router::new()
             .route("/protected", get(whoami))
             .layer(middleware::from_fn(require_api_key))
-            .layer(axum::Extension(ApiKeys(Arc::clone(&registry))));
+            .layer(axum::Extension(ApiKeys::new(Arc::clone(&registry))));
 
         let ask = |secret: &str| {
             HttpRequest::builder()

@@ -1,0 +1,103 @@
+name: Release
+
+# release-please keeps ONE open pull request, "chore: release vX.Y.Z", up to
+# date with every merge into main: it computes the next version from the
+# Conventional Commit titles of the squashed pull requests, bumps Cargo.toml
+# and Cargo.lock, and writes the CHANGELOG section. Merging that pull request
+# is the release: this same workflow then creates the tag and the GitHub
+# Release, and publishes the image. See docs/releasing.md.
+#
+# Everything runs as github-actions[bot] with GITHUB_TOKEN. GitHub starts no
+# workflow from what that token pushes, so the release PR would never get its
+# required checks, and the tag would never start a publish: the checks are
+# dispatched explicitly below, and the publish is a job of this workflow.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Releases queue, never cancel: a merge landing mid-release must not kill the
+# publish of the version before it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # the autorelease labels on the release PR
+      actions: write # dispatching CI on the release branch
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # The release PR's head was just pushed with GITHUB_TOKEN, which starts
+      # no workflow: dispatch CI on it so the required checks report on the
+      # PR's head commit and it can be merged.
+      - name: Run CI on the release PR
+        if: steps.rp.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ fromJSON(steps.rp.outputs.pr).headBranchName }}
+        run: |
+          gh workflow run build.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "CI dispatched on $BRANCH"
+
+  publish:
+    name: Publish image
+    needs: release-please
+    # Only when merging the release PR created a release
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # X.Y.Z, the commit SHA, and latest: only releases publish, so latest
+      # always means the newest release, never the tip of main.
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.release-please.outputs.version }}
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

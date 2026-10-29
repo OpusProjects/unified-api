@@ -14,11 +14,11 @@ What this PR does, and why this approach.
 ## Compatibility
 
 Any behavior change for API consumers or config? Note breaking changes here
-(and add a CHANGELOG entry under `Unreleased`).
+(and mark the title with `!`, e.g. `feat!: ...`).
 
 ## Checklist
 
 - [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` pass locally
 - [ ] Tests added or updated for the change
 - [ ] Docs updated (`README.md`, `docs/`, or `CLAUDE.md`) if behavior or config changed
-- [ ] `CHANGELOG.md` updated under `Unreleased` if user-facing
+- [ ] The title reads as a CHANGELOG line for users (it becomes one: see `docs/releasing.md`)

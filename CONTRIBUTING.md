@@ -24,7 +24,9 @@ gh pr create --base main
   `feat: add SSH connector with parallel execution`, `fix: lost updates in
   cache`. Types in use: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
   `build`, `chore`.
-- Release commits are the exception: `Release x.y.z`, matching the tag.
+- The squashed title is the CHANGELOG line and decides the next version, so
+  write it for someone reading the release notes: what changes for them. See
+  [docs/releasing.md](docs/releasing.md).
 - Body (when the change needs explaining): plain prose, *what* and *why*, wrapped
   at ~72 columns. The problem first, then the change.
 
@@ -71,14 +73,13 @@ the same spirit is welcome. Beyond those, comment only when the *why* is non-obv
 
 ## Releases
 
-1. One release PR: bump `version` in `Cargo.toml` (run `cargo build` so
-   `Cargo.lock` follows) and move the `Unreleased` entries in
-   [CHANGELOG.md](CHANGELOG.md) under the new version with the date.
-2. After the squash merge: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. CI runs the gates, publishes `ghcr.io/opusprojects/unified-api:X.Y.Z`, and
-   creates a GitHub Release with that version's CHANGELOG section as the notes.
-   Only tags publish images: `latest` always means the newest release, never
-   the tip of `main` — consumers should still pin the version tag.
+Releases are cut by release-please; no one bumps a version, edits the CHANGELOG
+or pushes a tag by hand. Every merge into `main` updates one open
+`chore: release vX.Y.Z` pull request, and merging it creates the tag, the GitHub
+Release and the `ghcr.io/opusprojects/unified-api:X.Y.Z` image. Only releases publish
+images: `latest` always means the newest release, never the tip of `main` —
+consumers should still pin the version tag. See
+[docs/releasing.md](docs/releasing.md).
 
 ## Running the test suite
 

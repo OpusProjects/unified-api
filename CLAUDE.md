@@ -365,7 +365,7 @@ Release by hand.
   `fix: review findings`.
 - **New functionality is never a `fix:`**, however small the diff.
 - After each merge into `main`, release-please updates the one open PR
-  `chore: release vX.Y.Z` on `release-please--branches--main`. It bumps
+  `chore: release vX.Y.Z` on `release-please--branches--main--components--unified-api`. It bumps
   `Cargo.toml`, `Cargo.lock`, the `branch:` tag in
   `config/projects/prj-connectors-infra.yaml` (the line marked
   `x-release-please-version`) and `.release-please-manifest.json`, and writes
@@ -375,11 +375,15 @@ Release by hand.
 - Its checks: a push made with `GITHUB_TOKEN` starts no workflow, so
   `release.yml` dispatches `build.yaml` on the release branch
   (`workflow_dispatch`). If they are missing:
-  `gh workflow run build.yaml --ref release-please--branches--main`.
+  `gh workflow run build.yaml --ref release-please--branches--main--components--unified-api`.
 - **Merging the release PR is the release:** squash-merge it once green, and
-  `release.yml` creates the tag `vX.Y.Z`, the GitHub Release (notes = the
-  CHANGELOG section) and publishes `ghcr.io/opusprojects/unified-api` as
-  `X.Y.Z`, `<sha>` and `latest`. Only releases publish; `build.yaml` builds
+  `release.yml` creates the GitHub Release (notes = the CHANGELOG section) as a
+  draft, publishes `ghcr.io/opusprojects/unified-api` as `X.Y.Z`, `<sha>` and
+  `latest`, and only then publishes the draft, which creates the tag `vX.Y.Z`:
+  nothing is tagged that cannot be pulled.
+- The first release PR waits for one approval of its CI run (`github-actions[bot]`
+  is a first-time contributor until one of its PRs is merged); see
+  docs/releasing.md. Only releases publish; `build.yaml` builds
   the image on PRs and pushes and throws it away.
 - `UI_REF` in `docker/Dockerfile` (the bundled ui) is not bumped by
   release-please: move it in a `build:` PR before the release that ships it.

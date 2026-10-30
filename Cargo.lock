@@ -3960,12 +3960,14 @@ dependencies = [
 
 [[package]]
 name = "web-rs"
-version = "0.1.0"
-source = "git+https://github.com/OpusProjects/web?tag=v0.1.0#311fcb03364b02d924bf8803dd1fe65bf3c3fc2e"
+version = "0.2.0"
+source = "git+https://github.com/OpusProjects/web?tag=v0.2.0#e7dc926d982628e87e475c01e745b98d36aa46b3"
 dependencies = [
  "auth-rs",
  "axum",
+ "chrono",
  "serde",
+ "sha2",
  "tower",
  "tower-http 0.7.1",
  "tracing",

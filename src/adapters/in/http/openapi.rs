@@ -133,8 +133,6 @@ impl Modify for SecurityAddon {
         http::config::ConfigSummary,
         http::config::DeltaInfo,
         http::config::ReloadInfo,
-        http::config::ValidationResult,
-        http::config::WriteResult,
     )),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),

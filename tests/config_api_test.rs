@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 use unified_api::AppState;
 use unified_api::adapters::r#in::http::auth::{Permissions, ResolvedApiKey, resolve_api_keys};
-use unified_api::adapters::out::config::fs::FsConfigStore;
+use unified_api::adapters::out::config::fs::fs_store;
 use unified_api::config::{RestartOnlySettings, load_config};
 
 const KEY: &str = "admin-secret";
@@ -70,7 +70,7 @@ fn build(dir: &Path, config_api: bool) -> (Router, Arc<AppState>) {
         .from_config(&cfg)
         .api_keys(keys);
     if config_api {
-        builder = builder.config_api(Arc::new(FsConfigStore::new(dir)), live);
+        builder = builder.config_api(Arc::new(fs_store(dir)), live);
     }
     builder.build_with_state()
 }
@@ -195,7 +195,7 @@ async fn a_restricted_key_cannot_read_the_configuration() {
                 endpoints: Default::default(),
             },
         }])
-        .config_api(Arc::new(FsConfigStore::new(dir.path())), live)
+        .config_api(Arc::new(fs_store(dir.path())), live)
         .build_with_state();
 
     // The files describe the estate — which systems exist, which variable

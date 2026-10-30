@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use std::sync::Arc;
 use tower::ServiceExt;
-use unified_api::adapters::out::config::fs::FsConfigStore;
+use unified_api::adapters::out::config::fs::fs_store;
 use unified_api::config::{RestartOnlySettings, load_config};
 
 const KEY: &str = "admin-secret";
@@ -27,7 +27,7 @@ fn app_at(dir: &Path) -> Router {
     let (app, _) = unified_api::AppBuilder::new()
         .from_config(&cfg)
         .api_keys(keys)
-        .config_api(Arc::new(FsConfigStore::new(dir)), live)
+        .config_api(Arc::new(fs_store(dir)), live)
         .build_with_state();
     app
 }

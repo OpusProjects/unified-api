@@ -67,19 +67,9 @@ fn safe_next<'a>(next: Option<&'a str>, home: &'a str) -> &'a str {
     }
 }
 
-// For a `next` carried in a query string: every byte but the unreserved ones
-// and '/' escaped, so a path with its own query ("?host=a&b") arrives whole.
-pub(crate) fn query_escape(value: &str) -> String {
-    value
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
-}
+// For a `next` carried in a query string: web-rs's escaping, the same the UI
+// gate uses when it sends a signed-out browser here.
+pub(crate) use web_rs::url::query_escape;
 
 fn esc(s: &str) -> String {
     Html::text(s).as_str().to_string()

@@ -9,7 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 // it has the same name (sync_source)
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
-use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody, SourceErrors};
 use crate::application::sync::{
     DEFAULT_REFRESH_DEPTH, SyncRequest, SyncScope, sync_source as application_sync_source,
 };

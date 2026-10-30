@@ -13,7 +13,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
-use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody, SourceErrors};
 use crate::adapters::r#in::http::index;
 use crate::adapters::r#in::http::views;
 use crate::application::refresh::{RefreshOutcome, refresh_hosts};

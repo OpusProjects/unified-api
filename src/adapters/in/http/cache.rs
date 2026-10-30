@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
-use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody, SourceErrors};
 
 // Cache administration. Filling a source's entry is sync.rs; this is its
 // inverse, and the only operation that drops a whole entry rather than

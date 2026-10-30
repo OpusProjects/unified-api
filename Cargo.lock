@@ -182,6 +182,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auth-rs"
+version = "0.3.0"
+source = "git+https://github.com/OpusProjects/auth?tag=v0.3.0#d12dcd0cd25bb67d6bea5ee29d83410f3d0d18dd"
+dependencies = [
+ "axum",
+ "dashmap",
+ "getrandom 0.4.3",
+ "ldap3",
+ "rustls",
+ "rustls-pki-types",
+ "secrets-rs",
+ "serde",
+ "subtle",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,6 +1286,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
 dependencies = [
  "polyval",
+]
+
+[[package]]
+name = "git-rs"
+version = "0.2.0"
+source = "git+https://github.com/OpusProjects/git?tag=v0.2.0#f5952deee5560ed375773919c696f92d5f71f315"
+dependencies = [
+ "base64 0.23.1",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2939,6 +2967,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrets-rs"
+version = "0.3.0"
+source = "git+https://github.com/OpusProjects/auth?tag=v0.3.0#d12dcd0cd25bb67d6bea5ee29d83410f3d0d18dd"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3692,6 +3732,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 name = "unified-api"
 version = "0.37.0"
 dependencies = [
+ "auth-rs",
  "axum",
  "base64 0.23.1",
  "bytes",
@@ -3700,12 +3741,14 @@ dependencies = [
  "croner",
  "dashmap",
  "futures",
+ "git-rs",
  "hmac",
  "http-body-util",
  "metrics",
  "metrics-exporter-prometheus",
  "reqwest",
  "russh",
+ "secrets-rs",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -3717,51 +3760,8 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
- "unified-auth",
- "unified-git",
- "unified-secrets",
  "utoipa",
  "utoipa-swagger-ui",
-]
-
-[[package]]
-name = "unified-auth"
-version = "0.2.0"
-source = "git+https://github.com/OpusProjects/auth?tag=v0.2.0#6276741f7324e7b73ac239b5af018f58cd9c772d"
-dependencies = [
- "axum",
- "dashmap",
- "getrandom 0.4.3",
- "ldap3",
- "rustls",
- "rustls-pki-types",
- "serde",
- "subtle",
- "tokio",
- "tracing",
- "unified-secrets",
-]
-
-[[package]]
-name = "unified-git"
-version = "0.1.0"
-source = "git+https://github.com/OpusProjects/git?tag=v0.1.0#8749584abdfddadae849505dd79e97764e2a1372"
-dependencies = [
- "base64 0.23.1",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "unified-secrets"
-version = "0.2.0"
-source = "git+https://github.com/OpusProjects/auth?tag=v0.2.0#6276741f7324e7b73ac239b5af018f58cd9c772d"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

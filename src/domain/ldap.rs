@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use unified_auth::rule_names;
+use auth_rs::rule_names;
 
 use crate::domain::api_key::ApiKeyRole;
 
@@ -18,10 +18,10 @@ use crate::domain::api_key::ApiKeyRole;
 // (env, file, Vault) every connector credential goes through.
 //
 // The block itself, the directory search and the group matching live in
-// unified-auth, shared with unified-gitops; what stays here is what only this
+// auth-rs, shared with unified-gitops; what stays here is what only this
 // service has: the rule type (sources and endpoints) and what it grants.
 // The `server.ui.ldap` block, with this service's rules as its `access:`.
-pub type LdapConfig = unified_auth::LdapConfig<AccessRule>;
+pub type LdapConfig = auth_rs::LdapConfig<AccessRule>;
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -83,7 +83,7 @@ pub fn grant_for(rules: &[AccessRule], username: &str, member_of: &[String]) -> 
 }
 
 // What the shared login use case asks of this service's rules.
-impl unified_auth::AccessRule for AccessRule {
+impl auth_rs::AccessRule for AccessRule {
     type Grant = Grant;
 
     fn grant_for(rules: &[Self], username: &str, member_of: &[String]) -> Option<Grant> {

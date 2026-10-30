@@ -140,12 +140,12 @@ impl IntoResponse for ApiError {
     }
 }
 
-// A refusal from unified-auth's middleware, in this API's words. The shared
+// A refusal from auth-rs's middleware, in this API's words. The shared
 // crate says only which refusal it is; the wording, and the {"error": ...}
 // body it travels in, are ours.
-impl From<unified_auth::http::Rejection> for ApiError {
-    fn from(rejection: unified_auth::http::Rejection) -> Self {
-        use unified_auth::http::Rejection;
+impl From<auth_rs::http::Rejection> for ApiError {
+    fn from(rejection: auth_rs::http::Rejection) -> Self {
+        use auth_rs::http::Rejection;
         match rejection {
             Rejection::MissingApiKey => Self::missing_api_key(),
             Rejection::InvalidApiKey => Self::invalid_api_key(),

@@ -1,6 +1,6 @@
 // Integration tests for the project routes, against real repositories created
 // in temp directories and served over the file:// protocol. The git adapter
-// itself is tested in unified-git (the git repository).
+// itself is tested in git-rs (the git repository).
 use std::path::Path;
 
 use unified_api::domain::project::GitProject;

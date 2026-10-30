@@ -1,8 +1,8 @@
-// Credential and CredentialType live in unified-secrets (the crate every
+// Credential and CredentialType live in secrets-rs (the crate every
 // secrets adapter reads them from, shared with unified-gitops); this module
 // re-exports them so the rest of the service keeps naming
 // `crate::domain::credential::Credential`.
-pub use unified_secrets::credential::{Credential, CredentialType, delivery_id, variable_part};
+pub use secrets_rs::credential::{Credential, CredentialType, delivery_id, variable_part};
 
 // What this service checks about a credential when it loads its
 // configuration, in its own words. A trait because Credential is a type from

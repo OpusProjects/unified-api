@@ -6,7 +6,7 @@ use crate::adapters::r#in::http::auth::Permissions;
 
 // Browser sessions, for the browsable API: the store, its tokens and cookie,
 // CSRF, and the layer that turns a browser form into an API request come from
-// unified-auth, shared with unified-gitops. What is ours is the cookie's name
+// auth-rs, shared with unified-gitops. What is ours is the cookie's name
 // and the permissions a session holds.
 //
 // Why a session at all, when the API already has keys: Swagger's Authorize
@@ -17,20 +17,18 @@ use crate::adapters::r#in::http::auth::Permissions;
 // login form and a session cookie rather than a header box.
 pub const COOKIE_NAME: &str = "uapi_session";
 
-pub use unified_auth::http::{
-    FormControls, Issued, SessionKind, cookie_value, csrf_matches, new_token,
-};
+pub use auth_rs::http::{FormControls, Issued, SessionKind, cookie_value, csrf_matches, new_token};
 
-pub type SessionStore = unified_auth::http::SessionStore<Permissions>;
-pub type Sessions = unified_auth::http::Sessions<Permissions>;
-pub type Authenticated = unified_auth::http::Authenticated<Permissions>;
+pub type SessionStore = auth_rs::http::SessionStore<Permissions>;
+pub type Sessions = auth_rs::http::Sessions<Permissions>;
+pub type Authenticated = auth_rs::http::Authenticated<Permissions>;
 
 // Browser forms, translated into what the API already speaks: `_csrf` lifted
 // out for the auth middleware, the other fields moved to the query, and
 // `_method=DELETE` honoured for a request carrying our session cookie only.
-// See unified-auth's `http::session::form_action` for why each of those.
+// See auth-rs's `http::session::form_action` for why each of those.
 pub async fn form_action(request: Request, next: Next) -> Response {
-    unified_auth::http::form_action(COOKIE_NAME, request, next).await
+    auth_rs::http::form_action(COOKIE_NAME, request, next).await
 }
 
 #[cfg(test)]

@@ -45,7 +45,7 @@ What has to be on the machine before the suite will run.
 
 | Layer | Where | What it covers |
 |---|---|---|
-| **Unit tests** | `#[cfg(test)]` modules inside `src/` | Focused logic close to the code — config loading (`config.rs`), API-key auth (`adapters/in/http/auth.rs`), TTL/cache-entry rules (`domain/cache_entry.rs`), the DashMap cache (`adapters/out/cache/memory.rs`), the secrets chain wiring (`adapters/out/secrets/mod.rs`; the resolvers themselves are tested in unified-auth), the SSH connector (`adapters/out/connectors/ssh.rs`) |
+| **Unit tests** | `#[cfg(test)]` modules inside `src/` | Focused logic close to the code — config loading (`config.rs`), API-key auth (`adapters/in/http/auth.rs`), TTL/cache-entry rules (`domain/cache_entry.rs`), the DashMap cache (`adapters/out/cache/memory.rs`), the secrets chain wiring (`adapters/out/secrets/mod.rs`; the resolvers themselves are tested in auth-rs), the SSH connector (`adapters/out/connectors/ssh.rs`) |
 | **Integration tests** | `tests/*.rs` | The app assembled through `AppBuilder`, exercised end to end |
 
 The integration files:

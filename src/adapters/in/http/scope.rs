@@ -6,7 +6,7 @@ use utoipa::ToSchema;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
-use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody, SourceErrors};
 
 // Scope advertising: an instance states, over the API, what a source (or
 // view) claims to own — the fact a federating central's view had to duplicate

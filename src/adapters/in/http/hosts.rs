@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::adapters::r#in::http::auth::AuthContext;
-use crate::adapters::r#in::http::error::{ApiError, ErrorBody};
+use crate::adapters::r#in::http::error::{ApiError, ErrorBody, SourceErrors};
 use crate::domain::dataset::HostVars;
 
 // Immediate host add/remove in a source's cache

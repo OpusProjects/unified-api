@@ -167,7 +167,8 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
     // The built UI, when this instance serves one (server.ui.assets_dir, and
     // only with the browsable UI on: it signs in through the login page).
     let ui_assets = ui.assets_dir.as_ref().filter(|_| ui.enabled).map(|dir| {
-        http::ui_assets::UiAssets::new(dir).with_gate(Arc::clone(&api_keys), Arc::clone(&sessions))
+        http::ui_assets::UiAssets::new(dir, http::session::COOKIE_NAME)
+            .with_gate(Arc::clone(&api_keys), Arc::clone(&sessions))
     });
     let metrics_route = match &ui_assets {
         Some(assets) => metrics_route.layer(middleware::from_fn_with_state(

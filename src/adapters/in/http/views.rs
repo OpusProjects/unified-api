@@ -8,7 +8,7 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use crate::AppState;
-use crate::adapters::r#in::http::error::ApiError;
+use crate::adapters::r#in::http::error::{ApiError, SourceErrors};
 use crate::adapters::r#in::http::sources::{
     CachedSourceInfo, DatasetParams, GroupInfo, GroupsMode, HostList, HostStatus, HostsParams,
     SourceStatus, StatusParams, SyncHealthInfo, VarShape, comma_names, sanitize_header_value,

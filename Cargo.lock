@@ -3762,6 +3762,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
+ "web-rs",
 ]
 
 [[package]]
@@ -3955,6 +3956,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-rs"
+version = "0.1.0"
+source = "git+https://github.com/OpusProjects/web?tag=v0.1.0#311fcb03364b02d924bf8803dd1fe65bf3c3fc2e"
+dependencies = [
+ "auth-rs",
+ "axum",
+ "serde",
+ "tower",
+ "tower-http 0.7.1",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

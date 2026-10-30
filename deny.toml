@@ -41,7 +41,11 @@ multiple-versions = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# The git sources allowed: the auth repository (the secrets and sign-in crates)
-# and the git repository (git checkouts), shared with unified-gitops, each
-# pinned by release tag in Cargo.toml.
-allow-git = ["https://github.com/OpusProjects/auth", "https://github.com/OpusProjects/git"]
+# The git sources allowed: the auth repository (the secrets and sign-in crates),
+# the git repository (git checkouts) and the web repository (the web layer),
+# shared with unified-gitops, each pinned by release tag in Cargo.toml.
+allow-git = [
+    "https://github.com/OpusProjects/auth",
+    "https://github.com/OpusProjects/git",
+    "https://github.com/OpusProjects/web",
+]

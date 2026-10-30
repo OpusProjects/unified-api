@@ -137,16 +137,15 @@ async fn main() {
     // Writing the configuration directory over HTTP is opt-in: without it the
     // directory is read once at startup and never touched again, which is what
     // every deployment that has not asked for anything else expects.
-    let config_store: Option<
-        std::sync::Arc<dyn unified_api::ports::config_store::ConfigStorePort>,
-    > = if cfg.config_api.enabled {
-        info!(dir = %config_dir, "Configuration API enabled — this directory is writable over HTTP");
-        Some(std::sync::Arc::new(
-            unified_api::adapters::out::config::fs::FsConfigStore::new(&config_dir),
-        ))
-    } else {
-        None
-    };
+    let config_store: Option<std::sync::Arc<unified_api::ports::config_store::ConfigStorePort>> =
+        if cfg.config_api.enabled {
+            info!(dir = %config_dir, "Configuration API enabled — this directory is writable over HTTP");
+            Some(std::sync::Arc::new(
+                unified_api::adapters::out::config::fs::fs_store(&config_dir),
+            ))
+        } else {
+            None
+        };
 
     let mut builder = unified_api::AppBuilder::new()
         .from_config(&cfg)

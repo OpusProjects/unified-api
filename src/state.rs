@@ -155,7 +155,7 @@ pub struct AppState {
     // Where the configuration directory is, and the settings the live process
     // was built from. Both only exist to answer a reload honestly: what is on
     // disk, and which of its keys this process cannot adopt without a restart.
-    pub config_store: Option<Arc<dyn ports::config_store::ConfigStorePort>>,
+    pub config_store: Option<Arc<ports::config_store::ConfigStorePort>>,
     pub(crate) live_settings: RwLock<Option<crate::config::RestartOnlySettings>>,
     // The restart-only keys the last APPLIED reload changed, kept so /metrics
     // can export the count at scrape time: a pod running on a configuration

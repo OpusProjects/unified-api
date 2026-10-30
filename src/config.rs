@@ -14,6 +14,10 @@ use crate::domain::project::GitProject;
 use crate::domain::source::{Source, SourceDef};
 use crate::domain::view::View;
 
+// Which files make up a configuration directory, and the rule an item name or
+// a path segment must meet: web-rs's, the same rule the config API applies.
+pub use web_rs::config::{REQUIRED_CONFIG_FILE, config_files, is_config_path, is_safe_id};
+
 pub struct AppConfig {
     pub server: ServerConfig,
     pub cache: CacheConfig,
@@ -274,12 +278,6 @@ pub struct ConfigApiConfig {
 // is the item's identity: what other items reference, what URLs and cache
 // keys use. `description` is the label people read.
 
-// The one file that is not optional: without server config there is nothing
-// to bind. Always at the root, under exactly this name. The config API
-// refuses to delete it for the same reason the loader refuses to start
-// without it.
-pub const REQUIRED_CONFIG_FILE: &str = "config.yaml";
-
 // The top-level keys an item file may use.
 pub const SECTIONS: [&str; 10] = [
     "sources",
@@ -293,82 +291,6 @@ pub const SECTIONS: [&str; 10] = [
     "credentials",
     "api_keys",
 ];
-
-// Whether a path, relative to the configuration directory, can be a
-// configuration file: segments of letters, digits, `-`, `_` and `.`, none
-// hidden, ending in .yaml or .yml. The same rule the loader applies to what
-// it finds and the config API applies to what it is asked to write, so a file
-// the API cannot name cannot be part of the configuration either.
-pub fn is_config_path(path: &str) -> bool {
-    let segments: Vec<&str> = path.split('/').collect();
-    path.len() <= 512
-        && segments.len() <= 16
-        && segments.iter().all(|s| is_safe_id(s))
-        && (path.ends_with(".yaml") || path.ends_with(".yml"))
-}
-
-// Every configuration file under `dir`, as relative paths with `/`, sorted:
-// the same directory always loads in the same order. Hidden entries are
-// skipped (the config API's staging directories, the migration's backup,
-// editor swap files, .git).
-//
-// Symlinks ARE followed: a Kubernetes ConfigMap mount is nothing but links
-// into a hidden `..data` folder, and skipping them would load an empty
-// configuration. The directory is the admins' to write either way; the depth
-// cap is what keeps a link loop from walking forever.
-pub fn config_files(dir: &Path) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    walk(dir, "", 0, &mut out)?;
-    out.sort();
-    Ok(out)
-}
-
-const MAX_CONFIG_DEPTH: usize = 16;
-
-fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) -> Result<(), String> {
-    if depth > MAX_CONFIG_DEPTH {
-        return Err(format!(
-            "{}: folders nested more than {MAX_CONFIG_DEPTH} deep (a symlink loop?)",
-            dir.display()
-        ));
-    }
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && prefix.is_empty() => {
-            return Ok(());
-        }
-        Err(e) => return Err(format!("{}: {e}", dir.display())),
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-        let rel = format!("{prefix}{name}");
-        // metadata, not file_type: it follows a link to what it points at.
-        let Ok(meta) = fs::metadata(entry.path()) else {
-            continue;
-        };
-        if meta.is_dir() {
-            walk(&entry.path(), &format!("{rel}/"), depth + 1, out)?;
-        } else if meta.is_file() && (name.ends_with(".yaml") || name.ends_with(".yml")) {
-            out.push(rel);
-        }
-    }
-    Ok(())
-}
-
-// An identity that is also safe as a path segment and in a URL: letters,
-// digits, `-`, `_` and `.`, not starting with a dot. Item names are held to
-// it because they appear in both (`/api/v1/sources/{id}`, the migration's
-// `<section>/<name>.yaml`), and configuration paths are made of it.
-pub fn is_safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.starts_with('.')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-}
 
 // The settings a running process cannot adopt without being restarted, pulled
 // out of AppConfig as plain comparable values.
@@ -1226,38 +1148,11 @@ impl AppConfig {
 
 // Everything wrong with a configuration directory, as items.
 //
-// Loading fails in two shapes — a file that does not parse (one error, and
-// nothing after it is knowable) and a directory that parses but does not hang
-// together (as many errors as there are broken references). Both arrive here,
-// so a caller that wants the list gets the list and a caller that wants a
-// message gets a message.
-#[derive(Debug)]
-pub struct ConfigErrors {
-    pub errors: Vec<String>,
-}
-
-impl ConfigErrors {
-    pub fn new(errors: Vec<String>) -> Self {
-        Self { errors }
-    }
-
-    fn single(message: String) -> Self {
-        Self {
-            errors: vec![message],
-        }
-    }
-}
-
-impl std::fmt::Display for ConfigErrors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.errors.as_slice() {
-            [one] => write!(f, "{}", one),
-            many => write!(f, "Configuration errors:\n  - {}", many.join("\n  - ")),
-        }
-    }
-}
-
-impl std::error::Error for ConfigErrors {}
+// Loading fails in two shapes — a file that does not parse (one error) and a
+// directory that parses but does not hang together (one per broken
+// reference). ConfigErrors holds either as a list; it is web-rs's, since the
+// config API reports the same list.
+pub use web_rs::config::ConfigErrors;
 
 pub fn load_config(config_dir: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {
     Ok(load_config_detailed(Path::new(config_dir))?)

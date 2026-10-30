@@ -1,22 +1,25 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Response;
+use serde::Serialize;
 use utoipa::ToSchema;
+use web_rs::config::api as shared;
 
 use crate::AppState;
-use crate::adapters::out::config::fs::directory_etag;
 use crate::application::config as reload_use_case;
-use crate::config::{AppConfig, ConfigErrors, REQUIRED_CONFIG_FILE, is_config_path};
-use crate::ports::config_store::{ConfigChange, ConfigFileStat, ConfigStorePort};
+use crate::config::AppConfig;
+use crate::ports::config_store::ConfigStorePort;
 
-use super::audit;
-use super::auth::{ApiKeys, AuthContext, ResolvedApiKey, resolve_api_keys};
+use super::auth::{ApiKeys, AuthContext, Permissions, ResolvedApiKey, resolve_api_keys};
 use super::error::{ApiError, ErrorBody};
+
+pub use web_rs::config::{
+    ConfigBundle, ConfigFileInfo, ConfigInventory, ConfigRejected, DeltaInfo, ReloadQuery,
+    ValidationResult, WriteResult,
+};
 
 // The configuration directory, over HTTP.
 //
@@ -32,19 +35,15 @@ use super::error::{ApiError, ErrorBody};
 // describe the estate — which systems exist, which variable holds which
 // credential — which is exactly what a restricted consumer key has no
 // business enumerating.
+//
+// The routes' logic is web-rs's (the `web` repository), shared with the
+// sibling service: staging, If-Match, ETags, the order validate → commit →
+// reload. What is this service's own is below: what its configuration counts,
+// what a reload reports and does, and which API keys a configuration leaves
+// in force. The handlers carry the OpenAPI annotations and hand each request
+// to the shared function for its route.
 
 // ---------------------------------------------------------------- wire types
-
-#[derive(Serialize, ToSchema)]
-pub struct ConfigFileInfo {
-    pub name: String,
-    pub size: u64,
-    /// Hex sha256 of the contents — the value served as this file's ETag
-    pub sha256: String,
-    /// RFC 3339, absent if the filesystem does not report one
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub modified: Option<String>,
-}
 
 #[derive(Serialize, ToSchema)]
 pub struct ConfigSummary {
@@ -58,44 +57,6 @@ pub struct ConfigSummary {
     pub endpoints: usize,
     pub projects: usize,
     pub api_keys: usize,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct ConfigInventory {
-    /// Where the files live on the instance
-    pub directory: String,
-    /// One hash over the whole directory — send it back as If-Match on a
-    /// whole-directory push and a write that would clobber someone else's
-    /// change is refused instead of silently winning
-    pub etag: String,
-    pub files: Vec<ConfigFileInfo>,
-    /// Known files that are not present. Every one of them is optional except
-    /// config.yaml
-    pub missing: Vec<String>,
-    /// How many times this process has reloaded. 0 = still running exactly
-    /// what it booted with
-    pub generation: u64,
-    /// Whether what is on disk right now would load
-    pub valid: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
-    /// True when the directory differs from what the process is serving —
-    /// somebody wrote files and nobody reloaded
-    pub reload_pending: bool,
-    /// config.yaml keys that differ from the ones this process was built with
-    /// and that no reload can adopt
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub restart_required: Vec<String>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct DeltaInfo {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub added: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub removed: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub changed: Vec<String>,
 }
 
 impl From<&reload_use_case::SectionDelta> for DeltaInfo {
@@ -128,64 +89,7 @@ pub struct ReloadInfo {
     pub api_keys: usize,
 }
 
-#[derive(Serialize, ToSchema)]
-pub struct WriteResult {
-    pub written: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub deleted: Vec<String>,
-    /// The directory ETag AFTER the write — feed it to the next If-Match
-    pub etag: String,
-    pub summary: ConfigSummary,
-    /// Present when the write asked for ?reload=true
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reloaded: Option<ReloadInfo>,
-    /// True when the files are on disk but the process is still serving the
-    /// previous configuration (no ?reload=true, and something differs)
-    pub reload_pending: bool,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct ValidationResult {
-    pub valid: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub summary: Option<ConfigSummary>,
-}
-
-// A rejected configuration, as a SUPERSET of the ordinary error body: `error`
-// is the one-line summary every other route answers with, `errors` is the
-// whole list. A pipeline renders the list; a generic client that only knows
-// `error` keeps working.
-#[derive(Serialize, ToSchema)]
-pub struct ConfigRejected {
-    pub error: String,
-    pub errors: Vec<String>,
-}
-
-// The whole directory in one request — the verb a pipeline actually wants.
-#[derive(Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigBundle {
-    /// File name -> YAML contents. Unnamed files keep what is on disk unless
-    /// `prune` says otherwise
-    pub files: BTreeMap<String, String>,
-    /// Delete every known file this payload does not name, so the directory
-    /// ends up being exactly the push. The same semantics as the
-    /// configuration image it replaces: what is not in the image is not in
-    /// /config
-    #[serde(default)]
-    pub prune: bool,
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReloadQuery {
-    /// Apply the new configuration to the running process as part of the
-    /// write, so the push is one request instead of two
-    #[serde(default)]
-    pub reload: bool,
-}
+// ------------------------------------------------------------- this service
 
 // Swap the API keys in force, and end the browser sessions of any key that no
 // longer exists.
@@ -202,55 +106,6 @@ fn swap_keys(state: &AppState, keys: &ApiKeys, resolved: Vec<ResolvedApiKey>) ->
     keys.0.replace(resolved);
     state.sessions.retain_keys(&live);
     count
-}
-
-// ------------------------------------------------------------------- helpers
-
-fn store(state: &AppState) -> Result<&Arc<dyn ConfigStorePort>, ApiError> {
-    state.config_store.as_ref().ok_or_else(|| {
-        ApiError::forbidden(
-            "the configuration API is disabled on this instance — set \
-             config_api.enabled: true in config.yaml to allow writing the \
-             configuration directory over HTTP",
-        )
-    })
-}
-
-fn admin(auth: &AuthContext) -> Result<(), ApiError> {
-    if auth.permissions.is_admin() {
-        Ok(())
-    } else {
-        Err(ApiError::admin_only())
-    }
-}
-
-// A path the loader would read: relative, at any depth, safe segments, a
-// YAML extension. Anything else could never be part of the configuration, so
-// it is refused before it is read or written.
-fn known_file(name: &str) -> Result<(), ApiError> {
-    if is_config_path(name) {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(format!(
-            "'{}' is not a configuration path — a relative path ending in .yaml or \
-             .yml, whose segments use only letters, digits, '-', '_' and '.' and \
-             do not start with a dot",
-            name
-        )))
-    }
-}
-
-fn rfc3339(time: std::time::SystemTime) -> String {
-    chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339()
-}
-
-fn file_info(stat: &ConfigFileStat) -> ConfigFileInfo {
-    ConfigFileInfo {
-        name: stat.name.clone(),
-        size: stat.size,
-        sha256: stat.sha256.clone(),
-        modified: stat.modified.map(rfc3339),
-    }
 }
 
 fn summarize(cfg: &AppConfig) -> ConfigSummary {
@@ -282,60 +137,6 @@ fn reload_info(report: &reload_use_case::ReloadReport, api_keys: usize) -> Reloa
         credentials: (&report.credentials).into(),
         api_keys,
     }
-}
-
-// A rejected configuration is a 400 with the whole list, not a 400 with the
-// first line of it: a pipeline that pushed eight files wants every problem in
-// one round trip, which is the same reason --check-config prints them all.
-fn rejected(errors: ConfigErrors) -> Response {
-    metrics::counter!("unified_api_config_writes_total", "outcome" => "rejected").increment(1);
-    let error = match errors.errors.as_slice() {
-        [one] => one.clone(),
-        many => format!("{} configuration errors", many.len()),
-    };
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ConfigRejected {
-            error,
-            errors: errors.errors,
-        }),
-    )
-        .into_response()
-}
-
-// If-Match, honored the way a config pipeline needs it: the client sends the
-// ETag it read, and a write against a directory (or file) that has moved since
-// is refused rather than applied on top of someone else's change. `*` means
-// "must exist". No header at all means "I am the only writer", which is the
-// common case and stays unceremonious.
-fn precondition(headers: &HeaderMap, current: Option<&str>) -> Result<(), ApiError> {
-    let Some(expected) = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()) else {
-        return Ok(());
-    };
-
-    let matches = expected
-        .split(',')
-        .map(|candidate| candidate.trim().trim_matches('"'))
-        .any(|candidate| match current {
-            Some(etag) => candidate == "*" || candidate == etag,
-            None => false,
-        });
-
-    if matches {
-        return Ok(());
-    }
-
-    Err(ApiError::new(
-        StatusCode::PRECONDITION_FAILED,
-        match current {
-            Some(etag) => format!(
-                "If-Match did not match: the current ETag is '{}'. Re-read the \
-                 configuration and rebase the change onto it",
-                etag
-            ),
-            None => "If-Match was sent but the file does not exist".to_string(),
-        },
-    ))
 }
 
 // Everything a reload has to be sure of BEFORE anything is committed.
@@ -374,6 +175,67 @@ fn keys_for(
     Ok(keys)
 }
 
+// What the shared config routes need from this service, for one request: the
+// state, and the API keys in force (an Extension, so a reload can swap them).
+struct Host<'a> {
+    state: &'a Arc<AppState>,
+    keys: &'a ApiKeys,
+}
+
+impl web_rs::config::ConfigHost<Permissions> for Host<'_> {
+    type Config = AppConfig;
+    type Summary = ConfigSummary;
+    type Prepared = Vec<ResolvedApiKey>;
+    type Report = ReloadInfo;
+
+    fn store(&self) -> Option<&Arc<ConfigStorePort>> {
+        self.state.config_store.as_ref()
+    }
+
+    fn is_admin(&self, permissions: &Permissions) -> bool {
+        permissions.is_admin()
+    }
+
+    fn generation(&self) -> u64 {
+        self.state.reload.generation()
+    }
+
+    fn summarize(&self, config: &AppConfig) -> ConfigSummary {
+        summarize(config)
+    }
+
+    fn pending(&self, config: &AppConfig) -> web_rs::config::Pending {
+        let pending = reload_use_case::pending(self.state, config);
+        web_rs::config::Pending {
+            changed: pending.changed_anything(),
+            restart_required: pending.restart_required,
+        }
+    }
+
+    fn prepare(&self, config: &AppConfig) -> Result<Vec<ResolvedApiKey>, ApiError> {
+        keys_for(config, self.keys)
+    }
+
+    fn apply(&self, config: &AppConfig, keys: Vec<ResolvedApiKey>) -> ReloadInfo {
+        let report = reload_use_case::apply(self.state, config);
+        let key_count = swap_keys(self.state, self.keys, keys);
+        reload_info(&report, key_count)
+    }
+
+    fn count(&self, metric: web_rs::config::ConfigMetric, outcome: &'static str) {
+        match metric {
+            web_rs::config::ConfigMetric::Write => {
+                metrics::counter!("unified_api_config_writes_total", "outcome" => outcome)
+                    .increment(1)
+            }
+            web_rs::config::ConfigMetric::Reload => {
+                metrics::counter!("unified_api_config_reloads_total", "outcome" => outcome)
+                    .increment(1)
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ handlers
 
 #[utoipa::path(
@@ -388,47 +250,15 @@ fn keys_for(
 pub async fn get_config(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
+    axum::Extension(keys): axum::Extension<ApiKeys>,
 ) -> Result<Json<ConfigInventory>, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-
-    let stats = store.stat_all().map_err(ApiError::internal)?;
-    // Only one file is ever required; every other is an item file that is
-    // there or not.
-    let missing = if stats.iter().any(|s| s.name == REQUIRED_CONFIG_FILE) {
-        Vec::new()
-    } else {
-        vec![REQUIRED_CONFIG_FILE.to_string()]
-    };
-
-    // What is on disk may differ from what is running (somebody wrote without
-    // reloading) and may not even load (somebody edited the file by hand).
-    // Both are worth an answer here rather than at the next restart.
-    let (valid, errors, reload_pending, restart_required) =
-        match store.load(&ConfigChange::default()) {
-            Ok(cfg) => {
-                let pending = reload_use_case::pending(&state, &cfg);
-                (
-                    true,
-                    Vec::new(),
-                    pending.changed_anything(),
-                    pending.restart_required,
-                )
-            }
-            Err(e) => (false, e.errors, false, Vec::new()),
-        };
-
-    Ok(Json(ConfigInventory {
-        directory: store.location(),
-        etag: directory_etag(&stats),
-        files: stats.iter().map(file_info).collect(),
-        missing,
-        generation: state.reload.generation(),
-        valid,
-        errors,
-        reload_pending,
-        restart_required,
-    }))
+    shared::get_config(
+        &Host {
+            state: &state,
+            keys: &keys,
+        },
+        &auth,
+    )
 }
 
 #[utoipa::path(
@@ -446,40 +276,19 @@ pub async fn get_config(
 pub async fn get_config_file(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
+    axum::Extension(keys): axum::Extension<ApiKeys>,
     Path(file): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-    known_file(&file)?;
-
-    let Some((stat, contents)) = store.read(&file).map_err(ApiError::internal)? else {
-        return Err(ApiError::not_found(format!(
-            "'{}' is not present in the configuration directory",
-            file
-        )));
-    };
-
-    let etag = format!("\"{}\"", stat.sha256);
-    if let Some(sent) = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        && sent
-            .split(',')
-            .any(|candidate| candidate.trim() == etag || candidate.trim() == "*")
-    {
-        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
-    }
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/yaml".to_string()),
-            (header::ETAG, etag),
-        ],
-        contents,
+    shared::get_config_file(
+        &Host {
+            state: &state,
+            keys: &keys,
+        },
+        &auth,
+        &file,
+        &headers,
     )
-        .into_response())
 }
 
 #[utoipa::path(
@@ -492,7 +301,7 @@ pub async fn get_config_file(
     ),
     request_body(content = String, description = "The file's new contents, verbatim YAML", content_type = "application/yaml"),
     responses(
-        (status = 200, description = "Written — and applied, if reload was asked for", body = WriteResult),
+        (status = 200, description = "Written — and applied, if reload was asked for", body = WriteResult<ConfigSummary, ReloadInfo>),
         (status = 400, description = "The directory would not load with this file in it. Nothing was written", body = ConfigRejected),
         (status = 403, description = "Not an admin key, or the configuration API is disabled", body = ErrorBody),
         (status = 404, description = "Not a configuration file", body = ErrorBody),
@@ -509,18 +318,11 @@ pub async fn put_config_file(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-    known_file(&file)?;
-
-    let current = store.read(&file).map_err(ApiError::internal)?;
-    precondition(
-        &headers,
-        current.as_ref().map(|(stat, _)| stat.sha256.as_str()),
-    )?;
-
-    let change = ConfigChange::writing([(file.clone(), body)].into_iter().collect());
-    write(&state, store, &keys, &auth, &headers, change, query.reload).await
+    let host = Host {
+        state: &state,
+        keys: &keys,
+    };
+    shared::put_config_file(&host, &auth, &file, query.reload, &headers, body)
 }
 
 #[utoipa::path(
@@ -532,7 +334,7 @@ pub async fn put_config_file(
         ("reload" = Option<bool>, Query, description = "Apply to the running process as part of the delete")
     ),
     responses(
-        (status = 200, description = "Removed — and applied, if reload was asked for", body = WriteResult),
+        (status = 200, description = "Removed — and applied, if reload was asked for", body = WriteResult<ConfigSummary, ReloadInfo>),
         (status = 400, description = "The directory would not load without it, or it is config.yaml. Nothing was removed", body = ConfigRejected),
         (status = 403, description = "Not an admin key, or the configuration API is disabled", body = ErrorBody),
         (status = 404, description = "Not a configuration file, or not present", body = ErrorBody),
@@ -548,36 +350,11 @@ pub async fn delete_config_file(
     Query(query): Query<ReloadQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-    known_file(&file)?;
-
-    if file == REQUIRED_CONFIG_FILE {
-        return Err(ApiError::bad_request(format!(
-            "'{}' cannot be deleted — it is the one file a configuration \
-             cannot start without",
-            REQUIRED_CONFIG_FILE
-        )));
-    }
-
-    let Some((stat, _)) = store.read(&file).map_err(ApiError::internal)? else {
-        return Err(ApiError::not_found(format!(
-            "'{}' is not present in the configuration directory",
-            file
-        )));
+    let host = Host {
+        state: &state,
+        keys: &keys,
     };
-    precondition(&headers, Some(&stat.sha256))?;
-
-    write(
-        &state,
-        store,
-        &keys,
-        &auth,
-        &headers,
-        ConfigChange::deleting(&file),
-        query.reload,
-    )
-    .await
+    shared::delete_config_file(&host, &auth, &file, query.reload, &headers)
 }
 
 #[utoipa::path(
@@ -587,7 +364,7 @@ pub async fn delete_config_file(
     params(("reload" = Option<bool>, Query, description = "Apply to the running process as part of the write")),
     request_body = ConfigBundle,
     responses(
-        (status = 200, description = "The whole directory was replaced — and applied, if reload was asked for", body = WriteResult),
+        (status = 200, description = "The whole directory was replaced — and applied, if reload was asked for", body = WriteResult<ConfigSummary, ReloadInfo>),
         (status = 400, description = "The pushed directory would not load. Nothing was written", body = ConfigRejected),
         (status = 403, description = "Not an admin key, or the configuration API is disabled", body = ErrorBody),
         (status = 409, description = "Applying it would break the running process", body = ErrorBody),
@@ -602,22 +379,11 @@ pub async fn put_config(
     headers: HeaderMap,
     Json(bundle): Json<ConfigBundle>,
 ) -> Result<Response, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-
-    for name in bundle.files.keys() {
-        known_file(name)?;
-    }
-
-    let stats = store.stat_all().map_err(ApiError::internal)?;
-    precondition(&headers, Some(&directory_etag(&stats)))?;
-
-    let change = ConfigChange {
-        write: bundle.files,
-        prune: bundle.prune,
-        ..ConfigChange::default()
+    let host = Host {
+        state: &state,
+        keys: &keys,
     };
-    write(&state, store, &keys, &auth, &headers, change, query.reload).await
+    shared::put_config(&host, &auth, query.reload, &headers, bundle)
 }
 
 #[utoipa::path(
@@ -626,7 +392,7 @@ pub async fn put_config(
     tag = "Configuration",
     request_body(content = ConfigBundle, description = "The directory to validate. Omit the body to validate what is on disk"),
     responses(
-        (status = 200, description = "The verdict — valid or not, with every problem at once. Nothing is ever written", body = ValidationResult),
+        (status = 200, description = "The verdict — valid or not, with every problem at once. Nothing is ever written", body = ValidationResult<ConfigSummary>),
         (status = 403, description = "Not an admin key, or the configuration API is disabled", body = ErrorBody),
         (status = 404, description = "The payload names a file the loader does not read", body = ErrorBody)
     )
@@ -634,37 +400,14 @@ pub async fn put_config(
 pub async fn validate_config(
     State(state): State<Arc<AppState>>,
     axum::Extension(auth): axum::Extension<AuthContext>,
+    axum::Extension(keys): axum::Extension<ApiKeys>,
     body: Option<Json<ConfigBundle>>,
-) -> Result<Json<ValidationResult>, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-
-    let change = match body {
-        Some(Json(bundle)) => {
-            for name in bundle.files.keys() {
-                known_file(name)?;
-            }
-            ConfigChange {
-                write: bundle.files,
-                prune: bundle.prune,
-                ..ConfigChange::default()
-            }
-        }
-        None => ConfigChange::default(),
+) -> Result<Json<ValidationResult<ConfigSummary>>, ApiError> {
+    let host = Host {
+        state: &state,
+        keys: &keys,
     };
-
-    Ok(Json(match store.load(&change) {
-        Ok(cfg) => ValidationResult {
-            valid: true,
-            errors: Vec::new(),
-            summary: Some(summarize(&cfg)),
-        },
-        Err(e) => ValidationResult {
-            valid: false,
-            errors: e.errors,
-            summary: None,
-        },
-    }))
+    shared::validate_config(&host, &auth, body.map(|Json(bundle)| bundle))
 }
 
 #[utoipa::path(
@@ -684,141 +427,12 @@ pub async fn reload_config(
     axum::Extension(keys): axum::Extension<ApiKeys>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    admin(&auth)?;
-    let store = store(&state)?;
-
-    let cfg = match store.load(&ConfigChange::default()) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            metrics::counter!("unified_api_config_reloads_total", "outcome" => "invalid")
-                .increment(1);
-            audit::record(&auth, &headers, "config_reload", "config", "invalid");
-            return Ok(rejected(e));
-        }
-    };
-
-    let resolved = keys_for(&cfg, &keys)?;
-    let report = reload_use_case::apply(&state, &cfg);
-    let key_count = swap_keys(&state, &keys, resolved);
-
-    audit::record(&auth, &headers, "config_reload", "config", "success");
-
-    Ok(Json(reload_info(&report, key_count)).into_response())
-}
-
-// Validate, then commit, then — only if asked — apply. Shared by all three
-// write routes so the ORDER cannot differ between them: nothing is written
-// until the whole directory loads, and nothing is applied until everything a
-// reload needs (every API key's env var, and an API that still has
-// authentication) is known to be there.
-async fn write(
-    state: &Arc<AppState>,
-    store: &Arc<dyn ConfigStorePort>,
-    keys: &ApiKeys,
-    auth: &AuthContext,
-    headers: &HeaderMap,
-    change: ConfigChange,
-    reload: bool,
-) -> Result<Response, ApiError> {
-    let cfg = match store.load(&change) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            audit::record(
-                auth,
-                headers,
-                "config_write",
-                &changed_names(&change).join(","),
-                "rejected",
-            );
-            return Ok(rejected(e));
-        }
-    };
-
-    // Before the commit, deliberately: a write that cannot be applied should
-    // fail as a whole rather than land on disk and then refuse to take effect.
-    let resolved = if reload {
-        Some(keys_for(&cfg, keys)?)
-    } else {
-        None
-    };
-
-    // Named before the commit: afterwards, what a prune removed is no longer
-    // there to be listed.
-    let deleted = deleted_names(state, store, &change)?;
-    store.commit(&change).map_err(|e| {
-        metrics::counter!("unified_api_config_writes_total", "outcome" => "error").increment(1);
-        ApiError::internal(format!("configuration written to nowhere: {}", e))
-    })?;
-    metrics::counter!("unified_api_config_writes_total", "outcome" => "success").increment(1);
-
-    let written: Vec<String> = change.write.keys().cloned().collect();
-
-    let reloaded = match resolved {
-        Some(resolved) => {
-            let report = reload_use_case::apply(state, &cfg);
-            let key_count = swap_keys(state, keys, resolved);
-            Some(reload_info(&report, key_count))
-        }
-        None => None,
-    };
-    // Without a reload the files are on disk and the process is still serving
-    // the old configuration. Saying so is the difference between a pipeline
-    // that knows it has one more step and one that reports a deploy it did
-    // not do.
-    let reload_pending =
-        reloaded.is_none() && reload_use_case::pending(state, &cfg).changed_anything();
-
-    audit::record(
-        auth,
-        headers,
-        if reload {
-            "config_write_reload"
-        } else {
-            "config_write"
+    shared::reload_config(
+        &Host {
+            state: &state,
+            keys: &keys,
         },
-        &changed_names(&change).join(","),
-        "success",
-    );
-
-    let stats = store.stat_all().map_err(ApiError::internal)?;
-
-    Ok(Json(WriteResult {
-        written,
-        deleted,
-        etag: directory_etag(&stats),
-        summary: summarize(&cfg),
-        reloaded,
-        reload_pending,
-    })
-    .into_response())
-}
-
-fn changed_names(change: &ConfigChange) -> Vec<String> {
-    let mut names: Vec<String> = change.write.keys().cloned().collect();
-    names.extend(change.delete.iter().cloned());
-    if change.prune {
-        names.push("(prune)".to_string());
-    }
-    names
-}
-
-// Which files the commit will remove: the explicit deletions, plus whatever
-// a pruning push leaves out.
-fn deleted_names(
-    _state: &Arc<AppState>,
-    store: &Arc<dyn ConfigStorePort>,
-    change: &ConfigChange,
-) -> Result<Vec<String>, ApiError> {
-    let present = store.stat_all().map_err(ApiError::internal)?;
-    let mut deleted: Vec<String> = change.delete.iter().cloned().collect();
-    if change.prune {
-        for stat in &present {
-            if !change.write.contains_key(&stat.name) {
-                deleted.push(stat.name.clone());
-            }
-        }
-    }
-    deleted.sort();
-    deleted.dedup();
-    Ok(deleted)
+        &auth,
+        &headers,
+    )
 }

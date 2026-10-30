@@ -72,7 +72,7 @@ src/
 │   └── credentials.rs        # resolve_credentials
 ├── ports/                    # Trait definitions (interfaces)
 │   ├── cache.rs              # CachePort (incl. atomic update/merge_or_insert)
-│   ├── config_store.rs       # ConfigStorePort (read/validate/commit the config dir)
+│   ├── config_store.rs       # ConfigStorePort = web-rs ConfigStore over AppConfig
 │   ├── connector.rs          # ConnectorPort
 │   ├── enricher.rs           # EnricherPort
 │   ├── git.rs                # GitPort (project checkouts), re-exported from git-rs
@@ -106,7 +106,7 @@ src/
 │   │   └── scheduler/        # interval-based sync/enrich (calls application/)
 │   └── out/                  # Driven adapters: the app drives the outside world
 │       ├── cache/            # memory.rs: CachePort → DashMap; persistence.rs: disk snapshots
-│       ├── config/           # fs.rs: ConfigStorePort → staged validation + atomic commit
+│       ├── config/           # fs.rs: fs_store(dir) = web-rs FsConfigStore + this loader
 │       ├── connectors/       # process.rs → tokio::process; ssh.rs → russh;
 │       │                     #   static_inventory.rs → Ansible YAML on disk;
 │       │                     #   remote.rs → another unified-api (federation)
@@ -335,8 +335,14 @@ The web layer comes the same way from [web](https://github.com/OpusProjects/web)
 `web-rs` crate: `ApiError`/`ErrorBody` (re-exported from `http::error`, with
 this service's `SourceErrors` refusals in an extension trait beside them),
 `audit::record`, the web UI serving (`http::ui_assets`, fixed to `Permissions`)
-and the route help the browsable pages read from the OpenAPI document
-(`http::spec`, built once from `ApiDoc`). Move to a new release with
+the route help the browsable pages read from the OpenAPI document
+(`http::spec`, built once from `ApiDoc`), and the config API: the store
+(`FsConfigStore`, staged validation and atomic commit, built with this
+service's loader by `fs_store`), the file rules (`config_files`,
+`is_config_path`, `is_safe_id`, `ConfigErrors`) and every config route's logic.
+`http/config.rs` keeps the route functions (for their OpenAPI annotations),
+`ConfigSummary`, `ReloadInfo` and a `ConfigHost`: what a reload does and which
+API keys it leaves in force. Move to a new release with
 `cargo update -p web-rs` in a `build:` PR.
 
 ## Releasing a new version

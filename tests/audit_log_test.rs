@@ -191,9 +191,7 @@ fn config_app(key_env: &str) -> (axum::Router, tempfile::TempDir) {
         .from_config(&cfg)
         .api_keys(keys)
         .config_api(
-            std::sync::Arc::new(unified_api::adapters::out::config::fs::FsConfigStore::new(
-                dir.path(),
-            )),
+            std::sync::Arc::new(unified_api::adapters::out::config::fs::fs_store(dir.path())),
             live,
         )
         .build_with_state();

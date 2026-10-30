@@ -52,7 +52,7 @@ pub struct AppBuilder {
     // Some = the configuration API is enabled: the directory can be read and
     // written over HTTP, and a reload can swap what this builder is about to
     // freeze into AppState.
-    config_store: Option<Arc<dyn ports::config_store::ConfigStorePort>>,
+    config_store: Option<Arc<ports::config_store::ConfigStorePort>>,
     live_settings: Option<config::RestartOnlySettings>,
     api_keys: Vec<ResolvedApiKey>,
     directory: Arc<dyn ports::directory::DirectoryPort>,
@@ -223,7 +223,7 @@ impl AppBuilder {
     // built from, kept so a later reload can name the keys it cannot adopt.
     pub fn config_api(
         mut self,
-        store: Arc<dyn ports::config_store::ConfigStorePort>,
+        store: Arc<ports::config_store::ConfigStorePort>,
         live_settings: config::RestartOnlySettings,
     ) -> Self {
         self.config_store = Some(store);

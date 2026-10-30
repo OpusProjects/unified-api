@@ -99,7 +99,7 @@ src/
 │   │   │   ├── connectors.rs # GET connectors + their users and health (admin-only)
 │   │   │   ├── health.rs     # /healthz, /readyz
 │   │   │   ├── metrics.rs    # /metrics (Prometheus exporter, installed once)
-│   │   │   ├── login.rs      # login page, sign-in and sign-out routes
+│   │   │   ├── login.rs      # sign-in routes over web-rs, SignIn (LDAP + Grant)
 │   │   │   ├── ui_assets.rs  # the built web UI at "/" (server.ui.assets_dir)
 │   │   │   ├── session.rs    # session cookie name + auth-rs's store, form layer
 │   │   │   └── auth.rs       # Permissions, resolve_api_keys + auth-rs's middleware
@@ -342,8 +342,13 @@ service's loader by `fs_store`), the file rules (`config_files`,
 `is_config_path`, `is_safe_id`, `ConfigErrors`) and every config route's logic.
 `http/config.rs` keeps the route functions (for their OpenAPI annotations),
 `ConfigSummary`, `ReloadInfo` and a `ConfigHost`: what a reload does and which
-API keys it leaves in force. Move to a new release with
-`cargo update -p web-rs` in a `build:` PR.
+API keys it leaves in force. The browsable pages (`web_rs::pages::negotiate`)
+and the sign-in form (`web_rs::login`) come from it too: `http::html::site()` is
+this service's `Site` (its name, cookies, and `/api/v1/endpoints/{id}` as a
+route whose body is the product), and `http/login.rs` keeps the route
+functions and a `SignIn` that runs the LDAP login and maps its `Grant`. The
+Users page (`http/users.rs`) stays here: its fields are this service's scopes.
+Move to a new release with `cargo update -p web-rs` in a `build:` PR.
 
 ## Releasing a new version
 

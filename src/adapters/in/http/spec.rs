@@ -10,7 +10,7 @@ use crate::adapters::r#in::http::openapi::ApiDoc;
 // document once and answers through it.
 pub use web_rs::spec::{Action, ParamDoc, RouteDoc};
 
-fn spec() -> &'static web_rs::Spec {
+pub fn spec() -> &'static web_rs::Spec {
     static SPEC: OnceLock<web_rs::Spec> = OnceLock::new();
     SPEC.get_or_init(|| web_rs::Spec::new(ApiDoc::openapi()))
 }

@@ -146,7 +146,10 @@ pub fn create_router(state: Arc<AppState>, api_keys: Arc<ApiKeyRegistry>) -> Rou
             // authenticated gets a page saying so rather than a JSON body it
             // renders as raw text. Inside the compression layer added further
             // down, so the HTML is gzipped like every other response.
-            .layer(middleware::from_fn(http::html::negotiate))
+            .layer(middleware::from_fn_with_state(
+                http::html::site(),
+                web_rs::pages::negotiate,
+            ))
     } else {
         api_routes
     };

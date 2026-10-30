@@ -350,17 +350,9 @@ fn default_session_ttl_seconds() -> u64 {
     3600
 }
 
-// A path on THIS origin, and nothing a browser could read as another host:
-// `//evil.example` is protocol-relative, a backslash is read as a slash, and
-// browsers strip tabs and newlines before reading a URL, so "/\t/evil" would
-// arrive as "//evil". Shared by the login's `next` and `server.ui.home`, so
-// the redirect after a login can never be turned into an open redirect.
-pub fn is_local_path(path: &str) -> bool {
-    path.starts_with('/')
-        && !path.starts_with("//")
-        && !path.contains('\\')
-        && !path.chars().any(|c| c.is_control() || c.is_whitespace())
-}
+// A path on this origin, safe to redirect to: web-rs's rule, the same the
+// sign-in form applies to `next`.
+pub use web_rs::url::is_local_path;
 
 // By hand rather than derived: a derived Default gives a session TTL of zero
 // (serde's default only applies when parsing), so a UiConfig built in code

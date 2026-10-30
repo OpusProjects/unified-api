@@ -51,7 +51,7 @@ git-rs = { git = "https://github.com/OpusProjects/git", tag = "v0.2.0" }
 # The web layer (the error shape, audit events, the web UI, route help from the
 # OpenAPI document), shared with unified-gitops. See the web repository's
 # docs/development.md for building against a local checkout.
-web-rs = { git = "https://github.com/OpusProjects/web", tag = "v0.2.0" }
+web-rs = { git = "https://github.com/OpusProjects/web", tag = "v0.3.0" }
 tokio = { version = "1", features = ["full"] }
 # The CORS middleware wraps tower-http's CorsLayer around the rest of the
 # stack per request (Layer + oneshot from `util`), which is what makes the

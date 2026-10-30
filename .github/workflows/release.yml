@@ -4,8 +4,9 @@ name: Release
 # date with every merge into main: it computes the next version from the
 # Conventional Commit titles of the squashed pull requests, bumps Cargo.toml
 # and Cargo.lock, and writes the CHANGELOG section. Merging that pull request
-# is the release: this same workflow then creates the tag and the GitHub
-# Release, and publishes the image. See docs/releasing.md.
+# is the release: this same workflow then publishes the image and only then
+# the tag and the GitHub Release, so nothing is tagged that cannot be pulled.
+# See docs/releasing.md.
 #
 # Everything runs as github-actions[bot] with GITHUB_TOKEN. GitHub starts no
 # workflow from what that token pushes, so the release PR would never get its
@@ -42,6 +43,7 @@ jobs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
       version: ${{ steps.rp.outputs.version }}
+      sha: ${{ steps.rp.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: rp
@@ -65,19 +67,25 @@ jobs:
           gh workflow run build.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
           echo "CI dispatched on $BRANCH"
 
+  # release-please creates the GitHub Release as a draft ("draft": true in
+  # release-please-config.json), and a draft has no tag: nothing is visible
+  # yet. The image is built from the release commit and pushed, and only then
+  # is the draft published, which creates the tag and makes it the latest
+  # release. A failed build leaves a draft nobody sees, never a tag without
+  # an image; re-running this job finishes the release.
   publish:
-    name: Publish image
+    name: Publish image, then the release
     needs: release-please
     # Only when merging the release PR created a release
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # publishing the draft release, which creates the tag
       packages: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ needs.release-please.outputs.sha }}
 
       - uses: docker/login-action@v4
         with:
@@ -104,3 +112,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          echo "Released $TAG"

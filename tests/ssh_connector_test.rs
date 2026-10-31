@@ -15,8 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use russh::keys::ssh_key;
-use russh::server::{self, Auth, ChannelOpenHandle, Msg, Session};
+use russh::server::{self, Auth, ChannelOpenHandle, Msg, Session, VerifiedPublicKey};
 use russh::{Channel, ChannelId};
 
 use unified_api::adapters::out::connectors::ssh::SshConnector;
@@ -82,7 +81,7 @@ impl server::Handler for TestServer {
     async fn auth_publickey(
         &mut self,
         _user: &str,
-        _key: &ssh_key::PublicKey,
+        _key: VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         self.auth_attempted.store(true, Ordering::SeqCst);
         Ok(Auth::Accept)

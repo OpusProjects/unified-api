@@ -8,27 +8,34 @@ RUN apk add --no-cache git \
 WORKDIR /ui
 RUN npm ci --no-audit --no-fund && npm run build
 
-# Stage 2: build
-FROM rust:1.96-slim-trixie AS builder
-
-RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+# Stage 2: build, in two steps so a release only compiles what changed.
+# cargo-chef reduces the manifests to a recipe (the service's own version
+# masked, so release-please's bump does not count), and `cook` compiles the
+# dependencies from it alone: that layer is reused, from the CI build cache,
+# for as long as Cargo.lock's dependencies stay the same. Any change to them
+# rebuilds the whole layer once.
+#
 # --locked: build exactly the versions CI tested. Without it, cargo may
 # quietly re-resolve inside the image and ship dependency versions the test
 # suite never saw.
-#
-# The benches stub exists only so the manifest parses: Cargo.toml declares the
-# [[bench]] target and refuses to parse without its file, but `cargo build`
-# never compiles it — the real benches are dev-only and stay out of the image.
-RUN mkdir src benches \
-    && echo 'fn main() {}' > src/main.rs \
-    && echo 'fn main() {}' > benches/hot_paths.rs \
-    && cargo build --release --locked && rm -rf src
+FROM rust:1.96-slim-trixie AS chef
+RUN apt-get update && apt-get install -y pkg-config libssl-dev curl && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --version 0.1.78 --locked
+WORKDIR /app
 
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY benches/ benches/
 COPY src/ src/
-RUN touch src/main.rs && cargo build --release --locked
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json
+COPY Cargo.toml Cargo.lock ./
+COPY benches/ benches/
+COPY src/ src/
+RUN cargo build --release --locked
 
 # Stage 3: runtime
 FROM debian:trixie-slim

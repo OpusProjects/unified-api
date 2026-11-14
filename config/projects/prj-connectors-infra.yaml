@@ -9,7 +9,7 @@ projects:
     git_url: "https://github.com/OpusProjects/unified-api.git"
     # This release's tag, not main: the sample scripts must print what this
     # binary reads, and main moves on (bumped with the version at release).
-    branch: "v0.37.0"                   # a branch or a tag; default "main" (x-release-please-version)
+    branch: "v0.37.1"                   # a branch or a tag; default "main" (x-release-please-version)
     # credentials: ["cred-github-token"] # for private repos (token or ssh_key)
     sync_interval_seconds: 1800         # re-pull every 30 min (0/absent = no periodic sync)
     # schedule: "15 2 * * *"            # cron (UTC) instead of the interval — pick one

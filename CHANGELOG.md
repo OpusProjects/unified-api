@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.37.1](https://github.com/OpusProjects/unified-api/compare/v0.37.0...v0.37.1) (2026-11-14)
+
+
+### Fixed
+
+* **deps:** update russh to 0.65.0 ([#280](https://github.com/OpusProjects/unified-api/issues/280)) ([c784aed](https://github.com/OpusProjects/unified-api/commit/c784aedc6cfcd80ef086bfc65bb5210195172ca1))
+* keep credentials written into a project's address out of git errors ([ed31e86](https://github.com/OpusProjects/unified-api/commit/ed31e865a1f21455cc32a5d0c05e6b0c841ccd82))
+* update crates flagged by RustSec advisories ([#285](https://github.com/OpusProjects/unified-api/issues/285)) ([061a233](https://github.com/OpusProjects/unified-api/commit/061a233520eb646ea9c6a71238f724e5daca35b1))
+
 ## [0.37.0] - 2026-10-29
 
 ### Added

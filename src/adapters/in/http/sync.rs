@@ -47,6 +47,20 @@ pub struct SyncResult {
     /// that sync left in the cache. N concurrent full syncs cost the origin
     /// one gather, not N.
     pub coalesced: bool,
+    /// How many hosts this sync added. Absent when it added and removed none,
+    /// when it failed or coalesced, and on the source's first data, which has
+    /// nothing to compare against
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts_added: Option<usize>,
+    /// The first 20 hosts added, by name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<Vec<String>>,
+    /// How many hosts this sync removed, absent as `hosts_added` is
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts_removed: Option<usize>,
+    /// The first 20 hosts removed, by name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<Vec<String>>,
 }
 
 #[utoipa::path(
@@ -165,14 +179,23 @@ pub async fn sync_source(
         },
     );
 
+    // Both counts when anything changed, and the names of a side only when
+    // it has any — the same shape as the source's history row.
+    let success = outcome.success();
+    let changed = outcome.changes.is_some();
+    let changes = outcome.changes.unwrap_or_default();
     Ok(Json(SyncResult {
         source_id: id,
-        success: outcome.success(),
+        success,
         scope: outcome.scope,
         total_hosts: outcome.total_hosts,
         total_groups: outcome.total_groups,
         sync_duration_ms: outcome.duration_ms,
         error: outcome.error,
         coalesced: outcome.coalesced,
+        hosts_added: changed.then_some(changes.added_count),
+        added: (changes.added_count > 0).then_some(changes.added),
+        hosts_removed: changed.then_some(changes.removed_count),
+        removed: (changes.removed_count > 0).then_some(changes.removed),
     }))
 }

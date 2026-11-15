@@ -340,6 +340,19 @@ pub struct RunInfo {
     pub hosts: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groups: Option<usize>,
+    /// How many hosts this sync added. Absent when it added and removed none,
+    /// and on the source's first data, which has nothing to compare against
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts_added: Option<usize>,
+    /// The first 20 hosts added, by name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<Vec<String>>,
+    /// How many hosts this sync removed, absent as `hosts_added` is
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts_removed: Option<usize>,
+    /// The first 20 hosts removed, by name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<Vec<String>>,
     /// The commit a pull found the checkout at, and left it at
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_before: Option<String>,
@@ -350,6 +363,10 @@ pub struct RunInfo {
 impl RunInfo {
     // `who`: whether this caller may see who asked (admin keys).
     pub fn from_run(run: crate::domain::sync_health::RunRecord, who: bool) -> Self {
+        let changed = run.changes.is_some();
+        let changes = run.changes.unwrap_or_default();
+        let added = (changes.added_count > 0).then_some(changes.added);
+        let removed = (changes.removed_count > 0).then_some(changes.removed);
         Self {
             age_seconds: crate::domain::unix_now().saturating_sub(run.started_at),
             started_at: run.started_at,
@@ -360,6 +377,13 @@ impl RunInfo {
             error: run.error,
             hosts: run.hosts,
             groups: run.groups,
+            // Both counts or neither: a row that names a change says how
+            // many on each side, 0 included, so a reader never has to guess
+            // whether a missing side means none or unknown.
+            hosts_added: changed.then_some(changes.added_count),
+            added,
+            hosts_removed: changed.then_some(changes.removed_count),
+            removed,
             revision_before: run.revision_before,
             revision: run.revision,
         }

@@ -62,6 +62,10 @@ pub struct RunRecord {
     pub error: Option<String>,
     pub hosts: Option<usize>,
     pub groups: Option<usize>,
+    /// Which hosts a sync that worked added and removed; None when it changed
+    /// neither, and when there was nothing to compare against (the source's
+    /// first data, or a failed run)
+    pub changes: Option<crate::domain::host_changes::HostChanges>,
     /// The commit before and after a pull
     pub revision_before: Option<String>,
     pub revision: Option<String>,
@@ -219,6 +223,7 @@ mod tests {
             error: error.map(str::to_string),
             hosts: None,
             groups: None,
+            changes: None,
             revision_before: None,
             revision: None,
         }

@@ -339,6 +339,7 @@ pub async fn refresh_hosts(
                         error: Some(error.clone()),
                         hosts: None,
                         groups: None,
+                        changes: None,
                         revision_before: None,
                         revision: None,
                     },

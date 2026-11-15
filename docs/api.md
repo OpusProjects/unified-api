@@ -135,7 +135,9 @@ connector or credential error rather than mapping it to an HTTP status:
 }
 ```
 
-`404` means the source id itself isn't configured.
+`404` means the source id itself isn't configured. A sync that changed which
+hosts the source holds also says which, with `hosts_added`, `added`,
+`hosts_removed` and `removed` (see [Sync and pull history](#sync-and-pull-history)).
 
 The request's `x-request-id` travels into the connector as `SOURCE_CONFIG`'s
 `trigger` key (scheduled syncs say `scheduled`, on-demand refreshes say
@@ -229,7 +231,11 @@ restart starts them over, as it does the health):
       "by": "key-ops",
       "scope": "full",
       "hosts": 1234,
-      "groups": 12
+      "groups": 12,
+      "hosts_added": 2,
+      "added": ["web-41.example.com", "web-42.example.com"],
+      "hosts_removed": 1,
+      "removed": ["db-07.example.com"]
     },
     {
       "started_at": 1793113200,
@@ -256,6 +262,14 @@ restart starts them over, as it does the health):
 - A sync has `scope` (`full`, `host:a,b`, `group:x`), and `hosts` and
   `groups` when it worked; a pull has `revision_before` and `revision`, the
   commit it found the checkout at and left it at. `error` when it failed.
+- `hosts_added` and `hosts_removed` count the hosts a sync that worked
+  brought into the source and took out of it; `added` and `removed` name the
+  first 20 of each side, sorted. They are absent when the hosts did not change
+  (a sync that only updated variables), on the source's first data, which has
+  nothing before it to compare against, and on a failed run. A host or group
+  sync can only add what it covered, so the hosts it did not ask about are
+  never reported as removed. The response of `POST /sources/{id}/sync` carries
+  the same four fields.
 - A refresh that outlasts its budget is a row too, with its `error`
   (`refresh did not finish within 10s`) and the time it waited.
 - A sync's `duration_ms` is the gather and the cache write, as the

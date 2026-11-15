@@ -80,6 +80,7 @@ pub async fn sync_project(
             error: result.as_ref().err().cloned(),
             hosts: None,
             groups: None,
+            changes: None,
             revision_before: before,
             revision: after,
         },

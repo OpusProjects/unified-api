@@ -8,6 +8,7 @@ use crate::application::enrich::run_enrichers_for_target;
 use crate::domain::cache_entry::{CacheEntry, RetainedHost};
 use crate::domain::dataset::{Dataset, Group, HostVars};
 use crate::domain::enricher::Enricher;
+use crate::domain::host_changes::HostChanges;
 use crate::domain::source::{AdvertisedScopeRegistry, ConnectorType, Source};
 use crate::domain::sync_health::{RunRecord, RunTrigger, SyncHealthRegistry};
 use crate::domain::sync_mode::SyncMode;
@@ -207,6 +208,11 @@ pub struct SyncOutcome {
     // request began completed while it queued, and this outcome reports what
     // that sync left in the cache
     pub coalesced: bool,
+    // Which hosts this sync added and removed. None when it changed neither,
+    // when it failed or coalesced (no write of its own), and on the source's
+    // first data, which has nothing before it to compare against: every host
+    // reported as added would say nothing.
+    pub changes: Option<HostChanges>,
 }
 
 impl SyncOutcome {
@@ -222,6 +228,7 @@ impl SyncOutcome {
             duration_ms,
             error: Some(error),
             coalesced: false,
+            changes: None,
         }
     }
 }
@@ -307,6 +314,7 @@ pub async fn sync_source(
             duration_ms: 0,
             error: None,
             coalesced: true,
+            changes: None,
         };
     }
 
@@ -348,6 +356,7 @@ pub async fn sync_source(
             error: outcome.error.clone(),
             hosts: outcome.success().then_some(outcome.total_hosts),
             groups: outcome.success().then_some(outcome.total_groups),
+            changes: outcome.changes.clone(),
             revision_before: None,
             revision: None,
         },
@@ -593,7 +602,23 @@ async fn run_sync(
                 scopes.record(source_id, claim.clone());
             }
 
+            // The host names before and after the write. Names, not the
+            // entry: holding the old dataset across the write would make the
+            // cache copy all of it to apply a merge, group or host sync. Read
+            // outside the cache's own lock but under this source's sync lock,
+            // which every sync holds: only a host PUT or DELETE landing in
+            // between could show up here as this sync's.
+            let before = cache
+                .get(source_id)
+                .map(|entry| host_names(&entry.dataset, &scope));
             apply_to_cache(cache, source_id, source, &scope, output);
+            let after = cache
+                .get(source_id)
+                .map(|entry| host_names(&entry.dataset, &scope));
+            let changes = before.zip(after).and_then(|(before, after)| {
+                let changes = HostChanges::between(&before, &after);
+                (!changes.is_empty()).then_some(changes)
+            });
 
             SyncOutcome {
                 scope: scope_label,
@@ -602,9 +627,26 @@ async fn run_sync(
                 duration_ms,
                 error: None,
                 coalesced: false,
+                changes,
             }
         }
         Err(e) => SyncOutcome::failed(scope_label, duration_ms, e.message),
+    }
+}
+
+// The hosts of a dataset a sync's changes are counted over. A host sync can
+// only add the hosts it asked for, so only those are looked at: an on-demand
+// refresh of one host on a large source costs a lookup, not a pass over every
+// name. Every other scope covers the whole source; a group sync only touches
+// its group, so the rest comes out unchanged by itself.
+fn host_names(dataset: &Dataset, scope: &SyncScope) -> HashSet<String> {
+    match scope {
+        SyncScope::Hosts(hosts) => hosts
+            .iter()
+            .filter(|host| dataset.hostvars.contains_key(*host))
+            .cloned()
+            .collect(),
+        SyncScope::Group(_) | SyncScope::Full => dataset.hostvars.keys().cloned().collect(),
     }
 }
 
@@ -1556,6 +1598,166 @@ mod concurrency_tests {
         assert_eq!(history[1].scope.as_deref(), Some("full"));
         assert_eq!(history[1].hosts, Some(2));
         assert_eq!(history[1].error, None);
+    }
+
+    // Answers with whichever hosts it currently holds, so a test can change
+    // the inventory between syncs.
+    struct HostListConnector {
+        hosts: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl HostListConnector {
+        fn new(hosts: &[&'static str]) -> Self {
+            Self {
+                hosts: std::sync::Mutex::new(hosts.to_vec()),
+            }
+        }
+
+        fn answer(&self, hosts: &[&'static str]) {
+            *self.hosts.lock().unwrap() = hosts.to_vec();
+        }
+    }
+
+    impl ConnectorPort for HostListConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            let hostvars = self
+                .hosts
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|host| (host.to_string(), HostVars::new()))
+                .collect();
+            Box::pin(async move {
+                Ok(Dataset {
+                    hostvars,
+                    groups: HashMap::new(),
+                    remove_hosts: Vec::new(),
+                }
+                .into())
+            })
+        }
+    }
+
+    // Fails every call, as a connector whose system is down.
+    struct FailingConnector;
+
+    impl ConnectorPort for FailingConnector {
+        fn execute(
+            &self,
+            _script_path: &str,
+            _args: &[String],
+            _config: &HashMap<String, String>,
+            _credentials: &HashMap<String, String>,
+        ) -> Pin<Box<dyn Future<Output = ConnectorResult> + Send + '_>> {
+            Box::pin(async {
+                Err(crate::ports::connector::ConnectorError {
+                    message: "system down".to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(1),
+                })
+            })
+        }
+    }
+
+    async fn sync_with(
+        cache: &MemoryCache,
+        connector: &HostListConnector,
+        health: &SyncHealthRegistry,
+        scope: SyncScope,
+    ) -> SyncOutcome {
+        sync_source(
+            cache,
+            connector,
+            &MockSecrets::new(),
+            health,
+            &AdvertisedScopeRegistry::new(),
+            &SyncCoordinator::new(),
+            "src",
+            &source(),
+            scope,
+            None,
+        )
+        .await
+    }
+
+    // A sync that changes which hosts the source holds says which, in its
+    // outcome and in its history row. The first data has nothing before it
+    // to compare against, and a sync that brings the same hosts changed none.
+    #[tokio::test]
+    async fn a_sync_names_the_hosts_it_added_and_removed() {
+        let cache = MemoryCache::new();
+        let health = SyncHealthRegistry::new();
+        let connector = HostListConnector::new(&["a", "b"]);
+
+        let first = sync_with(&cache, &connector, &health, SyncScope::Full).await;
+        assert_eq!(first.changes, None, "the first data is not a change");
+
+        connector.answer(&["b", "c"]);
+        let second = sync_with(&cache, &connector, &health, SyncScope::Full).await;
+        let expected = HostChanges {
+            added_count: 1,
+            added: vec!["c".to_string()],
+            removed_count: 1,
+            removed: vec!["a".to_string()],
+        };
+        assert_eq!(second.changes.as_ref(), Some(&expected));
+        assert_eq!(health.history("src")[0].changes.as_ref(), Some(&expected));
+
+        let third = sync_with(&cache, &connector, &health, SyncScope::Full).await;
+        assert_eq!(third.changes, None, "the same hosts are no change");
+        assert_eq!(health.history("src")[0].changes, None);
+    }
+
+    // A host sync is compared like any other, and only what it covers can
+    // differ: a new host is added, and the hosts it did not ask about are
+    // not reported as removed.
+    #[tokio::test]
+    async fn a_host_sync_reports_only_the_host_it_added() {
+        let cache = MemoryCache::new();
+        let health = SyncHealthRegistry::new();
+        let connector = HostListConnector::new(&["a", "b"]);
+        sync_with(&cache, &connector, &health, SyncScope::Full).await;
+
+        connector.answer(&["c"]);
+        let outcome = sync_with(
+            &cache,
+            &connector,
+            &health,
+            SyncScope::Hosts(vec!["c".to_string()]),
+        )
+        .await;
+        let changes = outcome.changes.expect("c is new");
+        assert_eq!(changes.added, vec!["c".to_string()]);
+        assert_eq!(changes.removed_count, 0);
+    }
+
+    // A failed sync wrote nothing, so it changed nothing.
+    #[tokio::test]
+    async fn a_failed_sync_reports_no_changes() {
+        let cache = MemoryCache::new();
+        let health = SyncHealthRegistry::new();
+        let failed = sync_source(
+            &cache,
+            &FailingConnector,
+            &MockSecrets::new(),
+            &health,
+            &AdvertisedScopeRegistry::new(),
+            &SyncCoordinator::new(),
+            "src",
+            &source(),
+            SyncScope::Full,
+            None,
+        )
+        .await;
+        assert!(!failed.success());
+        assert_eq!(failed.changes, None);
+        assert_eq!(health.history("src")[0].changes, None);
     }
 
     // A full sync is the whole inventory: `b`, named only in its group, is a

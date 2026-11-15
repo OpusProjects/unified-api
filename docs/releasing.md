@@ -43,10 +43,14 @@ feature PR ──squash──▶ main ──▶ release-please updates the open 
    - builds the image from the release commit and publishes
      `ghcr.io/opusprojects/unified-api` as `X.Y.Z`, the commit SHA and `latest`;
    - publishes the draft, which creates the tag `vX.Y.Z` and makes it the latest release.
+   - only then opens the next release PR, if anything is already waiting. release-please
+     finds the latest release by its tag, so it must not look while the release is still a
+     draft: it would take the version before as the latest and count its changes twice.
 
    So a tag or a release always has its image. If the image cannot be built, the release
    stays a draft; fix the cause and re-run the failed **Publish image, then the release**
-   job, which builds again and publishes the draft. Never publish the draft by hand
+   job, which builds again, publishes the draft and then runs the skipped **Release PR**
+   job. Never publish the draft by hand
    before the image exists.
 
 Never create a tag or a GitHub Release by hand: the next release PR would not

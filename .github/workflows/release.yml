@@ -31,41 +31,34 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  release-please:
-    name: Release PR
+  # Two runs of release-please, one per half of its work, with the publish
+  # between them. Run together, the second half (opening the next release
+  # PR) ran while the release just created was still a draft: a draft has no
+  # tag, so release-please found the previous version's tag as the latest
+  # release, counted every change since it again, and opened a release PR
+  # for the version after the one being published.
+  release:
+    name: Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
-      issues: write # the autorelease labels on the release PR
-      actions: write # dispatching CI on the release branch
+      pull-requests: write # the autorelease label on the merged release PR
+      issues: write
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
       version: ${{ steps.rp.outputs.version }}
       sha: ${{ steps.rp.outputs.sha }}
     steps:
+      # Creates the draft release when the merge was a release PR's, and
+      # does nothing otherwise
       - uses: googleapis/release-please-action@v5
         id: rp
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      # The release PR's head was just pushed with GITHUB_TOKEN, which starts
-      # no workflow: dispatch CI on it so the required checks report on the
-      # PR's head commit and it can be merged.
-      - name: Run CI on the release PR
-        if: steps.rp.outputs.pr != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Read in the shell: an expression's fromJSON() is evaluated even when
-          # the step is skipped, and fails on the empty output of a run with no PR.
-          PR: ${{ steps.rp.outputs.pr }}
-        run: |
-          BRANCH="$(jq -r .headBranchName <<<"$PR")"
-          gh workflow run build.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
-          echo "CI dispatched on $BRANCH"
+          skip-github-pull-request: true
 
   # release-please creates the GitHub Release as a draft ("draft": true in
   # release-please-config.json), and a draft has no tag: nothing is visible
@@ -75,9 +68,9 @@ jobs:
   # an image; re-running this job finishes the release.
   publish:
     name: Publish image, then the release
-    needs: release-please
+    needs: release
     # Only when merging the release PR created a release
-    if: needs.release-please.outputs.release_created == 'true'
+    if: needs.release.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write # publishing the draft release, which creates the tag
@@ -85,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.sha }}
+          ref: ${{ needs.release.outputs.sha }}
 
       - uses: docker/login-action@v4
         with:
@@ -101,7 +94,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: |
-            type=raw,value=${{ needs.release-please.outputs.version }}
+            type=raw,value=${{ needs.release.outputs.version }}
             type=sha,prefix=
             type=raw,value=latest
 
@@ -124,7 +117,47 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release-please.outputs.tag_name }}
+          TAG: ${{ needs.release.outputs.tag_name }}
         run: |
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           echo "Released $TAG"
+
+  # Opens or updates the next release PR, once the release above (if any)
+  # is published and its tag exists. Skipped when the publish failed: the
+  # draft is finished by re-running this workflow, and the next PR waits
+  # for it rather than counting the unreleased changes twice.
+  release-pr:
+    name: Release PR
+    needs: [release, publish]
+    if: >-
+      always() && needs.release.result == 'success'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # the autorelease labels on the release PR
+      actions: write # dispatching CI on the release branch
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: rp
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-release: true
+
+      # The release PR's head was just pushed with GITHUB_TOKEN, which starts
+      # no workflow: dispatch CI on it so the required checks report on the
+      # PR's head commit and it can be merged.
+      - name: Run CI on the release PR
+        if: steps.rp.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Read in the shell: an expression's fromJSON() is evaluated even when
+          # the step is skipped, and fails on the empty output of a run with no PR.
+          PR: ${{ steps.rp.outputs.pr }}
+        run: |
+          BRANCH="$(jq -r .headBranchName <<<"$PR")"
+          gh workflow run build.yaml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          echo "CI dispatched on $BRANCH"

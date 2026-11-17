@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.38.1](https://github.com/OpusProjects/unified-api/compare/v0.38.0...v0.38.1) (2026-11-17)
+
+
+### Fixed
+
+* run the service under tini so orphaned processes are reaped ([#291](https://github.com/OpusProjects/unified-api/issues/291)) ([c26f21f](https://github.com/OpusProjects/unified-api/commit/c26f21f986c1fdd3d84ae534d92c56c82d24dc90))
+* stop leaving a zombie git process behind every project pull ([#293](https://github.com/OpusProjects/unified-api/issues/293)) ([709cd8e](https://github.com/OpusProjects/unified-api/commit/709cd8ea4e0c404b34f48d804ad585f36238399e))
+
 ## [0.38.0](https://github.com/OpusProjects/unified-api/compare/v0.37.0...v0.38.0) (2026-11-15)
 
 

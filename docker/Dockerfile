@@ -47,8 +47,10 @@ FROM debian:trixie-slim
 # would also need --break-system-packages on trixie). python-is-python3
 # provides the /usr/bin/python symlink for scripts with a bare
 # `#!/usr/bin/env python` shebang.
+#
+# tini: the process that runs as PID 1 (see ENTRYPOINT below).
 RUN apt-get update && apt-get install -y \
-    ca-certificates git \
+    ca-certificates git tini \
     python3 python-is-python3 python3-venv python3-pip \
     python3-requests python3-yaml python3-jinja2 python3-pyvmomi \
     && rm -rf /var/lib/apt/lists/*
@@ -89,4 +91,13 @@ EXPOSE 8182
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8182/healthz').read()==b'ok' else 1)"
 
+# tini as PID 1, the service as its child. Whatever runs as PID 1 inherits
+# every orphaned process in the container, and the service only waits on the
+# children it spawned itself: anything a connector script or git leaves
+# running in the background (git detaches its automatic maintenance after a
+# fetch) used to stay behind as a zombie, one more per pull. tini reaps them
+# and forwards SIGTERM, so the graceful shutdown is unchanged. CMD stays
+# separate so `docker run <image> unified-api --check-config` still runs
+# under tini.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["unified-api"]

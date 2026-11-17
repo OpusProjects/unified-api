@@ -5,6 +5,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # No cooldown: Dependabot otherwise holds back releases younger than 3
+    # days even when this block is absent, which turned a freshly pinned git
+    # tag (git-rs v0.2.1) into an attempted downgrade that failed every run.
+    cooldown:
+      exclude: ["*"]
     # One PR per action bump: each lands (or fails CI) on its own, so a broken
     # bump never blocks the rest of the week's updates.
     # Match the commit style in CONTRIBUTING.md: "build(deps): bump ..."
@@ -18,6 +23,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # No cooldown: Dependabot otherwise holds back releases younger than 3
+    # days even when this block is absent, which turned a freshly pinned git
+    # tag (git-rs v0.2.1) into an attempted downgrade that failed every run.
+    cooldown:
+      exclude: ["*"]
     # One PR per crate bump, same reasoning as above
     commit-message:
       prefix: "build"

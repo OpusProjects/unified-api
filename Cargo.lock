@@ -1278,8 +1278,8 @@ dependencies = [
 
 [[package]]
 name = "git-rs"
-version = "0.2.0"
-source = "git+https://github.com/OpusProjects/git?tag=v0.2.0#f5952deee5560ed375773919c696f92d5f71f315"
+version = "0.2.1"
+source = "git+https://github.com/OpusProjects/git?tag=v0.2.1#510ebae9ac531119265aa8b29acb6a1f50fc13b3"
 dependencies = [
  "base64 0.23.1",
  "tokio",

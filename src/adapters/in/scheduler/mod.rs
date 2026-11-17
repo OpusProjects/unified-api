@@ -77,9 +77,14 @@ pub(crate) fn parse_cron(expression: &str) -> Result<croner::Cron, String> {
 // How long until the schedule's next occurrence after `now`. None when the
 // pattern has no future occurrence at all (croner gives up past year 5000 —
 // practically a misconfiguration).
-fn next_cron_delay(cron: &croner::Cron, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
-    let next = cron.find_next_occurrence(&now, false).ok()?;
-    (next - now).to_std().ok()
+fn next_cron_delay(cron: &croner::Cron, now: &jiff::Zoned) -> Option<Duration> {
+    let next = cron.find_next_occurrence(now, false).ok()?;
+    Duration::try_from(next.duration_since(now)).ok()
+}
+
+// The clock the schedules read: now, in UTC (see parse_cron for why UTC).
+fn utc_now() -> jiff::Zoned {
+    jiff::Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC)
 }
 
 // How a source's sync task paces itself: a fixed interval (jittered, ticks
@@ -688,7 +693,7 @@ pub fn start_sync_tasks(
                             // Recomputed per iteration from the wall clock, so
                             // a long sync cannot drift the schedule: the next
                             // occurrence is whatever the expression says it is
-                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
+                            let Some(delay) = next_cron_delay(&cron, &utc_now()) else {
                                 error!(
                                     source = %source_id,
                                     "Cron schedule has no future occurrence — source will NOT sync again"
@@ -829,7 +834,7 @@ pub fn start_project_sync_tasks(
                         // first occurrence is in the future by construction,
                         // so the boot clone is never immediately repeated
                         Cadence::Cron(cron) => loop {
-                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
+                            let Some(delay) = next_cron_delay(&cron, &utc_now()) else {
                                 error!(project = %project_id, "Cron schedule has no future occurrence — project will NOT re-pull");
                                 return;
                             };
@@ -956,7 +961,7 @@ fn start_enricher_tasks(
                             }
                         }
                         Cadence::Cron(cron) => loop {
-                            let Some(delay) = next_cron_delay(&cron, chrono::Utc::now()) else {
+                            let Some(delay) = next_cron_delay(&cron, &utc_now()) else {
                                 error!(enricher = %enricher_id, "Cron schedule has no future occurrence — enricher will NOT run again");
                                 return;
                             };
@@ -1095,9 +1100,36 @@ mod tests {
     #[test]
     fn the_next_cron_delay_is_within_the_expressions_period() {
         let cron = parse_cron("0 * * * *").expect("hourly");
-        let delay = next_cron_delay(&cron, chrono::Utc::now()).expect("always a next hour");
+        let delay = next_cron_delay(&cron, &utc_now()).expect("always a next hour");
         assert!(delay > Duration::ZERO);
         assert!(delay <= Duration::from_secs(3600));
+    }
+
+    // Exact delays from fixed instants, the same chrono gave before the move
+    // to jiff: a leap day, the optional seconds field, a fraction of a second
+    // carried into the delay, and a pattern that never occurs.
+    #[test]
+    fn the_next_cron_delay_from_fixed_instants() {
+        let at = |s: &str| {
+            s.parse::<jiff::Timestamp>()
+                .unwrap()
+                .to_zoned(jiff::tz::TimeZone::UTC)
+        };
+        let delay = |expr, now: &str| next_cron_delay(&parse_cron(expr).unwrap(), &at(now));
+        assert_eq!(
+            delay("0 0 29 2 *", "2024-02-28T23:59:30.5Z"),
+            Some(Duration::from_millis(29_500))
+        );
+        assert_eq!(
+            delay("*/5 * * * * *", "2026-11-17T10:00:03Z"),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            delay("30 2 * * *", "2026-11-17T02:30:00Z"),
+            Some(Duration::from_secs(24 * 3600)),
+            "an occurrence exactly now is not the next one"
+        );
+        assert_eq!(delay("0 0 30 2 *", "2026-11-17T10:00:00Z"), None);
     }
 
     // A cron source through the whole machinery: the occurrence fires, the

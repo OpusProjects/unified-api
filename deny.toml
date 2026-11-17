@@ -16,6 +16,12 @@ ignore = [
     # advisory declares no patched version, so every release matches. See
     # .cargo/audit.toml for the full rationale and the condition for removal.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0543 — chrono is unmaintained. An "unmaintained" notice, not
+    # a vulnerability: no flaw is reported. croner (cron schedules) and web-rs
+    # both depend on it, so moving our own code to jiff would not remove it
+    # from the lockfile. Drop this once croner and web-rs have moved off
+    # chrono, then move our own uses too.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]

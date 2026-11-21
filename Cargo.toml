@@ -68,7 +68,7 @@ utoipa-swagger-ui = { version = "10", features = ["axum"] }
 # build carries one; "std" for the clock, and no time zone database, since
 # schedules always run in UTC.
 croner = { version = "4.0.0", default-features = false, features = ["jiff"] }
-jiff = { version = "0.2", default-features = false, features = ["std"] }
+jiff = { version = "1.0", default-features = false, features = ["std"] }
 
 # The hot-path benches (cache read/serialize, view union): the README's value
 # proposition is performance-shaped, so the claims have numbers behind them.

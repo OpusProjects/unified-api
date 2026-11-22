@@ -77,14 +77,14 @@ pub(crate) fn parse_cron(expression: &str) -> Result<croner::Cron, String> {
 // How long until the schedule's next occurrence after `now`. None when the
 // pattern has no future occurrence at all (croner gives up past year 5000 —
 // practically a misconfiguration).
-fn next_cron_delay(cron: &croner::Cron, now: &jiff::Zoned) -> Option<Duration> {
+fn next_cron_delay(cron: &croner::Cron, now: &jiff::ZonedDateTime) -> Option<Duration> {
     let next = cron.find_next_occurrence(now, false).ok()?;
     Duration::try_from(next.duration_since(now)).ok()
 }
 
 // The clock the schedules read: now, in UTC (see parse_cron for why UTC).
-fn utc_now() -> jiff::Zoned {
-    jiff::Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC)
+fn utc_now() -> jiff::ZonedDateTime {
+    jiff::Timestamp::now().to_zoned_datetime(jiff::tz::TimeZone::UTC)
 }
 
 // How a source's sync task paces itself: a fixed interval (jittered, ticks
@@ -1113,7 +1113,7 @@ mod tests {
         let at = |s: &str| {
             s.parse::<jiff::Timestamp>()
                 .unwrap()
-                .to_zoned(jiff::tz::TimeZone::UTC)
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         };
         let delay = |expr, now: &str| next_cron_delay(&parse_cron(expr).unwrap(), &at(now));
         assert_eq!(

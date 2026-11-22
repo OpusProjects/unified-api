@@ -64,10 +64,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 utoipa = { version = "6", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "10", features = ["axum"] }
 # jiff, not croner's default chrono: chrono is flagged unmaintained
-# (RUSTSEC-2026-0543). jiff 0.2 is the line croner and web-rs use, so the
-# build carries one; "std" for the clock, and no time zone database, since
-# schedules always run in UTC.
-croner = { version = "4.0.0", default-features = false, features = ["jiff"] }
+# (RUSTSEC-2026-0543). jiff 1 is the line croner 5 uses, and croner's API takes
+# its types, so the two move together; "std" for the clock, and no time zone
+# database, since schedules always run in UTC.
+croner = { version = "5.0.0", default-features = false, features = ["jiff"] }
 jiff = { version = "1.0", default-features = false, features = ["std"] }
 
 # The hot-path benches (cache read/serialize, view union): the README's value

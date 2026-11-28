@@ -627,9 +627,9 @@ dependencies = [
 
 [[package]]
 name = "croner"
-version = "5.0.0"
+version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c0d18af839fad650d1673db4e2e40cfad3288dcb84a13670a9014e8d0978008"
+checksum = "ecc2cf2521b1ad228da5c87b135855eb146b4aed7a2da389afc682c540e5d515"
 dependencies = [
  "jiff 1.0.1",
 ]
